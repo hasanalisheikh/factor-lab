@@ -1,7 +1,8 @@
 import Link from "next/link"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { StatusBadge } from "@/components/status-badge"
-import { runs } from "@/lib/mock-data"
+import { runs } from "@/lib/mock"
+import { STRATEGY_LABELS } from "@/lib/types"
 
 export function RecentRuns() {
   const recentRuns = runs
@@ -33,7 +34,7 @@ export function RecentRuns() {
                   {run.name}
                 </span>
                 <span className="text-[11px] text-muted-foreground">
-                  {run.strategy}
+                  {STRATEGY_LABELS[run.strategyId]}
                 </span>
               </div>
               <div className="flex items-center gap-3 shrink-0 ml-3">

@@ -8,7 +8,7 @@ import {
   type ChartConfig,
 } from "@/components/ui/chart"
 import { Bar, BarChart, XAxis, YAxis } from "recharts"
-import { featureImportance, modelMeta } from "@/lib/mock-data"
+import { featureImportance, modelMeta } from "@/lib/mock"
 
 const fiConfig = {
   importance: { label: "Importance", color: "var(--color-chart-1)" },

@@ -9,7 +9,7 @@ import {
 } from "@/components/ui/table"
 import { Badge } from "@/components/ui/badge"
 import { cn } from "@/lib/utils"
-import { holdings } from "@/lib/mock-data"
+import { holdings } from "@/lib/mock"
 
 const sectorColors: Record<string, string> = {
   Technology: "border-chart-1/30 text-chart-1 bg-chart-1/8",

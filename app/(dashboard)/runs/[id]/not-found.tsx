@@ -1,12 +1,12 @@
 import Link from "next/link"
-import { DashboardHeader } from "@/components/dashboard-header"
+import { Topbar } from "@/components/layout/topbar"
 import { Button } from "@/components/ui/button"
 import { LogoMark } from "@/components/logo"
 
 export default function RunNotFound() {
   return (
     <>
-      <DashboardHeader title="Not Found" />
+      <Topbar title="Not Found" />
       <main className="flex-1 flex items-center justify-center">
         <div className="flex flex-col items-center gap-4 text-center px-4">
           <div className="w-12 h-12 rounded-xl bg-secondary flex items-center justify-center">
@@ -20,7 +20,7 @@ export default function RunNotFound() {
           </div>
           <Link href="/runs">
             <Button variant="outline" size="sm" className="text-[12px] font-medium h-8 border-border">
-              Back to Dashboard
+              Back to Runs
             </Button>
           </Link>
         </div>

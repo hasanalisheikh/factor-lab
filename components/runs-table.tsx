@@ -10,7 +10,8 @@ import {
 } from "@/components/ui/table"
 import { StatusBadge } from "@/components/status-badge"
 import { cn } from "@/lib/utils"
-import { runs } from "@/lib/mock-data"
+import { runs } from "@/lib/mock"
+import { STRATEGY_LABELS } from "@/lib/types"
 
 export function RunsTable() {
   return (
@@ -65,7 +66,7 @@ export function RunsTable() {
                       </Link>
                     </TableCell>
                     <TableCell className="text-[12px] text-muted-foreground py-2.5 hidden md:table-cell">
-                      {run.strategy}
+                      {STRATEGY_LABELS[run.strategyId]}
                     </TableCell>
                     <TableCell className="py-2.5">
                       <StatusBadge status={run.status} />

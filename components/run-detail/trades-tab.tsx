@@ -18,7 +18,7 @@ import {
 } from "@/components/ui/chart"
 import { Bar, BarChart, CartesianGrid, XAxis, YAxis } from "recharts"
 import { cn } from "@/lib/utils"
-import { trades, turnoverData } from "@/lib/mock-data"
+import { trades, turnoverData } from "@/lib/mock"
 
 const turnoverConfig = {
   turnover: { label: "Turnover %", color: "var(--color-chart-2)" },

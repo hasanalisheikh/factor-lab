@@ -3,7 +3,7 @@
 import { Card, CardContent } from "@/components/ui/card"
 import { DeltaPill } from "@/components/delta-pill"
 import { Sparkline } from "@/components/sparkline"
-import { dashboardMetrics } from "@/lib/mock-data"
+import { dashboardMetrics } from "@/lib/mock"
 
 export function MetricCards() {
   return (

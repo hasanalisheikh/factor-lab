@@ -1,13 +1,10 @@
-import { DashboardHeader } from "@/components/dashboard-header"
+import { AppShell } from "@/components/layout/app-shell"
 import { RunDetailSkeleton } from "@/components/skeletons"
 
 export default function RunLoading() {
   return (
-    <>
-      <DashboardHeader title="Loading..." />
-      <main className="flex-1 overflow-y-auto">
-        <RunDetailSkeleton />
-      </main>
-    </>
+    <AppShell title="Loading...">
+      <RunDetailSkeleton />
+    </AppShell>
   )
 }

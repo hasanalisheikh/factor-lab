@@ -10,7 +10,7 @@ import {
   type ChartConfig,
 } from "@/components/ui/chart"
 import { Area, AreaChart, CartesianGrid, XAxis, YAxis } from "recharts"
-import { equityCurve } from "@/lib/mock-data"
+import { equityCurve } from "@/lib/mock"
 import { cn } from "@/lib/utils"
 
 const chartConfig = {

@@ -8,8 +8,8 @@ import {
   type ChartConfig,
 } from "@/components/ui/chart"
 import { Area, AreaChart, CartesianGrid, XAxis, YAxis } from "recharts"
-import type { Run } from "@/lib/mock-data"
-import { equityCurve, drawdownData } from "@/lib/mock-data"
+import type { Run } from "@/lib/types"
+import { equityCurve, drawdownData } from "@/lib/mock"
 
 const equityConfig = {
   portfolio: { label: "Portfolio", color: "var(--color-chart-1)" },
