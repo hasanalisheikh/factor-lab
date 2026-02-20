@@ -1,0 +1,25 @@
+[project]
+name = "factorlab-engine"
+version = "0.1.0"
+description = "FactorLab compute worker for queued Supabase jobs"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "numpy>=2.1.0",
+  "pandas>=2.2.0",
+  "supabase>=2.4.0",
+  "yfinance>=0.2.50",
+]
+
+[project.scripts]
+factorlab-engine-worker = "factorlab_engine.worker:main"
+
+[build-system]
+requires = ["setuptools>=69.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = {"" = "."}
+
+[tool.setuptools.packages.find]
+where = ["."]
