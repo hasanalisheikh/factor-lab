@@ -10,16 +10,18 @@ import { OverviewTab } from "@/components/run-detail/overview-tab"
 import { HoldingsTab } from "@/components/run-detail/holdings-tab"
 import { TradesTab } from "@/components/run-detail/trades-tab"
 import { MlInsightsTab } from "@/components/run-detail/ml-insights-tab"
-import { getRunById, getEquityCurve, getJobByRunId } from "@/lib/supabase/queries"
+import { getRunById, getEquityCurve, getJobByRunId, getReportByRunId } from "@/lib/supabase/queries"
 import { STRATEGY_LABELS, type StrategyId, type RunStatus } from "@/lib/types"
 import { JobStatusPanel } from "@/components/run-detail/job-status-panel"
+import { generateRunReport } from "@/app/actions/reports"
 
 export default async function RunDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
-  const [run, equityCurve, job] = await Promise.all([
+  const [run, equityCurve, job, report] = await Promise.all([
     getRunById(id),
     getEquityCurve(id),
     getJobByRunId(id),
+    getReportByRunId(id),
   ])
 
   if (!run) {
@@ -29,6 +31,8 @@ export default async function RunDetailPage({ params }: { params: Promise<{ id: 
   const metrics = run.run_metrics[0] ?? null
   const status = run.status as RunStatus
   const strategyLabel = STRATEGY_LABELS[run.strategy_id as StrategyId] ?? run.strategy_id
+  const canGenerateReport = status === "completed" && metrics != null && equityCurve.length > 0
+  const generateReportAction = generateRunReport.bind(null, id)
 
   return (
     <AppShell title={run.name}>
@@ -58,14 +62,41 @@ export default async function RunDetailPage({ params }: { params: Promise<{ id: 
             <StatusBadge status={status} />
           </div>
         </div>
-        <Button
-          variant="outline"
-          size="sm"
-          className="h-8 text-[12px] font-medium border-border text-muted-foreground hover:text-foreground shrink-0"
-        >
-          <Download className="w-3.5 h-3.5 mr-1.5" />
-          Download Report
-        </Button>
+        {report?.url ? (
+          <Button
+            asChild
+            variant="outline"
+            size="sm"
+            className="h-8 text-[12px] font-medium border-border text-muted-foreground hover:text-foreground shrink-0"
+          >
+            <a href={report.url} target="_blank" rel="noreferrer">
+              <Download className="w-3.5 h-3.5 mr-1.5" />
+              Download Report
+            </a>
+          </Button>
+        ) : canGenerateReport ? (
+          <form action={generateReportAction}>
+            <Button
+              type="submit"
+              variant="outline"
+              size="sm"
+              className="h-8 text-[12px] font-medium border-border text-muted-foreground hover:text-foreground shrink-0"
+            >
+              <Download className="w-3.5 h-3.5 mr-1.5" />
+              Generate Report
+            </Button>
+          </form>
+        ) : (
+          <Button
+            variant="outline"
+            size="sm"
+            disabled
+            className="h-8 text-[12px] font-medium border-border text-muted-foreground shrink-0"
+          >
+            <Download className="w-3.5 h-3.5 mr-1.5" />
+            Report Unavailable
+          </Button>
+        )}
       </div>
 
       {/* Job status panel — visible for queued / running runs */}

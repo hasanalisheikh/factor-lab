@@ -43,6 +43,17 @@ CREATE TABLE equity_curve (
   UNIQUE (run_id, date)
 );
 
+-- ─── reports ────────────────────────────────────────────────────────────────
+-- One HTML tearsheet per run.
+CREATE TABLE reports (
+  id            UUID        PRIMARY KEY DEFAULT uuid_generate_v4(),
+  run_id        UUID        NOT NULL REFERENCES runs (id) ON DELETE CASCADE,
+  storage_path  TEXT        NOT NULL,
+  url           TEXT        NOT NULL,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (run_id)
+);
+
 -- ─── jobs ────────────────────────────────────────────────────────────────────
 CREATE TABLE jobs (
   id          UUID        PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -56,18 +67,45 @@ CREATE TABLE jobs (
   created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- ─── prices ──────────────────────────────────────────────────────────────────
+CREATE TABLE prices (
+  id          UUID        PRIMARY KEY DEFAULT uuid_generate_v4(),
+  ticker      TEXT        NOT NULL,
+  date        DATE        NOT NULL,
+  adj_close   NUMERIC     NOT NULL,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (ticker, date)
+);
+
+-- ─── data_last_updated (optional ingestion log) ─────────────────────────────
+CREATE TABLE data_last_updated (
+  id                  UUID        PRIMARY KEY DEFAULT uuid_generate_v4(),
+  source              TEXT        NOT NULL UNIQUE,
+  tickers_ingested    INTEGER     NOT NULL DEFAULT 0,
+  rows_upserted       INTEGER     NOT NULL DEFAULT 0,
+  start_date          DATE,
+  end_date            DATE,
+  last_updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 -- ─── Row-Level Security ───────────────────────────────────────────────────────
 -- Allow anonymous reads so the UI works with the anon key.
 -- Tighten these policies when you add auth.
 ALTER TABLE runs         ENABLE ROW LEVEL SECURITY;
 ALTER TABLE run_metrics  ENABLE ROW LEVEL SECURITY;
 ALTER TABLE equity_curve ENABLE ROW LEVEL SECURITY;
+ALTER TABLE reports      ENABLE ROW LEVEL SECURITY;
 ALTER TABLE jobs         ENABLE ROW LEVEL SECURITY;
+ALTER TABLE prices       ENABLE ROW LEVEL SECURITY;
+ALTER TABLE data_last_updated ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY "public read"   ON runs         FOR SELECT USING (true);
 CREATE POLICY "public read"   ON run_metrics  FOR SELECT USING (true);
 CREATE POLICY "public read"   ON equity_curve FOR SELECT USING (true);
+CREATE POLICY "public read"   ON reports      FOR SELECT USING (true);
 CREATE POLICY "public read"   ON jobs         FOR SELECT USING (true);
+CREATE POLICY "public read"   ON prices       FOR SELECT USING (true);
+CREATE POLICY "public read"   ON data_last_updated FOR SELECT USING (true);
 -- Allow the UI to create runs and jobs
 CREATE POLICY "public insert" ON runs         FOR INSERT WITH CHECK (true);
 CREATE POLICY "public insert" ON jobs         FOR INSERT WITH CHECK (true);

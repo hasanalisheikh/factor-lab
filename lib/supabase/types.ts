@@ -77,6 +77,24 @@ export type Database = {
         Update: Partial<Database['public']['Tables']['equity_curve']['Insert']>
         Relationships: []
       }
+      reports: {
+        Row: {
+          id: string
+          run_id: string
+          storage_path: string
+          url: string
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          run_id: string
+          storage_path: string
+          url: string
+          created_at?: string
+        }
+        Update: Partial<Database['public']['Tables']['reports']['Insert']>
+        Relationships: []
+      }
       jobs: {
         Row: {
           id: string
@@ -99,6 +117,46 @@ export type Database = {
           created_at?: string
         }
         Update: Partial<Database['public']['Tables']['jobs']['Insert']>
+        Relationships: []
+      }
+      prices: {
+        Row: {
+          id: string
+          ticker: string
+          date: string
+          adj_close: number
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          ticker: string
+          date: string
+          adj_close: number
+          created_at?: string
+        }
+        Update: Partial<Database['public']['Tables']['prices']['Insert']>
+        Relationships: []
+      }
+      data_last_updated: {
+        Row: {
+          id: string
+          source: string
+          tickers_ingested: number
+          rows_upserted: number
+          start_date: string | null
+          end_date: string | null
+          last_updated_at: string
+        }
+        Insert: {
+          id?: string
+          source: string
+          tickers_ingested?: number
+          rows_upserted?: number
+          start_date?: string | null
+          end_date?: string | null
+          last_updated_at?: string
+        }
+        Update: Partial<Database['public']['Tables']['data_last_updated']['Insert']>
         Relationships: []
       }
     }
