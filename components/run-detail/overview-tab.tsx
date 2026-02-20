@@ -8,8 +8,7 @@ import {
   type ChartConfig,
 } from "@/components/ui/chart"
 import { Area, AreaChart, CartesianGrid, XAxis, YAxis } from "recharts"
-import type { Run } from "@/lib/types"
-import { equityCurve, drawdownData } from "@/lib/mock"
+import type { RunMetricsRow, EquityCurveRow } from "@/lib/supabase/queries"
 
 const equityConfig = {
   portfolio: { label: "Portfolio", color: "var(--color-chart-1)" },
@@ -20,30 +19,46 @@ const ddConfig = {
   drawdown: { label: "Drawdown", color: "var(--color-chart-4)" },
 } satisfies ChartConfig
 
-const metricLabels: { key: keyof Run["metrics"]; label: string; format: (v: number) => string }[] = [
-  { key: "cagr", label: "CAGR", format: (v) => `${v >= 0 ? "+" : ""}${v.toFixed(1)}%` },
+function computeDrawdown(equity: EquityCurveRow[]) {
+  let peak = -Infinity
+  return equity.map((pt) => {
+    if (pt.portfolio > peak) peak = pt.portfolio
+    const dd = peak > 0 ? ((pt.portfolio - peak) / peak) * 100 : 0
+    return { date: pt.date, drawdown: dd }
+  })
+}
+
+const metricDefs: { key: keyof RunMetricsRow; label: string; format: (v: number) => string }[] = [
+  { key: "cagr", label: "CAGR", format: (v) => `${v >= 0 ? "+" : ""}${(v * 100).toFixed(1)}%` },
   { key: "sharpe", label: "Sharpe", format: (v) => v.toFixed(2) },
-  { key: "maxDrawdown", label: "Max DD", format: (v) => `${v.toFixed(1)}%` },
-  { key: "volatility", label: "Volatility", format: (v) => `${v.toFixed(1)}%` },
-  { key: "winRate", label: "Win Rate", format: (v) => `${v.toFixed(1)}%` },
-  { key: "profitFactor", label: "Profit Factor", format: (v) => v.toFixed(2) },
-  { key: "turnover", label: "Turnover", format: (v) => `${v.toFixed(1)}%` },
+  { key: "max_drawdown", label: "Max DD", format: (v) => `${(v * 100).toFixed(1)}%` },
+  { key: "volatility", label: "Volatility", format: (v) => `${(v * 100).toFixed(1)}%` },
+  { key: "win_rate", label: "Win Rate", format: (v) => `${(v * 100).toFixed(1)}%` },
+  { key: "profit_factor", label: "Profit Factor", format: (v) => v.toFixed(2) },
+  { key: "turnover", label: "Turnover", format: (v) => `${(v * 100).toFixed(1)}%` },
   { key: "calmar", label: "Calmar", format: (v) => v.toFixed(2) },
 ]
 
-export function OverviewTab({ run }: { run: Run }) {
+interface OverviewTabProps {
+  metrics: RunMetricsRow | null
+  equityCurve: EquityCurveRow[]
+}
+
+export function OverviewTab({ metrics, equityCurve }: OverviewTabProps) {
+  const drawdownData = computeDrawdown(equityCurve)
+
   return (
     <div className="flex flex-col gap-4">
       {/* Metric cards grid */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        {metricLabels.map(({ key, label, format }) => (
+        {metricDefs.map(({ key, label, format }) => (
           <Card key={key} className="bg-card border-border">
             <CardContent className="p-3.5">
               <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider mb-1">
                 {label}
               </p>
               <p className="text-lg font-semibold font-mono text-card-foreground leading-none">
-                {format(run.metrics[key])}
+                {metrics != null ? format(metrics[key] as number) : "--"}
               </p>
             </CardContent>
           </Card>
@@ -58,40 +73,46 @@ export function OverviewTab({ run }: { run: Run }) {
           </CardTitle>
         </CardHeader>
         <CardContent className="px-2 pb-3 pt-1">
-          <ChartContainer config={equityConfig} className="h-[240px] w-full">
-            <AreaChart data={equityCurve} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
-              <defs>
-                <linearGradient id="ovPortfolio" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="var(--color-chart-1)" stopOpacity={0.25} />
-                  <stop offset="95%" stopColor="var(--color-chart-1)" stopOpacity={0} />
-                </linearGradient>
-              </defs>
-              <CartesianGrid strokeDasharray="3 3" className="stroke-border/20" vertical={false} />
-              <XAxis
-                dataKey="date"
-                tickLine={false}
-                axisLine={false}
-                tickMargin={8}
-                tickFormatter={(v) => new Date(v).toLocaleDateString("en-US", { month: "short" })}
-                interval="preserveStartEnd"
-                className="text-[10px]"
-                stroke="var(--color-muted-foreground)"
-                opacity={0.5}
-              />
-              <YAxis
-                tickLine={false}
-                axisLine={false}
-                tickMargin={8}
-                tickFormatter={(v) => `$${(v / 1000).toFixed(0)}k`}
-                className="text-[10px]"
-                stroke="var(--color-muted-foreground)"
-                opacity={0.5}
-              />
-              <ChartTooltip content={<ChartTooltipContent />} />
-              <Area dataKey="benchmark" type="monotone" fill="transparent" stroke="var(--color-chart-5)" strokeWidth={1} strokeDasharray="4 4" dot={false} />
-              <Area dataKey="portfolio" type="monotone" fill="url(#ovPortfolio)" stroke="var(--color-chart-1)" strokeWidth={1.8} dot={false} />
-            </AreaChart>
-          </ChartContainer>
+          {equityCurve.length === 0 ? (
+            <div className="h-[240px] flex items-center justify-center text-[12px] text-muted-foreground">
+              No equity data available
+            </div>
+          ) : (
+            <ChartContainer config={equityConfig} className="h-[240px] w-full">
+              <AreaChart data={equityCurve} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+                <defs>
+                  <linearGradient id="ovPortfolio" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="var(--color-chart-1)" stopOpacity={0.25} />
+                    <stop offset="95%" stopColor="var(--color-chart-1)" stopOpacity={0} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" className="stroke-border/20" vertical={false} />
+                <XAxis
+                  dataKey="date"
+                  tickLine={false}
+                  axisLine={false}
+                  tickMargin={8}
+                  tickFormatter={(v) => new Date(v).toLocaleDateString("en-US", { month: "short" })}
+                  interval="preserveStartEnd"
+                  className="text-[10px]"
+                  stroke="var(--color-muted-foreground)"
+                  opacity={0.5}
+                />
+                <YAxis
+                  tickLine={false}
+                  axisLine={false}
+                  tickMargin={8}
+                  tickFormatter={(v) => `$${(v / 1000).toFixed(0)}k`}
+                  className="text-[10px]"
+                  stroke="var(--color-muted-foreground)"
+                  opacity={0.5}
+                />
+                <ChartTooltip content={<ChartTooltipContent />} />
+                <Area dataKey="benchmark" type="monotone" fill="transparent" stroke="var(--color-chart-5)" strokeWidth={1} strokeDasharray="4 4" dot={false} />
+                <Area dataKey="portfolio" type="monotone" fill="url(#ovPortfolio)" stroke="var(--color-chart-1)" strokeWidth={1.8} dot={false} />
+              </AreaChart>
+            </ChartContainer>
+          )}
         </CardContent>
       </Card>
 
@@ -103,39 +124,45 @@ export function OverviewTab({ run }: { run: Run }) {
           </CardTitle>
         </CardHeader>
         <CardContent className="px-2 pb-3 pt-1">
-          <ChartContainer config={ddConfig} className="h-[160px] w-full">
-            <AreaChart data={drawdownData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
-              <defs>
-                <linearGradient id="ovDrawdown" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="var(--color-chart-4)" stopOpacity={0.3} />
-                  <stop offset="95%" stopColor="var(--color-chart-4)" stopOpacity={0} />
-                </linearGradient>
-              </defs>
-              <CartesianGrid strokeDasharray="3 3" className="stroke-border/20" vertical={false} />
-              <XAxis
-                dataKey="date"
-                tickLine={false}
-                axisLine={false}
-                tickMargin={8}
-                tickFormatter={(v) => new Date(v).toLocaleDateString("en-US", { month: "short" })}
-                interval="preserveStartEnd"
-                className="text-[10px]"
-                stroke="var(--color-muted-foreground)"
-                opacity={0.5}
-              />
-              <YAxis
-                tickLine={false}
-                axisLine={false}
-                tickMargin={8}
-                tickFormatter={(v) => `${v}%`}
-                className="text-[10px]"
-                stroke="var(--color-muted-foreground)"
-                opacity={0.5}
-              />
-              <ChartTooltip content={<ChartTooltipContent formatter={(v) => [`${Number(v).toFixed(2)}%`, "Drawdown"]} />} />
-              <Area dataKey="drawdown" type="monotone" fill="url(#ovDrawdown)" stroke="var(--color-chart-4)" strokeWidth={1.5} dot={false} />
-            </AreaChart>
-          </ChartContainer>
+          {drawdownData.length === 0 ? (
+            <div className="h-[160px] flex items-center justify-center text-[12px] text-muted-foreground">
+              No drawdown data available
+            </div>
+          ) : (
+            <ChartContainer config={ddConfig} className="h-[160px] w-full">
+              <AreaChart data={drawdownData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+                <defs>
+                  <linearGradient id="ovDrawdown" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="var(--color-chart-4)" stopOpacity={0.3} />
+                    <stop offset="95%" stopColor="var(--color-chart-4)" stopOpacity={0} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" className="stroke-border/20" vertical={false} />
+                <XAxis
+                  dataKey="date"
+                  tickLine={false}
+                  axisLine={false}
+                  tickMargin={8}
+                  tickFormatter={(v) => new Date(v).toLocaleDateString("en-US", { month: "short" })}
+                  interval="preserveStartEnd"
+                  className="text-[10px]"
+                  stroke="var(--color-muted-foreground)"
+                  opacity={0.5}
+                />
+                <YAxis
+                  tickLine={false}
+                  axisLine={false}
+                  tickMargin={8}
+                  tickFormatter={(v) => `${v.toFixed(1)}%`}
+                  className="text-[10px]"
+                  stroke="var(--color-muted-foreground)"
+                  opacity={0.5}
+                />
+                <ChartTooltip content={<ChartTooltipContent formatter={(v) => [`${Number(v).toFixed(2)}%`, "Drawdown"]} />} />
+                <Area dataKey="drawdown" type="monotone" fill="url(#ovDrawdown)" stroke="var(--color-chart-4)" strokeWidth={1.5} dot={false} />
+              </AreaChart>
+            </ChartContainer>
+          )}
         </CardContent>
       </Card>
     </div>

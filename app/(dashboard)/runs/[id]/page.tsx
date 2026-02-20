@@ -1,6 +1,3 @@
-"use client"
-
-import { use } from "react"
 import Link from "next/link"
 import { notFound } from "next/navigation"
 import { ArrowLeft, Download } from "lucide-react"
@@ -13,16 +10,23 @@ import { OverviewTab } from "@/components/run-detail/overview-tab"
 import { HoldingsTab } from "@/components/run-detail/holdings-tab"
 import { TradesTab } from "@/components/run-detail/trades-tab"
 import { MlInsightsTab } from "@/components/run-detail/ml-insights-tab"
-import { runs } from "@/lib/mock"
-import { STRATEGY_LABELS } from "@/lib/types"
+import { getRunById, getEquityCurve } from "@/lib/supabase/queries"
+import { STRATEGY_LABELS, type StrategyId, type RunStatus } from "@/lib/types"
 
-export default function RunDetailPage({ params }: { params: Promise<{ id: string }> }) {
-  const { id } = use(params)
-  const run = runs.find((r) => r.id === id)
+export default async function RunDetailPage({ params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params
+  const [run, equityCurve] = await Promise.all([
+    getRunById(id),
+    getEquityCurve(id),
+  ])
 
   if (!run) {
     notFound()
   }
+
+  const metrics = run.run_metrics[0] ?? null
+  const status = run.status as RunStatus
+  const strategyLabel = STRATEGY_LABELS[run.strategy_id as StrategyId] ?? run.strategy_id
 
   return (
     <AppShell title={run.name}>
@@ -47,9 +51,9 @@ export default function RunDetailPage({ params }: { params: Promise<{ id: string
               variant="outline"
               className="text-[10px] font-medium px-2 py-0 h-5 leading-5 rounded-md border-border text-muted-foreground bg-secondary/50 shrink-0"
             >
-              {STRATEGY_LABELS[run.strategyId]}
+              {strategyLabel}
             </Badge>
-            <StatusBadge status={run.status} />
+            <StatusBadge status={status} />
           </div>
         </div>
         <Button
@@ -92,7 +96,7 @@ export default function RunDetailPage({ params }: { params: Promise<{ id: string
         </TabsList>
 
         <TabsContent value="overview" className="mt-4">
-          <OverviewTab run={run} />
+          <OverviewTab metrics={metrics} equityCurve={equityCurve} />
         </TabsContent>
         <TabsContent value="holdings" className="mt-4">
           <HoldingsTab />

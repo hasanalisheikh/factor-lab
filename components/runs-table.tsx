@@ -10,10 +10,14 @@ import {
 } from "@/components/ui/table"
 import { StatusBadge } from "@/components/status-badge"
 import { cn } from "@/lib/utils"
-import { runs } from "@/lib/mock"
-import { STRATEGY_LABELS } from "@/lib/types"
+import type { RunWithMetrics } from "@/lib/supabase/queries"
+import { STRATEGY_LABELS, type StrategyId, type RunStatus } from "@/lib/types"
 
-export function RunsTable() {
+interface RunsTableProps {
+  runs: RunWithMetrics[]
+}
+
+export function RunsTable({ runs }: RunsTableProps) {
   return (
     <Card className="bg-card border-border">
       <CardHeader className="pb-2 px-4 pt-4">
@@ -51,7 +55,9 @@ export function RunsTable() {
             </TableHeader>
             <TableBody>
               {runs.map((run) => {
-                const hasMetrics = run.status === "completed" || run.status === "failed"
+                const metrics = run.run_metrics[0] ?? null
+                const status = run.status as RunStatus
+                const hasMetrics = metrics !== null && (status === "completed" || status === "failed")
                 return (
                   <TableRow
                     key={run.id}
@@ -66,37 +72,44 @@ export function RunsTable() {
                       </Link>
                     </TableCell>
                     <TableCell className="text-[12px] text-muted-foreground py-2.5 hidden md:table-cell">
-                      {STRATEGY_LABELS[run.strategyId]}
+                      {STRATEGY_LABELS[run.strategy_id as StrategyId] ?? run.strategy_id}
                     </TableCell>
                     <TableCell className="py-2.5">
-                      <StatusBadge status={run.status} />
+                      <StatusBadge status={status} />
                     </TableCell>
                     <TableCell
                       className={cn(
                         "text-[13px] font-mono text-right py-2.5",
                         !hasMetrics
                           ? "text-muted-foreground"
-                          : run.metrics.cagr >= 0
+                          : metrics.cagr >= 0
                           ? "text-success"
                           : "text-destructive"
                       )}
                     >
                       {hasMetrics
-                        ? `${run.metrics.cagr >= 0 ? "+" : ""}${run.metrics.cagr.toFixed(1)}%`
+                        ? `${metrics.cagr >= 0 ? "+" : ""}${(metrics.cagr * 100).toFixed(1)}%`
                         : "--"}
                     </TableCell>
                     <TableCell className="text-[13px] font-mono text-right py-2.5 text-card-foreground hidden sm:table-cell">
-                      {hasMetrics ? run.metrics.sharpe.toFixed(2) : "--"}
+                      {hasMetrics ? metrics.sharpe.toFixed(2) : "--"}
                     </TableCell>
                     <TableCell className="text-[13px] font-mono text-right py-2.5 text-destructive hidden lg:table-cell">
-                      {hasMetrics ? `${run.metrics.maxDrawdown.toFixed(1)}%` : "--"}
+                      {hasMetrics ? `${(metrics.max_drawdown * 100).toFixed(1)}%` : "--"}
                     </TableCell>
                     <TableCell className="text-[12px] font-mono text-right pr-4 py-2.5 text-muted-foreground hidden lg:table-cell">
-                      {run.startDate.slice(0, 7)} - {run.endDate.slice(0, 7)}
+                      {run.start_date.slice(0, 7)} – {run.end_date.slice(0, 7)}
                     </TableCell>
                   </TableRow>
                 )
               })}
+              {runs.length === 0 && (
+                <TableRow>
+                  <TableCell colSpan={7} className="text-center py-10 text-[12px] text-muted-foreground">
+                    No runs found
+                  </TableCell>
+                </TableRow>
+              )}
             </TableBody>
           </Table>
         </div>

@@ -3,12 +3,30 @@
 import { Card, CardContent } from "@/components/ui/card"
 import { DeltaPill } from "@/components/delta-pill"
 import { Sparkline } from "@/components/sparkline"
-import { dashboardMetrics } from "@/lib/mock"
+import type { DashboardMetric } from "@/lib/types"
 
-export function MetricCards() {
+interface MetricCardsProps {
+  metrics: DashboardMetric[]
+}
+
+export function MetricCards({ metrics }: MetricCardsProps) {
+  if (metrics.length === 0) {
+    return (
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        {Array.from({ length: 4 }).map((_, i) => (
+          <Card key={i} className="bg-card border-border">
+            <CardContent className="p-4">
+              <div className="h-[60px] animate-pulse bg-secondary/40 rounded" />
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+    )
+  }
+
   return (
     <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-      {dashboardMetrics.map((m) => (
+      {metrics.map((m) => (
         <Card key={m.label} className="bg-card border-border">
           <CardContent className="p-4">
             <div className="flex items-start justify-between gap-2">
