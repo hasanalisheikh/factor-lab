@@ -62,7 +62,7 @@ export async function getEquityCurve(runId: string): Promise<EquityCurveRow[]> {
       return []
     }
 
-    return data ?? []
+    return (data ?? []) as EquityCurveRow[]
   } catch (err) {
     console.error("getEquityCurve exception:", err)
     return []
@@ -82,10 +82,30 @@ export async function getJobs(): Promise<JobRow[]> {
       return []
     }
 
-    return data ?? []
+    return (data ?? []) as JobRow[]
   } catch (err) {
     console.error("getJobs exception:", err)
     return []
+  }
+}
+
+export async function getJobByRunId(runId: string): Promise<JobRow | null> {
+  try {
+    const supabase = await createClient()
+    const { data, error } = await supabase
+      .from("jobs")
+      .select("*")
+      .eq("run_id", runId)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle()
+
+    if (error || !data) return null
+
+    return data as JobRow
+  } catch (err) {
+    console.error("getJobByRunId exception:", err)
+    return null
   }
 }
 

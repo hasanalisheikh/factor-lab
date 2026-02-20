@@ -46,6 +46,7 @@ CREATE TABLE equity_curve (
 -- ─── jobs ────────────────────────────────────────────────────────────────────
 CREATE TABLE jobs (
   id          UUID        PRIMARY KEY DEFAULT uuid_generate_v4(),
+  run_id      UUID        REFERENCES runs(id) ON DELETE CASCADE,
   name        TEXT        NOT NULL,
   status      TEXT        NOT NULL DEFAULT 'queued'
                           CHECK (status IN ('queued', 'running', 'completed', 'failed')),
@@ -63,7 +64,19 @@ ALTER TABLE run_metrics  ENABLE ROW LEVEL SECURITY;
 ALTER TABLE equity_curve ENABLE ROW LEVEL SECURITY;
 ALTER TABLE jobs         ENABLE ROW LEVEL SECURITY;
 
-CREATE POLICY "public read" ON runs         FOR SELECT USING (true);
-CREATE POLICY "public read" ON run_metrics  FOR SELECT USING (true);
-CREATE POLICY "public read" ON equity_curve FOR SELECT USING (true);
-CREATE POLICY "public read" ON jobs         FOR SELECT USING (true);
+CREATE POLICY "public read"   ON runs         FOR SELECT USING (true);
+CREATE POLICY "public read"   ON run_metrics  FOR SELECT USING (true);
+CREATE POLICY "public read"   ON equity_curve FOR SELECT USING (true);
+CREATE POLICY "public read"   ON jobs         FOR SELECT USING (true);
+-- Allow the UI to create runs and jobs
+CREATE POLICY "public insert" ON runs         FOR INSERT WITH CHECK (true);
+CREATE POLICY "public insert" ON jobs         FOR INSERT WITH CHECK (true);
+
+-- ─── Migration (existing databases) ──────────────────────────────────────────
+-- If your DB was created before Phase 4, run this in the Supabase SQL Editor:
+--
+-- ALTER TABLE jobs ADD COLUMN IF NOT EXISTS
+--   run_id UUID REFERENCES runs(id) ON DELETE CASCADE;
+--
+-- CREATE POLICY "public insert" ON runs FOR INSERT WITH CHECK (true);
+-- CREATE POLICY "public insert" ON jobs FOR INSERT WITH CHECK (true);

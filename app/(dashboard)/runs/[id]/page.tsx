@@ -10,14 +10,16 @@ import { OverviewTab } from "@/components/run-detail/overview-tab"
 import { HoldingsTab } from "@/components/run-detail/holdings-tab"
 import { TradesTab } from "@/components/run-detail/trades-tab"
 import { MlInsightsTab } from "@/components/run-detail/ml-insights-tab"
-import { getRunById, getEquityCurve } from "@/lib/supabase/queries"
+import { getRunById, getEquityCurve, getJobByRunId } from "@/lib/supabase/queries"
 import { STRATEGY_LABELS, type StrategyId, type RunStatus } from "@/lib/types"
+import { JobStatusPanel } from "@/components/run-detail/job-status-panel"
 
 export default async function RunDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
-  const [run, equityCurve] = await Promise.all([
+  const [run, equityCurve, job] = await Promise.all([
     getRunById(id),
     getEquityCurve(id),
+    getJobByRunId(id),
   ])
 
   if (!run) {
@@ -65,6 +67,9 @@ export default async function RunDetailPage({ params }: { params: Promise<{ id: 
           Download Report
         </Button>
       </div>
+
+      {/* Job status panel — visible for queued / running runs */}
+      <JobStatusPanel job={job} runStatus={status} />
 
       {/* Tabs */}
       <Tabs defaultValue="overview" className="w-full">

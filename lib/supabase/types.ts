@@ -29,6 +29,7 @@ export type Database = {
           created_at?: string
         }
         Update: Partial<Database['public']['Tables']['runs']['Insert']>
+        Relationships: []
       }
       run_metrics: {
         Row: {
@@ -56,6 +57,7 @@ export type Database = {
           calmar: number
         }
         Update: Partial<Database['public']['Tables']['run_metrics']['Insert']>
+        Relationships: []
       }
       equity_curve: {
         Row: {
@@ -73,10 +75,12 @@ export type Database = {
           benchmark: number
         }
         Update: Partial<Database['public']['Tables']['equity_curve']['Insert']>
+        Relationships: []
       }
       jobs: {
         Row: {
           id: string
+          run_id: string | null
           name: string
           status: string
           progress: number
@@ -86,6 +90,7 @@ export type Database = {
         }
         Insert: {
           id?: string
+          run_id?: string | null
           name: string
           status?: string
           progress?: number
@@ -94,7 +99,12 @@ export type Database = {
           created_at?: string
         }
         Update: Partial<Database['public']['Tables']['jobs']['Insert']>
+        Relationships: []
       }
     }
+    Views: Record<string, never>
+    Functions: Record<string, never>
+    Enums: Record<string, never>
+    CompositeTypes: Record<string, never>
   }
 }
