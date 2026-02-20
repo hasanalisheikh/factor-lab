@@ -11,75 +11,100 @@ export type { RunRow, RunMetricsRow, EquityCurveRow, JobRow }
 export type RunWithMetrics = RunRow & { run_metrics: RunMetricsRow[] }
 
 export async function getRuns(): Promise<RunWithMetrics[]> {
-  const supabase = await createClient()
-  const { data, error } = await supabase
-    .from("runs")
-    .select("*, run_metrics(*)")
-    .order("created_at", { ascending: false })
+  try {
+    const supabase = await createClient()
+    const { data, error } = await supabase
+      .from("runs")
+      .select("*, run_metrics(*)")
+      .order("created_at", { ascending: false })
 
-  if (error) {
-    console.error("getRuns error:", error)
+    if (error) {
+      console.error("getRuns error:", error.message)
+      return []
+    }
+
+    return (data ?? []) as RunWithMetrics[]
+  } catch (err) {
+    console.error("getRuns exception:", err)
     return []
   }
-
-  return (data ?? []) as RunWithMetrics[]
 }
 
 export async function getRunById(id: string): Promise<RunWithMetrics | null> {
-  const supabase = await createClient()
-  const { data, error } = await supabase
-    .from("runs")
-    .select("*, run_metrics(*)")
-    .eq("id", id)
-    .maybeSingle()
+  try {
+    const supabase = await createClient()
+    const { data, error } = await supabase
+      .from("runs")
+      .select("*, run_metrics(*)")
+      .eq("id", id)
+      .maybeSingle()
 
-  if (error || !data) return null
+    if (error || !data) return null
 
-  return data as RunWithMetrics
+    return data as RunWithMetrics
+  } catch (err) {
+    console.error("getRunById exception:", err)
+    return null
+  }
 }
 
 export async function getEquityCurve(runId: string): Promise<EquityCurveRow[]> {
-  const supabase = await createClient()
-  const { data, error } = await supabase
-    .from("equity_curve")
-    .select("*")
-    .eq("run_id", runId)
-    .order("date", { ascending: true })
+  try {
+    const supabase = await createClient()
+    const { data, error } = await supabase
+      .from("equity_curve")
+      .select("*")
+      .eq("run_id", runId)
+      .order("date", { ascending: true })
 
-  if (error) {
-    console.error("getEquityCurve error:", error)
+    if (error) {
+      console.error("getEquityCurve error:", error.message)
+      return []
+    }
+
+    return data ?? []
+  } catch (err) {
+    console.error("getEquityCurve exception:", err)
     return []
   }
-
-  return data ?? []
 }
 
 export async function getJobs(): Promise<JobRow[]> {
-  const supabase = await createClient()
-  const { data, error } = await supabase
-    .from("jobs")
-    .select("*")
-    .order("created_at", { ascending: false })
+  try {
+    const supabase = await createClient()
+    const { data, error } = await supabase
+      .from("jobs")
+      .select("*")
+      .order("created_at", { ascending: false })
 
-  if (error) {
-    console.error("getJobs error:", error)
+    if (error) {
+      console.error("getJobs error:", error.message)
+      return []
+    }
+
+    return data ?? []
+  } catch (err) {
+    console.error("getJobs exception:", err)
     return []
   }
-
-  return data ?? []
 }
 
 export async function getMostRecentCompletedRun(): Promise<RunWithMetrics | null> {
-  const supabase = await createClient()
-  const { data, error } = await supabase
-    .from("runs")
-    .select("*, run_metrics(*)")
-    .eq("status", "completed")
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle()
+  try {
+    const supabase = await createClient()
+    const { data, error } = await supabase
+      .from("runs")
+      .select("*, run_metrics(*)")
+      .eq("status", "completed")
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle()
 
-  if (error || !data) return null
+    if (error || !data) return null
 
-  return data as RunWithMetrics
+    return data as RunWithMetrics
+  } catch (err) {
+    console.error("getMostRecentCompletedRun exception:", err)
+    return null
+  }
 }
