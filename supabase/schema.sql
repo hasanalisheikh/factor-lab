@@ -88,6 +88,56 @@ CREATE TABLE data_last_updated (
   last_updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- ─── features_monthly ────────────────────────────────────────────────────────
+CREATE TABLE features_monthly (
+  id            UUID        PRIMARY KEY DEFAULT uuid_generate_v4(),
+  ticker        TEXT        NOT NULL,
+  date          DATE        NOT NULL,
+  momentum      NUMERIC     NOT NULL,
+  reversal      NUMERIC     NOT NULL,
+  volatility    NUMERIC     NOT NULL,
+  beta          NUMERIC     NOT NULL,
+  drawdown      NUMERIC     NOT NULL,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (ticker, date)
+);
+
+-- ─── model_metadata ──────────────────────────────────────────────────────────
+CREATE TABLE model_metadata (
+  id                  UUID        PRIMARY KEY DEFAULT uuid_generate_v4(),
+  run_id              UUID        NOT NULL REFERENCES runs (id) ON DELETE CASCADE,
+  model_name          TEXT        NOT NULL,
+  train_start         DATE,
+  train_end           DATE,
+  train_rows          INTEGER     NOT NULL DEFAULT 0,
+  prediction_rows     INTEGER     NOT NULL DEFAULT 0,
+  rebalance_count     INTEGER     NOT NULL DEFAULT 0,
+  top_n               INTEGER     NOT NULL DEFAULT 10,
+  cost_bps            NUMERIC     NOT NULL DEFAULT 10,
+  feature_columns     TEXT[]      NOT NULL DEFAULT ARRAY[]::TEXT[],
+  feature_importance  JSONB       NOT NULL DEFAULT '{}'::JSONB,
+  model_params        JSONB       NOT NULL DEFAULT '{}'::JSONB,
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (run_id)
+);
+
+-- ─── model_predictions ───────────────────────────────────────────────────────
+CREATE TABLE model_predictions (
+  id                UUID        PRIMARY KEY DEFAULT uuid_generate_v4(),
+  run_id            UUID        NOT NULL REFERENCES runs (id) ON DELETE CASCADE,
+  model_name        TEXT        NOT NULL,
+  as_of_date        DATE        NOT NULL,
+  target_date       DATE        NOT NULL,
+  ticker            TEXT        NOT NULL,
+  predicted_return  NUMERIC     NOT NULL,
+  realized_return   NUMERIC,
+  rank              INTEGER     NOT NULL,
+  selected          BOOLEAN     NOT NULL DEFAULT false,
+  weight            NUMERIC     NOT NULL DEFAULT 0,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (run_id, model_name, as_of_date, ticker)
+);
+
 -- ─── Row-Level Security ───────────────────────────────────────────────────────
 -- Allow anonymous reads so the UI works with the anon key.
 -- Tighten these policies when you add auth.
@@ -98,6 +148,9 @@ ALTER TABLE reports      ENABLE ROW LEVEL SECURITY;
 ALTER TABLE jobs         ENABLE ROW LEVEL SECURITY;
 ALTER TABLE prices       ENABLE ROW LEVEL SECURITY;
 ALTER TABLE data_last_updated ENABLE ROW LEVEL SECURITY;
+ALTER TABLE features_monthly  ENABLE ROW LEVEL SECURITY;
+ALTER TABLE model_metadata    ENABLE ROW LEVEL SECURITY;
+ALTER TABLE model_predictions ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY "public read"   ON runs         FOR SELECT USING (true);
 CREATE POLICY "public read"   ON run_metrics  FOR SELECT USING (true);
@@ -106,6 +159,9 @@ CREATE POLICY "public read"   ON reports      FOR SELECT USING (true);
 CREATE POLICY "public read"   ON jobs         FOR SELECT USING (true);
 CREATE POLICY "public read"   ON prices       FOR SELECT USING (true);
 CREATE POLICY "public read"   ON data_last_updated FOR SELECT USING (true);
+CREATE POLICY "public read"   ON features_monthly  FOR SELECT USING (true);
+CREATE POLICY "public read"   ON model_metadata    FOR SELECT USING (true);
+CREATE POLICY "public read"   ON model_predictions FOR SELECT USING (true);
 -- Allow the UI to create runs and jobs
 CREATE POLICY "public insert" ON runs         FOR INSERT WITH CHECK (true);
 CREATE POLICY "public insert" ON jobs         FOR INSERT WITH CHECK (true);

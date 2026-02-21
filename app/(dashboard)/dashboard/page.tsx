@@ -3,9 +3,17 @@ import { MetricCards } from "@/components/metric-cards"
 import { RecentRuns } from "@/components/recent-runs"
 import { EquityChart } from "@/components/equity-chart"
 import { RunsTable } from "@/components/runs-table"
-import { getRuns, getMostRecentCompletedRun, getEquityCurve } from "@/lib/supabase/queries"
+import {
+  getRuns,
+  getRunsCount,
+  getMostRecentCompletedRun,
+  getEquityCurve,
+  type RunMetricsRow,
+} from "@/lib/supabase/queries"
 import type { DashboardMetric } from "@/lib/types"
 import type { EquityCurveRow } from "@/lib/supabase/queries"
+
+export const revalidate = 30
 
 function buildSparkline(equityCurve: EquityCurveRow[], n = 12): number[] {
   const slice = equityCurve.slice(-n)
@@ -59,9 +67,15 @@ function buildDashboardMetrics(
   ]
 }
 
+function getMetrics(value: RunMetricsRow[] | RunMetricsRow | null): RunMetricsRow | null {
+  if (Array.isArray(value)) return value[0] ?? null
+  return value ?? null
+}
+
 export default async function DashboardPage() {
-  const [allRuns, featuredRun] = await Promise.all([
-    getRuns(),
+  const [allRuns, totalRuns, featuredRun] = await Promise.all([
+    getRuns({ limit: 20 }),
+    getRunsCount(),
     getMostRecentCompletedRun(),
   ])
 
@@ -70,15 +84,15 @@ export default async function DashboardPage() {
     equityCurve = await getEquityCurve(featuredRun.id)
   }
 
-  const featuredMetrics = featuredRun?.run_metrics[0] ?? null
+  const featuredMetrics = featuredRun ? getMetrics(featuredRun.run_metrics) : null
   const dashboardMetrics = buildDashboardMetrics(featuredMetrics, equityCurve)
   const recentRuns = allRuns.slice(0, 6)
 
   return (
     <AppShell title="Dashboard">
       <MetricCards metrics={dashboardMetrics} />
-      <div className="grid grid-cols-1 lg:grid-cols-[340px_1fr] gap-4">
-        <RecentRuns runs={recentRuns} total={allRuns.length} />
+      <div className="grid grid-cols-1 lg:grid-cols-[340px_minmax(0,1fr)] gap-4">
+        <RecentRuns runs={recentRuns} total={totalRuns} />
         <EquityChart data={equityCurve} />
       </div>
       <RunsTable runs={allRuns} />

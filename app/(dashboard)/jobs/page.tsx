@@ -5,6 +5,8 @@ import { getJobs } from "@/lib/supabase/queries"
 import type { RunStatus } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
+export const dynamic = "force-dynamic"
+
 function formatDuration(seconds: number | null): string {
   if (seconds == null) return "--"
   if (seconds < 60) return `${seconds}s`

@@ -1,7 +1,7 @@
 import Link from "next/link"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { StatusBadge } from "@/components/status-badge"
-import type { RunWithMetrics } from "@/lib/supabase/queries"
+import type { RunMetricsRow, RunWithMetrics } from "@/lib/supabase/queries"
 import { STRATEGY_LABELS, type StrategyId, type RunStatus } from "@/lib/types"
 
 interface RecentRunsProps {
@@ -10,6 +10,9 @@ interface RecentRunsProps {
 }
 
 export function RecentRuns({ runs, total }: RecentRunsProps) {
+  const getMetrics = (value: RunMetricsRow[] | RunMetricsRow | null): RunMetricsRow | null =>
+    Array.isArray(value) ? value[0] ?? null : value ?? null
+
   return (
     <Card className="bg-card border-border">
       <CardHeader className="pb-2 px-4 pt-4">
@@ -25,7 +28,7 @@ export function RecentRuns({ runs, total }: RecentRunsProps) {
       <CardContent className="px-4 pb-3">
         <div className="flex flex-col gap-0.5">
           {runs.map((run) => {
-            const metrics = run.run_metrics[0] ?? null
+            const metrics = getMetrics(run.run_metrics)
             const status = run.status as RunStatus
             return (
               <Link

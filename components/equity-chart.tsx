@@ -42,7 +42,7 @@ export function EquityChart({ data }: EquityChartProps) {
   const chartData = tf ? data.slice(-tf.days) : data
 
   return (
-    <Card className="bg-card border-border">
+    <Card className="bg-card border-border min-w-0 overflow-hidden">
       <CardHeader className="pb-1 px-4 pt-4">
         <div className="flex items-center justify-between flex-wrap gap-2">
           <div className="flex items-center gap-4">
@@ -86,7 +86,7 @@ export function EquityChart({ data }: EquityChartProps) {
             No equity data available
           </div>
         ) : (
-          <ChartContainer config={chartConfig} className="h-[280px] lg:h-[320px] w-full">
+          <ChartContainer config={chartConfig} className="h-[280px] lg:h-[320px] w-full min-w-0">
             <AreaChart data={chartData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
               <defs>
                 <linearGradient id="eqPortfolio" x1="0" y1="0" x2="0" y2="1">

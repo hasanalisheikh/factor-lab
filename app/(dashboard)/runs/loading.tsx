@@ -3,7 +3,7 @@ import { MetricCardsSkeleton, ChartSkeleton, TableSkeleton } from "@/components/
 
 export default function RunsLoading() {
   return (
-    <AppShell title="Dashboard">
+    <AppShell title="Runs">
       <MetricCardsSkeleton />
       <div className="grid grid-cols-1 lg:grid-cols-[340px_1fr] gap-4">
         <TableSkeleton rows={6} />

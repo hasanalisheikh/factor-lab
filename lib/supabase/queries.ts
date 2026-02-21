@@ -8,10 +8,22 @@ type ReportRow = Database["public"]["Tables"]["reports"]["Row"]
 type JobRow = Database["public"]["Tables"]["jobs"]["Row"]
 type PriceRow = Database["public"]["Tables"]["prices"]["Row"]
 type DataLastUpdatedRow = Database["public"]["Tables"]["data_last_updated"]["Row"]
+type ModelMetadataRow = Database["public"]["Tables"]["model_metadata"]["Row"]
+type ModelPredictionRow = Database["public"]["Tables"]["model_predictions"]["Row"]
 
-export type { RunRow, RunMetricsRow, EquityCurveRow, ReportRow, JobRow, PriceRow, DataLastUpdatedRow }
+export type {
+  RunRow,
+  RunMetricsRow,
+  EquityCurveRow,
+  ReportRow,
+  JobRow,
+  PriceRow,
+  DataLastUpdatedRow,
+  ModelMetadataRow,
+  ModelPredictionRow,
+}
 
-export type RunWithMetrics = RunRow & { run_metrics: RunMetricsRow[] }
+export type RunWithMetrics = RunRow & { run_metrics: RunMetricsRow[] | RunMetricsRow | null }
 export type DataHealthSummary = {
   tickersCount: number
   dateStart: string | null
@@ -20,13 +32,32 @@ export type DataHealthSummary = {
   lastUpdatedAt: string | null
 }
 
-export async function getRuns(): Promise<RunWithMetrics[]> {
+type GetRunsOptions = {
+  limit?: number
+}
+
+export async function getRuns(options: GetRunsOptions = {}): Promise<RunWithMetrics[]> {
+  const { limit = 100 } = options
   try {
     const supabase = await createClient()
-    const { data, error } = await supabase
+    let query = supabase
       .from("runs")
-      .select("*, run_metrics(*)")
+      .select(`
+        id,
+        name,
+        strategy_id,
+        status,
+        start_date,
+        end_date,
+        created_at,
+        run_metrics(cagr, sharpe, max_drawdown, turnover)
+      `)
       .order("created_at", { ascending: false })
+    if (limit > 0) {
+      query = query.limit(limit)
+    }
+
+    const { data, error } = await query
 
     if (error) {
       console.error("getRuns error:", error.message)
@@ -37,6 +68,24 @@ export async function getRuns(): Promise<RunWithMetrics[]> {
   } catch (err) {
     console.error("getRuns exception:", err)
     return []
+  }
+}
+
+export async function getRunsCount(): Promise<number> {
+  try {
+    const supabase = await createClient()
+    const { count, error } = await supabase
+      .from("runs")
+      .select("*", { count: "exact", head: true })
+
+    if (error) {
+      console.error("getRunsCount error:", error.message)
+      return 0
+    }
+    return count ?? 0
+  } catch (err) {
+    console.error("getRunsCount exception:", err)
+    return 0
   }
 }
 
@@ -156,6 +205,73 @@ export async function getMostRecentCompletedRun(): Promise<RunWithMetrics | null
   } catch (err) {
     console.error("getMostRecentCompletedRun exception:", err)
     return null
+  }
+}
+
+export async function getModelMetadataByRunId(runId: string): Promise<ModelMetadataRow | null> {
+  try {
+    const supabase = await createClient()
+    const { data, error } = await supabase
+      .from("model_metadata")
+      .select("*")
+      .eq("run_id", runId)
+      .maybeSingle()
+
+    if (error || !data) return null
+    return data as ModelMetadataRow
+  } catch (err) {
+    console.error("getModelMetadataByRunId exception:", err)
+    return null
+  }
+}
+
+export async function getModelPredictionsByRunId(runId: string): Promise<ModelPredictionRow[]> {
+  try {
+    const supabase = await createClient()
+    const { data, error } = await supabase
+      .from("model_predictions")
+      .select("*")
+      .eq("run_id", runId)
+      .order("as_of_date", { ascending: false })
+      .order("rank", { ascending: true })
+      .limit(500)
+
+    if (error) {
+      console.error("getModelPredictionsByRunId error:", error.message)
+      return []
+    }
+    return (data ?? []) as ModelPredictionRow[]
+  } catch (err) {
+    console.error("getModelPredictionsByRunId exception:", err)
+    return []
+  }
+}
+
+export async function getStrategyComparisonRuns(): Promise<RunWithMetrics[]> {
+  const empty: RunWithMetrics[] = []
+  try {
+    const supabase = await createClient()
+    const strategies = ["equal_weight", "momentum_12_1", "ml_ridge", "ml_lightgbm"]
+
+    const results = await Promise.all(
+      strategies.map(async (strategyId) => {
+        const { data, error } = await supabase
+          .from("runs")
+          .select("*, run_metrics(*)")
+          .eq("strategy_id", strategyId)
+          .eq("status", "completed")
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle()
+        if (error || !data) return null
+        return data as RunWithMetrics
+      })
+    )
+
+    return results.filter((row): row is RunWithMetrics => row != null)
+  } catch (err) {
+    console.error("getStrategyComparisonRuns exception:", err)
+    return empty
   }
 }
 

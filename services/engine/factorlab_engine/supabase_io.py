@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Iterable
 
+import pandas as pd
 from supabase import Client, create_client
 
 
@@ -74,16 +75,49 @@ class SupabaseIO:
     )
     return result.data
 
+  def fetch_prices_frame(
+    self, tickers: list[str], start_date: str, end_date: str
+  ) -> pd.DataFrame:
+    if not tickers:
+      return pd.DataFrame()
+
+    result = (
+      self.client.table("prices")
+      .select("ticker,date,adj_close")
+      .in_("ticker", tickers)
+      .gte("date", start_date)
+      .lte("date", end_date)
+      .order("date")
+      .execute()
+    )
+    rows = result.data or []
+    if not rows:
+      return pd.DataFrame()
+
+    frame = pd.DataFrame(rows)
+    frame["date"] = pd.to_datetime(frame["date"], utc=False)
+    pivot = frame.pivot(index="date", columns="ticker", values="adj_close")
+    return pivot.sort_index().ffill().dropna(how="all")
+
   def save_success(
     self,
     job: Job,
     duration_seconds: int,
     metrics: dict[str, float],
     equity_rows: Iterable[dict[str, Any]],
+    feature_rows: list[dict[str, Any]] | None = None,
+    prediction_rows: list[dict[str, Any]] | None = None,
+    model_metadata: dict[str, Any] | None = None,
   ) -> None:
     rows = list(equity_rows)
     self._replace_equity_curve(job.run_id, rows)
     self._upsert_metrics(job.run_id, metrics)
+    if feature_rows:
+      self._upsert_features_monthly(feature_rows)
+    if prediction_rows is not None:
+      self._replace_model_predictions(job.run_id, prediction_rows)
+    if model_metadata is not None:
+      self._upsert_model_metadata(model_metadata)
 
     (
       self.client.table("jobs")
@@ -146,3 +180,30 @@ class SupabaseIO:
     }
     self.client.table("run_metrics").upsert(payload, on_conflict="run_id").execute()
 
+  def _upsert_features_monthly(
+    self, rows: list[dict[str, Any]], chunk_size: int = 500
+  ) -> None:
+    if not rows:
+      return
+    for start in range(0, len(rows), chunk_size):
+      chunk = rows[start : start + chunk_size]
+      self.client.table("features_monthly").upsert(
+        chunk,
+        on_conflict="ticker,date",
+      ).execute()
+
+  def _replace_model_predictions(
+    self, run_id: str, rows: list[dict[str, Any]], chunk_size: int = 500
+  ) -> None:
+    self.client.table("model_predictions").delete().eq("run_id", run_id).execute()
+    if not rows:
+      return
+    for start in range(0, len(rows), chunk_size):
+      chunk = rows[start : start + chunk_size]
+      self.client.table("model_predictions").insert(chunk).execute()
+
+  def _upsert_model_metadata(self, metadata: dict[str, Any]) -> None:
+    self.client.table("model_metadata").upsert(
+      metadata,
+      on_conflict="run_id",
+    ).execute()

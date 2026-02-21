@@ -65,7 +65,7 @@ export function Logo({ variant = "default", size = 24, className }: LogoProps) {
   return (
     <span className={cn("flex items-center gap-2", className)}>
       <LogoMark size={size} />
-      <span className="text-[13px] font-semibold tracking-tight leading-none">
+      <span className="text-[20px] font-semibold tracking-tight leading-none">
         <span className="text-foreground">Factor</span>
         <span className="text-primary">Lab</span>
       </span>

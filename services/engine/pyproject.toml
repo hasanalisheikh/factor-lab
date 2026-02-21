@@ -5,14 +5,17 @@ description = "FactorLab compute worker for queued Supabase jobs"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
+  "lightgbm>=4.5.0",
   "numpy>=2.1.0",
   "pandas>=2.2.0",
+  "scikit-learn>=1.5.0",
   "supabase>=2.4.0",
   "yfinance>=0.2.50",
 ]
 
 [project.scripts]
 factorlab-engine-worker = "factorlab_engine.worker:main"
+factorlab-engine-ingest = "factorlab_engine.ingest:main"
 
 [build-system]
 requires = ["setuptools>=69.0"]

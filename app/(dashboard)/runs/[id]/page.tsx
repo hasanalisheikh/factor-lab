@@ -10,28 +10,52 @@ import { OverviewTab } from "@/components/run-detail/overview-tab"
 import { HoldingsTab } from "@/components/run-detail/holdings-tab"
 import { TradesTab } from "@/components/run-detail/trades-tab"
 import { MlInsightsTab } from "@/components/run-detail/ml-insights-tab"
-import { getRunById, getEquityCurve, getJobByRunId, getReportByRunId } from "@/lib/supabase/queries"
+import {
+  getRunById,
+  getEquityCurve,
+  getJobByRunId,
+  getReportByRunId,
+  getModelMetadataByRunId,
+  getModelPredictionsByRunId,
+  type RunMetricsRow,
+} from "@/lib/supabase/queries"
 import { STRATEGY_LABELS, type StrategyId, type RunStatus } from "@/lib/types"
 import { JobStatusPanel } from "@/components/run-detail/job-status-panel"
 import { generateRunReport } from "@/app/actions/reports"
 
+function getMetrics(value: RunMetricsRow[] | RunMetricsRow | null): RunMetricsRow | null {
+  if (Array.isArray(value)) return value[0] ?? null
+  return value ?? null
+}
+
+function isUuid(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
+}
+
 export default async function RunDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
-  const [run, equityCurve, job, report] = await Promise.all([
-    getRunById(id),
-    getEquityCurve(id),
-    getJobByRunId(id),
-    getReportByRunId(id),
-  ])
+  if (!isUuid(id)) {
+    notFound()
+  }
+
+  const run = await getRunById(id)
 
   if (!run) {
     notFound()
   }
 
-  const metrics = run.run_metrics[0] ?? null
+  const [equityCurve, job, report, modelMetadata, modelPredictions] = await Promise.all([
+    getEquityCurve(id),
+    getJobByRunId(id),
+    getReportByRunId(id),
+    getModelMetadataByRunId(id),
+    getModelPredictionsByRunId(id),
+  ])
+
+  const metrics = getMetrics(run.run_metrics)
   const status = run.status as RunStatus
   const strategyLabel = STRATEGY_LABELS[run.strategy_id as StrategyId] ?? run.strategy_id
-  const canGenerateReport = status === "completed" && metrics != null && equityCurve.length > 0
+  const canGenerateReport = status === "completed" && equityCurve.length > 0
   const generateReportAction = generateRunReport.bind(null, id)
 
   return (
@@ -141,7 +165,7 @@ export default async function RunDetailPage({ params }: { params: Promise<{ id: 
           <TradesTab />
         </TabsContent>
         <TabsContent value="ml-insights" className="mt-4">
-          <MlInsightsTab />
+          <MlInsightsTab metadata={modelMetadata} predictions={modelPredictions} />
         </TabsContent>
       </Tabs>
     </AppShell>

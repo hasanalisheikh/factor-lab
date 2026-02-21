@@ -1,0 +1,3 @@
+[console_scripts]
+factorlab-engine-ingest = factorlab_engine.ingest:main
+factorlab-engine-worker = factorlab_engine.worker:main

@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 import yfinance as yf
 
+from .ml import run_walk_forward
 from .supabase_io import Job, SupabaseIO
 
 
@@ -17,6 +18,9 @@ from .supabase_io import Job, SupabaseIO
 class BacktestResult:
   equity_rows: list[dict[str, Any]]
   metrics: dict[str, float]
+  feature_rows: list[dict[str, Any]] | None = None
+  prediction_rows: list[dict[str, Any]] | None = None
+  model_metadata: dict[str, Any] | None = None
 
 
 def _to_date(value: str) -> pd.Timestamp:
@@ -156,13 +160,15 @@ def _equity_rows(
   return rows
 
 
-def _build_baseline_result(run: dict[str, Any]) -> BacktestResult:
+def _build_baseline_result(io: SupabaseIO, run: dict[str, Any]) -> BacktestResult:
   universe_raw = os.getenv("FACTORLAB_UNIVERSE", "SPY,QQQ,IWM,EFA,EEM,TLT,GLD,VNQ")
   tickers = [x.strip().upper() for x in universe_raw.split(",") if x.strip()]
   if not tickers:
     tickers = ["SPY", "QQQ", "IWM", "EFA", "EEM"]
 
-  prices = _download_prices(run["start_date"], run["end_date"], tickers)
+  prices = io.fetch_prices_frame(tickers, run["start_date"], run["end_date"])
+  if prices.empty or prices.shape[0] < 40:
+    prices = _download_prices(run["start_date"], run["end_date"], tickers)
   strat = run["strategy_id"]
   if strat == "equal_weight":
     daily_rets, turnover = _equal_weight(prices)
@@ -181,13 +187,51 @@ def _build_baseline_result(run: dict[str, Any]) -> BacktestResult:
   return BacktestResult(equity_rows=rows, metrics=metrics)
 
 
-def _run_backtest(run: dict[str, Any]) -> BacktestResult:
+def _build_ml_result(io: SupabaseIO, run: dict[str, Any]) -> BacktestResult:
+  universe_raw = os.getenv("FACTORLAB_UNIVERSE", "SPY,QQQ,IWM,EFA,EEM,TLT,GLD,VNQ")
+  tickers = [x.strip().upper() for x in universe_raw.split(",") if x.strip()]
+  if "SPY" not in tickers:
+    tickers = ["SPY", *tickers]
+
+  warmup_years = int(os.getenv("ML_WARMUP_YEARS", "5"))
+  warmup_start = (
+    pd.to_datetime(run["start_date"]) - pd.DateOffset(years=warmup_years)
+  ).strftime("%Y-%m-%d")
+
+  prices = io.fetch_prices_frame(tickers, warmup_start, run["end_date"])
+  if prices.empty or prices.shape[0] < 260:
+    prices = _download_prices(warmup_start, run["end_date"], tickers)
+
+  benchmark_ticker = "SPY" if "SPY" in prices.columns else prices.columns[0]
+  ml = run_walk_forward(
+    run_id=run["id"],
+    strategy=run["strategy_id"],
+    prices=prices,
+    start_date=run["start_date"],
+    end_date=run["end_date"],
+    benchmark_ticker=benchmark_ticker,
+  )
+  return BacktestResult(
+    equity_rows=ml.equity_rows,
+    metrics=ml.metrics,
+    feature_rows=ml.feature_rows,
+    prediction_rows=ml.prediction_rows,
+    model_metadata=ml.metadata,
+  )
+
+
+def _run_backtest(io: SupabaseIO, run: dict[str, Any]) -> BacktestResult:
   strategy = run["strategy_id"]
   if strategy in {"equal_weight", "momentum_12_1"}:
     try:
-      return _build_baseline_result(run)
+      return _build_baseline_result(io, run)
     except Exception as exc:  # fallback keeps end-to-end loop unblocked
       print(f"[engine] baseline failed for {strategy}, using synthetic: {exc}")
+  if strategy in {"ml_ridge", "ml_lightgbm"}:
+    try:
+      return _build_ml_result(io, run)
+    except Exception as exc:
+      print(f"[engine] ML failed for {strategy}, using synthetic: {exc}")
 
   seed = abs(hash(run["id"])) % (2**32)
   return _build_synthetic_result(run["start_date"], run["end_date"], seed=seed)
@@ -204,7 +248,7 @@ def _process_job(io: SupabaseIO, job: Job) -> None:
     if run is None:
       raise RuntimeError(f"Run not found for run_id={job.run_id}")
 
-    result = _run_backtest(run)
+    result = _run_backtest(io, run)
     duration = int((datetime.utcnow() - started).total_seconds())
     io.save_success(
       job=job,
@@ -214,6 +258,9 @@ def _process_job(io: SupabaseIO, job: Job) -> None:
         {"run_id": job.run_id, **row}
         for row in result.equity_rows
       ),
+      feature_rows=result.feature_rows,
+      prediction_rows=result.prediction_rows,
+      model_metadata=result.model_metadata,
     )
     print(f"[engine] completed job={job.id} in {duration}s")
   except Exception as exc:
@@ -240,4 +287,3 @@ def main() -> None:
 
 if __name__ == "__main__":
   main()
-

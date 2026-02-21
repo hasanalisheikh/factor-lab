@@ -1,3 +1,16 @@
+Metadata-Version: 2.4
+Name: factorlab-engine
+Version: 0.1.0
+Summary: FactorLab compute worker for queued Supabase jobs
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+Requires-Dist: lightgbm>=4.5.0
+Requires-Dist: numpy>=2.1.0
+Requires-Dist: pandas>=2.2.0
+Requires-Dist: scikit-learn>=1.5.0
+Requires-Dist: supabase>=2.4.0
+Requires-Dist: yfinance>=0.2.50
+
 # FactorLab Engine
 
 Python worker that polls queued jobs from Supabase, computes backtest outputs,

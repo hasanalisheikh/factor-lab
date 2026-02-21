@@ -51,6 +51,18 @@ function computeDrawdownSeries(equity: EquityCurveRow[]): number[] {
   })
 }
 
+function trimWarmup(equity: EquityCurveRow[]): { series: EquityCurveRow[]; trimmedPoints: number } {
+  if (equity.length < 3) return { series: equity, trimmedPoints: 0 }
+
+  const startNav = equity[0].portfolio
+  const firstActiveIdx = equity.findIndex((pt) => Math.abs(pt.portfolio - startNav) > 1e-9)
+  if (firstActiveIdx <= 0) return { series: equity, trimmedPoints: 0 }
+
+  const series = equity.slice(firstActiveIdx)
+  if (series.length < 2) return { series: equity, trimmedPoints: 0 }
+  return { series, trimmedPoints: firstActiveIdx }
+}
+
 function buildReportHtml(params: {
   runName: string
   strategyId: string
@@ -61,9 +73,10 @@ function buildReportHtml(params: {
   equityCurve: EquityCurveRow[]
 }): string {
   const { runName, strategyId, startDate, endDate, generatedAt, metrics, equityCurve } = params
-  const drawdown = computeDrawdownSeries(equityCurve)
-  const portfolioSeries = equityCurve.map((pt) => pt.portfolio)
-  const benchmarkSeries = equityCurve.map((pt) => pt.benchmark)
+  const { series: chartSeries, trimmedPoints } = trimWarmup(equityCurve)
+  const drawdown = computeDrawdownSeries(chartSeries)
+  const portfolioSeries = chartSeries.map((pt) => pt.portfolio)
+  const benchmarkSeries = chartSeries.map((pt) => pt.benchmark)
   const eqWidth = 1040
   const eqHeight = 340
   const ddWidth = 1040
@@ -73,8 +86,8 @@ function buildReportHtml(params: {
   const benchmarkLine = makePolyline(benchmarkSeries, eqWidth, eqHeight)
   const drawdownLine = makePolyline(drawdown, ddWidth, ddHeight)
   const drawdownMax = Math.min(...drawdown, 0)
-  const first = equityCurve[0]
-  const last = equityCurve[equityCurve.length - 1]
+  const first = chartSeries[0]
+  const last = chartSeries[chartSeries.length - 1]
 
   return `<!doctype html>
 <html lang="en">
@@ -173,6 +186,7 @@ function buildReportHtml(params: {
       </svg>
       <p><strong>Start NAV:</strong> ${fmtMoney(first?.portfolio ?? 0)} | <strong>End NAV:</strong> ${fmtMoney(last?.portfolio ?? 0)}</p>
       <p><strong>Benchmark End:</strong> ${fmtMoney(last?.benchmark ?? 0)}</p>
+      ${trimmedPoints > 0 ? `<p><strong>Warmup Trim:</strong> Omitted ${trimmedPoints} initial trading days before first active portfolio change.</p>` : ""}
     </div>
 
     <h2>Drawdown</h2>

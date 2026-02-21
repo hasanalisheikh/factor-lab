@@ -13,7 +13,7 @@ export function MobileNav() {
   return (
     <div className="flex flex-col h-full">
       <div className="flex items-center px-5 h-14 border-b border-sidebar-border">
-        <Logo size={22} />
+        <Logo size={52} />
       </div>
       <nav
         className="flex-1 flex flex-col gap-0.5 px-3 py-4"

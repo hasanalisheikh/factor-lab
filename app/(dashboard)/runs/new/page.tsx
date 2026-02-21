@@ -77,10 +77,17 @@ export default function NewRunPage() {
                 Strategy
               </Label>
               <Select value={strategy} onValueChange={setStrategy} required>
-                <SelectTrigger className="h-8 text-[13px] bg-secondary/40 border-border">
+                <SelectTrigger className="h-8 w-full text-[13px] bg-secondary/40 border-border">
                   <SelectValue placeholder="Select a strategy…" />
                 </SelectTrigger>
-                <SelectContent>
+                <SelectContent
+                  portal={false}
+                  position="popper"
+                  sideOffset={4}
+                  align="start"
+                  collisionPadding={12}
+                  className="w-[var(--radix-select-trigger-width)] max-w-[calc(100vw-2rem)]"
+                >
                   {STRATEGIES.map(([id, label]) => (
                     <SelectItem key={id} value={id} className="text-[13px]">
                       {label}

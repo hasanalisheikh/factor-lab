@@ -35,7 +35,7 @@ export function Topbar({ title = "Dashboard" }: { title?: string }) {
 
         {/* Mobile logo */}
         <div className="lg:hidden">
-          <Logo size={20} />
+          <Logo size={48} />
         </div>
 
         {/* Desktop title */}

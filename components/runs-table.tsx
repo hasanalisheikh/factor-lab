@@ -10,7 +10,7 @@ import {
 } from "@/components/ui/table"
 import { StatusBadge } from "@/components/status-badge"
 import { cn } from "@/lib/utils"
-import type { RunWithMetrics } from "@/lib/supabase/queries"
+import type { RunMetricsRow, RunWithMetrics } from "@/lib/supabase/queries"
 import { STRATEGY_LABELS, type StrategyId, type RunStatus } from "@/lib/types"
 
 interface RunsTableProps {
@@ -18,6 +18,9 @@ interface RunsTableProps {
 }
 
 export function RunsTable({ runs }: RunsTableProps) {
+  const getMetrics = (value: RunMetricsRow[] | RunMetricsRow | null): RunMetricsRow | null =>
+    Array.isArray(value) ? value[0] ?? null : value ?? null
+
   return (
     <Card className="bg-card border-border">
       <CardHeader className="pb-2 px-4 pt-4">
@@ -55,9 +58,11 @@ export function RunsTable({ runs }: RunsTableProps) {
             </TableHeader>
             <TableBody>
               {runs.map((run) => {
-                const metrics = run.run_metrics[0] ?? null
+                const metrics = getMetrics(run.run_metrics)
                 const status = run.status as RunStatus
                 const hasMetrics = metrics !== null && (status === "completed" || status === "failed")
+                const startPeriod = run.start_date ? run.start_date.slice(0, 7) : "--"
+                const endPeriod = run.end_date ? run.end_date.slice(0, 7) : "--"
                 return (
                   <TableRow
                     key={run.id}
@@ -98,7 +103,7 @@ export function RunsTable({ runs }: RunsTableProps) {
                       {hasMetrics ? `${(metrics.max_drawdown * 100).toFixed(1)}%` : "--"}
                     </TableCell>
                     <TableCell className="text-[12px] font-mono text-right pr-4 py-2.5 text-muted-foreground hidden lg:table-cell">
-                      {run.start_date.slice(0, 7)} – {run.end_date.slice(0, 7)}
+                      {startPeriod} – {endPeriod}
                     </TableCell>
                   </TableRow>
                 )
