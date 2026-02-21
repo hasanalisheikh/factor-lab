@@ -9,11 +9,14 @@ interface JobStatusPanelProps {
 }
 
 export function JobStatusPanel({ job, runStatus }: JobStatusPanelProps) {
-  if (runStatus !== "queued" && runStatus !== "running") return null
+  if (runStatus !== "queued" && runStatus !== "running" && runStatus !== "failed") return null
 
   const isQueued = runStatus === "queued"
   const isRunning = runStatus === "running"
+  const isFailed = runStatus === "failed"
   const progress = job?.progress ?? 0
+  const stage = job?.stage ?? "ingest"
+  const stageLabel = stage.charAt(0).toUpperCase() + stage.slice(1)
 
   return (
     <Card className="bg-card border-border">
@@ -31,12 +34,14 @@ export function JobStatusPanel({ job, runStatus }: JobStatusPanelProps) {
           {/* Text + progress */}
           <div className="flex-1 min-w-0">
             <p className="text-[13px] font-medium text-card-foreground">
-              {isQueued ? "Queued" : "Running backtest…"}
+              {isQueued ? "Queued" : isFailed ? "Run failed" : "Running backtest…"}
             </p>
             <p className="text-[12px] text-muted-foreground mt-0.5">
               {isQueued
                 ? "Waiting for a worker to pick up this job."
-                : `Stage: data loading & factor computation — ${progress}% complete`}
+                : isFailed
+                ? job?.error_message || "The worker failed before completion."
+                : `Stage: ${stageLabel} — ${progress}% complete`}
             </p>
 
             {isRunning && (

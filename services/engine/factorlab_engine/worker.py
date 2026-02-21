@@ -77,22 +77,29 @@ def _download_prices(start: str, end: str, tickers: list[str]) -> pd.DataFrame:
   return close
 
 
-def _equal_weight(prices: pd.DataFrame) -> tuple[pd.Series, float]:
+def _equal_weight(prices: pd.DataFrame) -> tuple[pd.Series, float, pd.Series]:
   rets = prices.pct_change().fillna(0.0)
   n = prices.shape[1]
   weights = np.full(n, 1.0 / n)
   portfolio_rets = (rets * weights).sum(axis=1)
-  turnover = 0.08
-  return portfolio_rets, turnover
+  monthly_turnover = pd.Series(0.0, index=prices.index)
+  rebalance_mask = prices.index.to_series().dt.to_period("M").ne(
+    prices.index.to_series().shift(1).dt.to_period("M")
+  )
+  monthly_turnover.loc[rebalance_mask.values] = 0.08
+  annualized_turnover = float(monthly_turnover[monthly_turnover > 0].mean() * 12.0)
+  return portfolio_rets, annualized_turnover, monthly_turnover
 
 
-def _momentum_12_1(prices: pd.DataFrame) -> tuple[pd.Series, float]:
+def _momentum_12_1(prices: pd.DataFrame) -> tuple[pd.Series, float, pd.Series]:
   asset_rets = prices.pct_change().fillna(0.0)
   scores = prices.shift(21) / prices.shift(252) - 1.0
 
   weights = pd.DataFrame(0.0, index=prices.index, columns=prices.columns)
   current_w = pd.Series(0.0, index=prices.columns)
   top_n = max(1, prices.shape[1] // 2)
+  rebalance_turnover = pd.Series(0.0, index=prices.index)
+  prev_rebalance_weights = pd.Series(0.0, index=prices.columns)
 
   for i, dt in enumerate(prices.index):
     if i == 0 or dt.month != prices.index[i - 1].month:
@@ -101,12 +108,31 @@ def _momentum_12_1(prices: pd.DataFrame) -> tuple[pd.Series, float]:
       current_w = pd.Series(0.0, index=prices.columns)
       if not s.empty:
         current_w.loc[s.index] = 1.0 / len(s)
+      rebalance_turnover.loc[dt] = float(
+        (current_w - prev_rebalance_weights).abs().sum() / 2.0
+      )
+      prev_rebalance_weights = current_w.copy()
     weights.loc[dt] = current_w
 
   shifted = weights.shift(1).fillna(0.0)
   portfolio_rets = (asset_rets * shifted).sum(axis=1)
-  turnover = float(weights.diff().abs().sum(axis=1).fillna(0.0).mean() / 2.0)
-  return portfolio_rets, turnover
+  annualized_turnover = float(rebalance_turnover[rebalance_turnover > 0].mean() * 12.0)
+  return portfolio_rets, annualized_turnover, rebalance_turnover
+
+
+def _apply_rebalance_costs(
+  returns: pd.Series, rebalance_turnover: pd.Series, costs_bps: float
+) -> pd.Series:
+  cost_rate = max(float(costs_bps), 0.0) / 10_000.0
+  if cost_rate <= 0:
+    return returns
+
+  aligned = rebalance_turnover.reindex(returns.index).fillna(0.0)
+  net = returns.copy()
+  for dt, t in aligned.items():
+    if t > 0:
+      net.at[dt] = float(net.at[dt]) - cost_rate * float(t)
+  return net
 
 
 def _compute_metrics(daily_returns: pd.Series, turnover: float) -> dict[str, float]:
@@ -170,15 +196,20 @@ def _build_baseline_result(io: SupabaseIO, run: dict[str, Any]) -> BacktestResul
   if prices.empty or prices.shape[0] < 40:
     prices = _download_prices(run["start_date"], run["end_date"], tickers)
   strat = run["strategy_id"]
+  costs_bps = float(run.get("costs_bps") or 0.0)
+  benchmark_ticker = str(run.get("benchmark_ticker") or "SPY").upper()
   if strat == "equal_weight":
-    daily_rets, turnover = _equal_weight(prices)
+    daily_rets, turnover, rebalance_turnover = _equal_weight(prices)
   elif strat == "momentum_12_1":
-    daily_rets, turnover = _momentum_12_1(prices)
+    daily_rets, turnover, rebalance_turnover = _momentum_12_1(prices)
   else:
     raise ValueError(f"Unsupported baseline strategy: {strat}")
 
-  benchmark_ticker = "SPY" if "SPY" in prices.columns else prices.columns[0]
-  benchmark_rets = prices[benchmark_ticker].pct_change().fillna(0.0)
+  daily_rets = _apply_rebalance_costs(daily_rets, rebalance_turnover, costs_bps)
+  bench_ticker = benchmark_ticker if benchmark_ticker in prices.columns else (
+    "SPY" if "SPY" in prices.columns else prices.columns[0]
+  )
+  benchmark_rets = prices[bench_ticker].pct_change().fillna(0.0)
 
   portfolio = 100_000.0 * (1.0 + daily_rets).cumprod()
   benchmark = 100_000.0 * (1.0 + benchmark_rets).cumprod()
@@ -202,7 +233,9 @@ def _build_ml_result(io: SupabaseIO, run: dict[str, Any]) -> BacktestResult:
   if prices.empty or prices.shape[0] < 260:
     prices = _download_prices(warmup_start, run["end_date"], tickers)
 
-  benchmark_ticker = "SPY" if "SPY" in prices.columns else prices.columns[0]
+  benchmark_ticker = str(run.get("benchmark_ticker") or "SPY").upper()
+  if benchmark_ticker not in prices.columns:
+    benchmark_ticker = "SPY" if "SPY" in prices.columns else prices.columns[0]
   ml = run_walk_forward(
     run_id=run["id"],
     strategy=run["strategy_id"],
@@ -210,6 +243,8 @@ def _build_ml_result(io: SupabaseIO, run: dict[str, Any]) -> BacktestResult:
     start_date=run["start_date"],
     end_date=run["end_date"],
     benchmark_ticker=benchmark_ticker,
+    top_n=int(run.get("top_n") or 10),
+    cost_bps=float(run.get("costs_bps") or 10.0),
   )
   return BacktestResult(
     equity_rows=ml.equity_rows,
@@ -244,11 +279,21 @@ def _process_job(io: SupabaseIO, job: Job) -> None:
   started = datetime.utcnow()
   print(f"[engine] running job={job.id} run={job.run_id}")
   try:
+    io.update_job_progress(job.id, stage="ingest", progress=10)
     run = io.fetch_run(job.run_id)
     if run is None:
       raise RuntimeError(f"Run not found for run_id={job.run_id}")
 
+    strategy = run["strategy_id"]
+    if strategy in {"ml_ridge", "ml_lightgbm"}:
+      io.update_job_progress(job.id, stage="features", progress=30)
+      io.update_job_progress(job.id, stage="train", progress=55)
+      io.update_job_progress(job.id, stage="backtest", progress=80)
+    else:
+      io.update_job_progress(job.id, stage="backtest", progress=70)
+
     result = _run_backtest(io, run)
+    io.update_job_progress(job.id, stage="report", progress=95)
     duration = int((datetime.utcnow() - started).total_seconds())
     io.save_success(
       job=job,

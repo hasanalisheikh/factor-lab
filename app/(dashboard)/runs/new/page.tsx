@@ -131,6 +131,63 @@ export default function NewRunPage() {
               </div>
             </div>
 
+            {/* Execution config */}
+            <div className="grid grid-cols-3 gap-3">
+              <div className="flex flex-col gap-1.5">
+                <Label
+                  htmlFor="benchmark_ticker"
+                  className="text-[12px] font-medium text-muted-foreground"
+                >
+                  Benchmark
+                </Label>
+                <Input
+                  id="benchmark_ticker"
+                  name="benchmark_ticker"
+                  defaultValue="SPY"
+                  className="h-8 text-[13px] bg-secondary/40 border-border uppercase"
+                  required
+                />
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Label
+                  htmlFor="costs_bps"
+                  className="text-[12px] font-medium text-muted-foreground"
+                >
+                  Costs (bps)
+                </Label>
+                <Input
+                  id="costs_bps"
+                  name="costs_bps"
+                  type="number"
+                  min={0}
+                  max={500}
+                  step={1}
+                  defaultValue={10}
+                  className="h-8 text-[13px] bg-secondary/40 border-border"
+                  required
+                />
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Label
+                  htmlFor="top_n"
+                  className="text-[12px] font-medium text-muted-foreground"
+                >
+                  Top N
+                </Label>
+                <Input
+                  id="top_n"
+                  name="top_n"
+                  type="number"
+                  min={1}
+                  max={100}
+                  step={1}
+                  defaultValue={10}
+                  className="h-8 text-[13px] bg-secondary/40 border-border"
+                  required
+                />
+              </div>
+            </div>
+
             {/* Error message */}
             {state?.error && (
               <p className="text-[12px] text-destructive bg-destructive/8 border border-destructive/20 rounded-md px-3 py-2">

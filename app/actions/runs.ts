@@ -17,6 +17,20 @@ const schema = z
     end_date: z
       .string()
       .regex(/^\d{4}-\d{2}-\d{2}$/, "Invalid end date"),
+    benchmark_ticker: z
+      .string()
+      .trim()
+      .toUpperCase()
+      .regex(/^[A-Z.\-]{1,10}$/, "Benchmark must be a valid ticker"),
+    costs_bps: z.coerce
+      .number({ invalid_type_error: "Costs must be a number" })
+      .min(0, "Costs must be >= 0 bps")
+      .max(500, "Costs too high"),
+    top_n: z.coerce
+      .number({ invalid_type_error: "Top N must be a number" })
+      .int("Top N must be an integer")
+      .min(1, "Top N must be at least 1")
+      .max(100, "Top N too high"),
   })
   .refine((d) => d.end_date > d.start_date, {
     message: "End date must be after start date",
@@ -36,13 +50,28 @@ export async function createRun(
     return { error: parsed.error.issues[0].message }
   }
 
-  const { name, strategy_id, start_date, end_date } = parsed.data
+  const { name, strategy_id, start_date, end_date, benchmark_ticker, costs_bps, top_n } = parsed.data
 
   const supabase = createAdminClient()
 
   const { data: run, error: runError } = await supabase
     .from("runs")
-    .insert({ name, strategy_id, status: "queued", start_date, end_date })
+    .insert({
+      name,
+      strategy_id,
+      status: "queued",
+      start_date,
+      end_date,
+      benchmark_ticker,
+      costs_bps,
+      top_n,
+      run_params: {
+        benchmark_ticker,
+        costs_bps,
+        top_n,
+        created_via: "runs/new",
+      },
+    })
     .select("id")
     .single()
 
@@ -55,6 +84,7 @@ export async function createRun(
     run_id: run.id,
     name,
     status: "queued",
+    stage: "ingest",
     progress: 0,
   })
 

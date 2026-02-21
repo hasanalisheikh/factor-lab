@@ -31,11 +31,11 @@ function computeDrawdown(equity: EquityCurveRow[]) {
 const metricDefs: { key: keyof RunMetricsRow; label: string; format: (v: number) => string }[] = [
   { key: "cagr", label: "CAGR", format: (v) => `${v >= 0 ? "+" : ""}${(v * 100).toFixed(1)}%` },
   { key: "sharpe", label: "Sharpe", format: (v) => v.toFixed(2) },
-  { key: "max_drawdown", label: "Max DD", format: (v) => `${(v * 100).toFixed(1)}%` },
+  { key: "max_drawdown", label: "Max DD", format: (v) => `${Math.abs(v * 100).toFixed(1)}%` },
   { key: "volatility", label: "Volatility", format: (v) => `${(v * 100).toFixed(1)}%` },
   { key: "win_rate", label: "Win Rate", format: (v) => `${(v * 100).toFixed(1)}%` },
   { key: "profit_factor", label: "Profit Factor", format: (v) => v.toFixed(2) },
-  { key: "turnover", label: "Turnover", format: (v) => `${(v * 100).toFixed(1)}%` },
+  { key: "turnover", label: "Turnover (Ann.)", format: (v) => `${(v * 100).toFixed(1)}%` },
   { key: "calmar", label: "Calmar", format: (v) => v.toFixed(2) },
 ]
 
@@ -57,7 +57,11 @@ export function OverviewTab({ metrics, equityCurve }: OverviewTabProps) {
               <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider mb-1">
                 {label}
               </p>
-              <p className="text-lg font-semibold font-mono text-card-foreground leading-none">
+              <p
+                className={`text-lg font-semibold font-mono leading-none ${
+                  key === "max_drawdown" ? "text-destructive" : "text-card-foreground"
+                }`}
+              >
                 {metrics != null ? format(metrics[key] as number) : "--"}
               </p>
             </CardContent>

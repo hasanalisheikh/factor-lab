@@ -15,6 +15,10 @@ export type Database = {
           name: string
           strategy_id: string
           status: string
+          benchmark_ticker: string
+          costs_bps: number
+          top_n: number
+          run_params: Json
           start_date: string
           end_date: string
           created_at: string
@@ -24,6 +28,10 @@ export type Database = {
           name: string
           strategy_id: string
           status?: string
+          benchmark_ticker?: string
+          costs_bps?: number
+          top_n?: number
+          run_params?: Json
           start_date: string
           end_date: string
           created_at?: string
@@ -101,7 +109,9 @@ export type Database = {
           run_id: string | null
           name: string
           status: string
+          stage: string
           progress: number
+          error_message: string | null
           started_at: string | null
           duration: number | null
           created_at: string
@@ -111,7 +121,9 @@ export type Database = {
           run_id?: string | null
           name: string
           status?: string
+          stage?: string
           progress?: number
+          error_message?: string | null
           started_at?: string | null
           duration?: number | null
           created_at?: string

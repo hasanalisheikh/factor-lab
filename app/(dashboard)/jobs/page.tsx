@@ -54,6 +54,9 @@ export default async function JobsPage() {
               {jobs.map((job) => {
                 const status = job.status as RunStatus
                 const isRunning = status === "running"
+                const stageLabel = job.stage
+                  ? job.stage.charAt(0).toUpperCase() + job.stage.slice(1)
+                  : "Ingest"
                 return (
                   <div key={job.id} className="px-4 py-3 hover:bg-accent/20 transition-colors">
                     <div className="flex items-start justify-between gap-3">
@@ -65,12 +68,20 @@ export default async function JobsPage() {
                           <span className="text-[11px] text-muted-foreground font-mono">
                             Started {formatDate(job.started_at)}
                           </span>
+                          <span className="text-[11px] text-muted-foreground font-mono">
+                            Stage {stageLabel}
+                          </span>
                           {job.duration != null && (
                             <span className="text-[11px] text-muted-foreground font-mono">
                               {formatDuration(job.duration)}
                             </span>
                           )}
                         </div>
+                        {status === "failed" && job.error_message && (
+                          <p className="text-[11px] text-destructive mt-1 max-w-[520px] truncate">
+                            {job.error_message}
+                          </p>
+                        )}
                         {isRunning && (
                           <div className="mt-1.5 flex items-center gap-2">
                             <div className="flex-1 max-w-[200px] h-1 rounded-full bg-secondary overflow-hidden">

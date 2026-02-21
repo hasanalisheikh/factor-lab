@@ -12,6 +12,10 @@ CREATE TABLE runs (
                            CHECK (strategy_id IN ('equal_weight', 'momentum_12_1', 'ml_ridge', 'ml_lightgbm')),
   status       TEXT        NOT NULL DEFAULT 'queued'
                            CHECK (status IN ('queued', 'running', 'completed', 'failed')),
+  benchmark_ticker TEXT    NOT NULL DEFAULT 'SPY',
+  costs_bps    NUMERIC     NOT NULL DEFAULT 10 CHECK (costs_bps >= 0),
+  top_n        INTEGER     NOT NULL DEFAULT 10 CHECK (top_n > 0),
+  run_params   JSONB       NOT NULL DEFAULT '{}'::JSONB,
   start_date   DATE        NOT NULL,
   end_date     DATE        NOT NULL,
   created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -61,7 +65,10 @@ CREATE TABLE jobs (
   name        TEXT        NOT NULL,
   status      TEXT        NOT NULL DEFAULT 'queued'
                           CHECK (status IN ('queued', 'running', 'completed', 'failed')),
+  stage       TEXT        NOT NULL DEFAULT 'ingest'
+                          CHECK (stage IN ('ingest', 'features', 'train', 'backtest', 'report')),
   progress    INTEGER     NOT NULL DEFAULT 0 CHECK (progress BETWEEN 0 AND 100),
+  error_message TEXT,
   started_at  TIMESTAMPTZ,
   duration    INTEGER,            -- wall-clock seconds
   created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -162,9 +169,6 @@ CREATE POLICY "public read"   ON data_last_updated FOR SELECT USING (true);
 CREATE POLICY "public read"   ON features_monthly  FOR SELECT USING (true);
 CREATE POLICY "public read"   ON model_metadata    FOR SELECT USING (true);
 CREATE POLICY "public read"   ON model_predictions FOR SELECT USING (true);
--- Allow the UI to create runs and jobs
-CREATE POLICY "public insert" ON runs         FOR INSERT WITH CHECK (true);
-CREATE POLICY "public insert" ON jobs         FOR INSERT WITH CHECK (true);
 
 -- ─── Migration (existing databases) ──────────────────────────────────────────
 -- If your DB was created before Phase 4, run this in the Supabase SQL Editor:
@@ -172,5 +176,4 @@ CREATE POLICY "public insert" ON jobs         FOR INSERT WITH CHECK (true);
 -- ALTER TABLE jobs ADD COLUMN IF NOT EXISTS
 --   run_id UUID REFERENCES runs(id) ON DELETE CASCADE;
 --
--- CREATE POLICY "public insert" ON runs FOR INSERT WITH CHECK (true);
--- CREATE POLICY "public insert" ON jobs FOR INSERT WITH CHECK (true);
+-- Use server-side/service role writes for runs/jobs insert.

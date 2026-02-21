@@ -52,13 +52,13 @@ function buildDashboardMetrics(
     },
     {
       label: "Max Drawdown",
-      value: `${(metrics.max_drawdown * 100).toFixed(1)}%`,
+      value: `${Math.abs(metrics.max_drawdown * 100).toFixed(1)}%`,
       delta: metrics.max_drawdown * 100,
       deltaLabel: "peak-to-trough",
       sparkline,
     },
     {
-      label: "Turnover",
+      label: "Turnover (Ann.)",
       value: `${(metrics.turnover * 100).toFixed(1)}%`,
       delta: -(metrics.turnover * 100),
       deltaLabel: "annualized",

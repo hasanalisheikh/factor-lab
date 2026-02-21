@@ -13,6 +13,11 @@ dependencies = [
   "yfinance>=0.2.50",
 ]
 
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0.0",
+]
+
 [project.scripts]
 factorlab-engine-worker = "factorlab_engine.worker:main"
 factorlab-engine-ingest = "factorlab_engine.ingest:main"

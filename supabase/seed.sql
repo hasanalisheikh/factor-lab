@@ -3,13 +3,29 @@
 -- Uses fixed UUIDs so you can re-run safely (ON CONFLICT DO NOTHING).
 
 -- ─── Runs ─────────────────────────────────────────────────────────────────────
-INSERT INTO runs (id, name, strategy_id, status, start_date, end_date, created_at)
+INSERT INTO runs (
+  id,
+  name,
+  strategy_id,
+  status,
+  benchmark_ticker,
+  costs_bps,
+  top_n,
+  run_params,
+  start_date,
+  end_date,
+  created_at
+)
 VALUES
   (
     '11111111-1111-1111-1111-111111111111',
     'Momentum 12-1 Backtest',
     'momentum_12_1',
     'completed',
+    'SPY',
+    10,
+    10,
+    '{"universe":"SP100","rebalance":"monthly"}'::jsonb,
     '2023-01-02',
     '2024-01-01',
     NOW() - INTERVAL '3 days'
@@ -19,6 +35,10 @@ VALUES
     'Equal Weight Baseline',
     'equal_weight',
     'completed',
+    'SPY',
+    8,
+    10,
+    '{"universe":"SP100","rebalance":"monthly"}'::jsonb,
     '2023-01-02',
     '2024-01-01',
     NOW() - INTERVAL '5 days'
@@ -28,6 +48,10 @@ VALUES
     'ML LightGBM Alpha v1',
     'ml_lightgbm',
     'completed',
+    'SPY',
+    12,
+    10,
+    '{"universe":"SP100","rebalance":"monthly","walk_forward":"expanding"}'::jsonb,
     '2023-01-02',
     '2024-01-01',
     NOW() - INTERVAL '1 day'
@@ -78,12 +102,12 @@ FROM generate_series(0, 52) n
 ON CONFLICT (run_id, date) DO NOTHING;
 
 -- ─── Jobs ─────────────────────────────────────────────────────────────────────
-INSERT INTO jobs (name, status, progress, started_at, duration)
+INSERT INTO jobs (run_id, name, status, stage, progress, error_message, started_at, duration)
 VALUES
-  ('Data fetch: US Equities 2023',   'completed', 100, NOW() - INTERVAL '5 days 2 hours', 142),
-  ('Factor computation: Momentum',   'completed', 100, NOW() - INTERVAL '3 days 1 hour',  87),
-  ('Backtest: ML LightGBM Alpha v1', 'completed', 100, NOW() - INTERVAL '1 day 3 hours',  234),
-  ('Report generation',              'queued',      0, NULL,                               NULL);
+  ('22222222-2222-2222-2222-222222222222', 'Data fetch: US Equities 2023',   'completed', 'report', 100, NULL, NOW() - INTERVAL '5 days 2 hours', 142),
+  ('11111111-1111-1111-1111-111111111111', 'Factor computation: Momentum',   'completed', 'report', 100, NULL, NOW() - INTERVAL '3 days 1 hour',  87),
+  ('33333333-3333-3333-3333-333333333333', 'Backtest: ML LightGBM Alpha v1', 'completed', 'report', 100, NULL, NOW() - INTERVAL '1 day 3 hours',  234),
+  ('33333333-3333-3333-3333-333333333333', 'Report generation',              'queued',    'ingest',   0, NULL, NULL,                               NULL);
 
 -- ─── ML Feature Store (sample rows) ──────────────────────────────────────────
 INSERT INTO features_monthly (ticker, date, momentum, reversal, volatility, beta, drawdown)

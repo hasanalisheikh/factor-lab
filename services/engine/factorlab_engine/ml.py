@@ -152,11 +152,13 @@ def run_walk_forward(
   start_date: str,
   end_date: str,
   benchmark_ticker: str,
+  top_n: int | None = None,
+  cost_bps: float | None = None,
 ) -> MLArtifacts:
   min_train_months = int(os.getenv("ML_MIN_TRAIN_MONTHS", "24"))
-  top_n_cfg = int(os.getenv("ML_TOP_N", "10"))
-  cost_bps = float(os.getenv("ML_COST_BPS", "10"))
-  cost_rate = cost_bps / 10_000.0
+  top_n_cfg = int(top_n if top_n is not None else int(os.getenv("ML_TOP_N", "10")))
+  cost_bps_cfg = float(cost_bps if cost_bps is not None else float(os.getenv("ML_COST_BPS", "10")))
+  cost_rate = cost_bps_cfg / 10_000.0
 
   feature_frame = compute_monthly_features(prices, benchmark_ticker=benchmark_ticker)
   feature_frame["date"] = pd.to_datetime(feature_frame["date"], utc=False)
@@ -288,13 +290,13 @@ def run_walk_forward(
     "prediction_rows": int(len(prediction_rows)),
     "rebalance_count": int(len(equity_rows)),
     "top_n": int(top_n),
-    "cost_bps": float(cost_bps),
+    "cost_bps": float(cost_bps_cfg),
     "feature_columns": FEATURE_COLUMNS,
     "feature_importance": _feature_importance(model, FEATURE_COLUMNS),
     "model_params": {
       "min_train_months": min_train_months,
       "top_n": top_n,
-      "cost_bps": cost_bps,
+      "cost_bps": cost_bps_cfg,
     },
   }
 

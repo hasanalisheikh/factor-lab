@@ -14,6 +14,7 @@ class Job:
   id: str
   run_id: str
   name: str
+  stage: str | None = None
 
 
 class SupabaseIO:
@@ -29,7 +30,7 @@ class SupabaseIO:
   def fetch_queued_jobs(self, limit: int = 3) -> list[Job]:
     result = (
       self.client.table("jobs")
-      .select("id,run_id,name")
+      .select("id,run_id,name,stage")
       .eq("status", "queued")
       .not_.is_("run_id", "null")
       .order("created_at")
@@ -41,14 +42,24 @@ class SupabaseIO:
     for row in rows:
       run_id = row.get("run_id")
       if run_id:
-        jobs.append(Job(id=row["id"], run_id=run_id, name=row["name"]))
+        jobs.append(
+          Job(id=row["id"], run_id=run_id, name=row["name"], stage=row.get("stage"))
+        )
     return jobs
 
   def claim_job(self, job: Job) -> bool:
     now = datetime.now(timezone.utc).isoformat()
     claimed = (
       self.client.table("jobs")
-      .update({"status": "running", "progress": 5, "started_at": now})
+      .update(
+        {
+          "status": "running",
+          "stage": "ingest",
+          "progress": 5,
+          "started_at": now,
+          "error_message": None,
+        }
+      )
       .eq("id", job.id)
       .eq("status", "queued")
       .execute()
@@ -68,12 +79,23 @@ class SupabaseIO:
   def fetch_run(self, run_id: str) -> dict[str, Any] | None:
     result = (
       self.client.table("runs")
-      .select("id,name,strategy_id,status,start_date,end_date")
+      .select(
+        "id,name,strategy_id,status,start_date,end_date,benchmark_ticker,costs_bps,top_n,run_params"
+      )
       .eq("id", run_id)
       .maybe_single()
       .execute()
     )
     return result.data
+
+  def update_job_progress(self, job_id: str, *, stage: str, progress: int) -> None:
+    bounded = max(0, min(int(progress), 100))
+    (
+      self.client.table("jobs")
+      .update({"stage": stage, "progress": bounded})
+      .eq("id", job_id)
+      .execute()
+    )
 
   def fetch_prices_frame(
     self, tickers: list[str], start_date: str, end_date: str
@@ -122,7 +144,13 @@ class SupabaseIO:
     (
       self.client.table("jobs")
       .update(
-        {"status": "completed", "progress": 100, "duration": max(duration_seconds, 0)}
+        {
+          "status": "completed",
+          "stage": "report",
+          "progress": 100,
+          "duration": max(duration_seconds, 0),
+          "error_message": None,
+        }
       )
       .eq("id", job.id)
       .execute()
@@ -141,9 +169,10 @@ class SupabaseIO:
       .update(
         {
           "status": "failed",
+          "stage": "report",
           "duration": max(duration_seconds, 0),
           "progress": 100,
-          "name": f"{job.name} (failed: {message})",
+          "error_message": message,
         }
       )
       .eq("id", job.id)

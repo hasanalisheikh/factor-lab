@@ -32,6 +32,12 @@ export type DataHealthSummary = {
   lastUpdatedAt: string | null
 }
 
+export type CompareRunBundle = {
+  run: RunRow
+  metrics: RunMetricsRow
+  equity: EquityCurveRow[]
+}
+
 type GetRunsOptions = {
   limit?: number
 }
@@ -272,6 +278,63 @@ export async function getStrategyComparisonRuns(): Promise<RunWithMetrics[]> {
   } catch (err) {
     console.error("getStrategyComparisonRuns exception:", err)
     return empty
+  }
+}
+
+export async function getCompareRunBundles(limit = 30): Promise<CompareRunBundle[]> {
+  try {
+    const supabase = await createClient()
+    const { data: runsData, error: runsError } = await supabase
+      .from("runs")
+      .select("*, run_metrics(*)")
+      .eq("status", "completed")
+      .order("created_at", { ascending: false })
+      .limit(limit)
+
+    if (runsError || !runsData || runsData.length === 0) {
+      if (runsError) {
+        console.error("getCompareRunBundles runs error:", runsError.message)
+      }
+      return []
+    }
+
+    const runs = runsData as RunWithMetrics[]
+    const runIds = runs.map((r) => r.id)
+    const { data: equityRows, error: eqError } = await supabase
+      .from("equity_curve")
+      .select("*")
+      .in("run_id", runIds)
+      .order("date", { ascending: true })
+
+    if (eqError) {
+      console.error("getCompareRunBundles equity error:", eqError.message)
+      return []
+    }
+
+    const grouped = new Map<string, EquityCurveRow[]>()
+    for (const row of (equityRows ?? []) as EquityCurveRow[]) {
+      const arr = grouped.get(row.run_id) ?? []
+      arr.push(row)
+      grouped.set(row.run_id, arr)
+    }
+
+    const bundles: CompareRunBundle[] = []
+    for (const run of runs) {
+      const metrics = Array.isArray(run.run_metrics)
+        ? run.run_metrics[0]
+        : run.run_metrics
+      const equity = grouped.get(run.id) ?? []
+      if (!metrics || equity.length === 0) continue
+      bundles.push({
+        run: run as RunRow,
+        metrics,
+        equity,
+      })
+    }
+    return bundles
+  } catch (err) {
+    console.error("getCompareRunBundles exception:", err)
+    return []
   }
 }
 
