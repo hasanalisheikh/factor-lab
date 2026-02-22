@@ -17,12 +17,26 @@ import { cn } from "@/lib/utils"
 import type { RunMetricsRow, RunWithMetrics } from "@/lib/supabase/queries"
 import { STRATEGY_LABELS, type StrategyId, type RunStatus } from "@/lib/types"
 
+type SortKey = "name" | "strategy_id" | "status" | "cagr" | "sharpe" | "max_drawdown" | "start_date"
+
+function SortHeader({ label, sort, onToggle }: { label: string; sort: SortKey; onToggle: (k: SortKey) => void }) {
+  return (
+    <button
+      type="button"
+      onClick={() => onToggle(sort)}
+      className="inline-flex items-center gap-1 hover:text-foreground transition-colors"
+    >
+      {label}
+      <ArrowUpDown className="w-3 h-3" />
+    </button>
+  )
+}
+
 interface RunsTableProps {
   runs: RunWithMetrics[]
 }
 
 export function RunsTable({ runs }: RunsTableProps) {
-  type SortKey = "name" | "strategy_id" | "status" | "cagr" | "sharpe" | "max_drawdown" | "start_date"
   const [sortKey, setSortKey] = useState<SortKey>("start_date")
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc")
 
@@ -66,17 +80,6 @@ export function RunsTable({ runs }: RunsTableProps) {
     setSortDir("asc")
   }
 
-  const SortHeader = ({ label, sort }: { label: string; sort: SortKey }) => (
-    <button
-      type="button"
-      onClick={() => toggleSort(sort)}
-      className="inline-flex items-center gap-1 hover:text-foreground transition-colors"
-    >
-      {label}
-      <ArrowUpDown className="w-3 h-3" />
-    </button>
-  )
-
   return (
     <Card className="bg-card border-border">
       <CardHeader className="pb-2 px-4 pt-4">
@@ -85,30 +88,30 @@ export function RunsTable({ runs }: RunsTableProps) {
         </CardTitle>
       </CardHeader>
       <CardContent className="px-0 pb-1">
-        <div className="overflow-x-auto">
-          <Table>
+        <div className="w-full">
+          <Table className="table-fixed">
             <TableHeader>
               <TableRow className="border-border hover:bg-transparent">
-                <TableHead className="text-[11px] text-muted-foreground font-medium pl-4 w-[200px]">
-                  <SortHeader label="Name" sort="name" />
+                <TableHead className="text-[11px] text-muted-foreground font-medium pl-4">
+                  <SortHeader label="Name" sort="name" onToggle={toggleSort} />
                 </TableHead>
-                <TableHead className="text-[11px] text-muted-foreground font-medium hidden md:table-cell">
-                  <SortHeader label="Strategy" sort="strategy_id" />
+                <TableHead className="text-[11px] text-muted-foreground font-medium hidden md:table-cell w-[150px]">
+                  <SortHeader label="Strategy" sort="strategy_id" onToggle={toggleSort} />
                 </TableHead>
-                <TableHead className="text-[11px] text-muted-foreground font-medium">
-                  <SortHeader label="Status" sort="status" />
+                <TableHead className="text-[11px] text-muted-foreground font-medium w-[90px]">
+                  <SortHeader label="Status" sort="status" onToggle={toggleSort} />
                 </TableHead>
-                <TableHead className="text-[11px] text-muted-foreground font-medium text-right">
-                  <SortHeader label="CAGR" sort="cagr" />
+                <TableHead className="text-[11px] text-muted-foreground font-medium text-right w-[72px]">
+                  <SortHeader label="CAGR" sort="cagr" onToggle={toggleSort} />
                 </TableHead>
-                <TableHead className="text-[11px] text-muted-foreground font-medium text-right hidden sm:table-cell">
-                  <SortHeader label="Sharpe" sort="sharpe" />
+                <TableHead className="text-[11px] text-muted-foreground font-medium text-right hidden sm:table-cell w-[72px]">
+                  <SortHeader label="Sharpe" sort="sharpe" onToggle={toggleSort} />
                 </TableHead>
-                <TableHead className="text-[11px] text-muted-foreground font-medium text-right hidden lg:table-cell">
-                  <SortHeader label="Max DD" sort="max_drawdown" />
+                <TableHead className="text-[11px] text-muted-foreground font-medium text-right hidden lg:table-cell w-[72px]">
+                  <SortHeader label="Max DD" sort="max_drawdown" onToggle={toggleSort} />
                 </TableHead>
-                <TableHead className="text-[11px] text-muted-foreground font-medium text-right pr-4 hidden lg:table-cell">
-                  <SortHeader label="Period" sort="start_date" />
+                <TableHead className="text-[11px] text-muted-foreground font-medium pr-4 hidden lg:table-cell w-[164px]">
+                  <SortHeader label="Period" sort="start_date" onToggle={toggleSort} />
                 </TableHead>
               </TableRow>
             </TableHeader>
@@ -124,15 +127,15 @@ export function RunsTable({ runs }: RunsTableProps) {
                     key={run.id}
                     className="border-border/40 hover:bg-accent/30 cursor-pointer"
                   >
-                    <TableCell className="pl-4 py-2.5">
+                    <TableCell className="pl-4 py-2.5 max-w-0 overflow-hidden">
                       <Link
                         href={`/runs/${run.id}`}
-                        className="text-[13px] font-medium text-card-foreground hover:text-primary transition-colors"
+                        className="text-[13px] font-medium text-card-foreground hover:text-primary transition-colors truncate block"
                       >
                         {run.name}
                       </Link>
                     </TableCell>
-                    <TableCell className="text-[12px] text-muted-foreground py-2.5 hidden md:table-cell">
+                    <TableCell className="text-[12px] text-muted-foreground py-2.5 hidden md:table-cell truncate">
                       {STRATEGY_LABELS[run.strategy_id as StrategyId] ?? run.strategy_id}
                     </TableCell>
                     <TableCell className="py-2.5">
@@ -158,7 +161,7 @@ export function RunsTable({ runs }: RunsTableProps) {
                     <TableCell className="text-[13px] font-mono text-right py-2.5 text-destructive hidden lg:table-cell">
                       {hasMetrics ? `${Math.abs(metrics.max_drawdown * 100).toFixed(1)}%` : "--"}
                     </TableCell>
-                    <TableCell className="text-[12px] font-mono text-right pr-4 py-2.5 text-muted-foreground hidden lg:table-cell">
+                    <TableCell className="text-[12px] font-mono pr-4 py-2.5 text-muted-foreground hidden lg:table-cell">
                       {startPeriod} – {endPeriod}
                     </TableCell>
                   </TableRow>

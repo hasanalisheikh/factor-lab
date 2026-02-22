@@ -4,7 +4,6 @@ import { Line, LineChart, ResponsiveContainer } from "recharts"
 
 export function Sparkline({
   data,
-  color = "var(--color-primary)",
   height = 32,
 }: {
   data: number[]
