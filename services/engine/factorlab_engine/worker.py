@@ -13,6 +13,58 @@ import yfinance as yf
 from .ml import run_walk_forward
 from .supabase_io import Job, SupabaseIO
 
+DEFAULT_ETF8_UNIVERSE = ["SPY", "QQQ", "IWM", "EFA", "EEM", "TLT", "GLD", "VNQ"]
+
+# Static preset baskets used for run-level reproducibility. These can be updated
+# later without changing the resolution precedence contract.
+UNIVERSE_PRESETS: dict[str, list[str]] = {
+  "ETF8": DEFAULT_ETF8_UNIVERSE,
+  "SP100": [
+    "AAPL",
+    "MSFT",
+    "AMZN",
+    "GOOGL",
+    "GOOG",
+    "META",
+    "NVDA",
+    "BRK.B",
+    "JPM",
+    "XOM",
+    "UNH",
+    "JNJ",
+    "PG",
+    "V",
+    "MA",
+    "HD",
+    "COST",
+    "ABBV",
+    "PEP",
+    "MRK",
+  ],
+  "NASDAQ100": [
+    "AAPL",
+    "MSFT",
+    "NVDA",
+    "AMZN",
+    "META",
+    "GOOGL",
+    "GOOG",
+    "AVGO",
+    "COST",
+    "TSLA",
+    "NFLX",
+    "AMD",
+    "ADBE",
+    "CSCO",
+    "PEP",
+    "INTC",
+    "QCOM",
+    "AMGN",
+    "TXN",
+    "CMCSA",
+  ],
+}
+
 
 @dataclass(frozen=True)
 class BacktestResult:
@@ -26,6 +78,67 @@ class BacktestResult:
 def _to_date(value: str) -> pd.Timestamp:
   ts = pd.to_datetime(value, utc=False)
   return pd.Timestamp(ts.date())
+
+
+def _normalize_symbol_list(values: Any) -> list[str]:
+  if values is None:
+    return []
+  if isinstance(values, str):
+    values = values.split(",")
+  if not isinstance(values, (list, tuple)):
+    return []
+
+  normalized: list[str] = []
+  seen: set[str] = set()
+  for raw in values:
+    symbol = str(raw).strip().upper()
+    if not symbol or symbol in seen:
+      continue
+    normalized.append(symbol)
+    seen.add(symbol)
+  return normalized
+
+
+def _extract_run_universe_preset(run: dict[str, Any]) -> str | None:
+  universe = run.get("universe")
+  if isinstance(universe, str) and universe.strip():
+    return universe.strip().upper()
+
+  run_params = run.get("run_params")
+  if isinstance(run_params, dict):
+    nested = run_params.get("universe")
+    if isinstance(nested, str) and nested.strip():
+      return nested.strip().upper()
+  return None
+
+
+def resolve_universe_symbols(run: dict[str, Any]) -> list[str]:
+  snapshot_symbols = _normalize_symbol_list(run.get("universe_symbols"))
+  if snapshot_symbols:
+    return snapshot_symbols
+
+  preset_name = _extract_run_universe_preset(run)
+  if preset_name and preset_name in UNIVERSE_PRESETS:
+    return list(UNIVERSE_PRESETS[preset_name])
+
+  env_value = (os.getenv("FACTORLAB_UNIVERSE") or "").strip()
+  if env_value:
+    env_key = env_value.upper()
+    if env_key in UNIVERSE_PRESETS:
+      return list(UNIVERSE_PRESETS[env_key])
+    env_symbols = _normalize_symbol_list(env_value)
+    if env_symbols:
+      return env_symbols
+
+  return list(DEFAULT_ETF8_UNIVERSE)
+
+
+def resolve_and_snapshot_universe_symbols(io: SupabaseIO, run: dict[str, Any]) -> list[str]:
+  symbols = resolve_universe_symbols(run)
+  if not _normalize_symbol_list(run.get("universe_symbols")):
+    io.update_run_universe_symbols(run["id"], symbols)
+    run["universe_symbols"] = list(symbols)
+  return symbols
 
 
 def _build_synthetic_result(start: str, end: str, seed: int = 7) -> BacktestResult:
@@ -187,10 +300,7 @@ def _equity_rows(
 
 
 def _build_baseline_result(io: SupabaseIO, run: dict[str, Any]) -> BacktestResult:
-  universe_raw = os.getenv("FACTORLAB_UNIVERSE", "SPY,QQQ,IWM,EFA,EEM,TLT,GLD,VNQ")
-  tickers = [x.strip().upper() for x in universe_raw.split(",") if x.strip()]
-  if not tickers:
-    tickers = ["SPY", "QQQ", "IWM", "EFA", "EEM"]
+  tickers = resolve_universe_symbols(run)
 
   prices = io.fetch_prices_frame(tickers, run["start_date"], run["end_date"])
   if prices.empty or prices.shape[0] < 40:
@@ -219,8 +329,7 @@ def _build_baseline_result(io: SupabaseIO, run: dict[str, Any]) -> BacktestResul
 
 
 def _build_ml_result(io: SupabaseIO, run: dict[str, Any]) -> BacktestResult:
-  universe_raw = os.getenv("FACTORLAB_UNIVERSE", "SPY,QQQ,IWM,EFA,EEM,TLT,GLD,VNQ")
-  tickers = [x.strip().upper() for x in universe_raw.split(",") if x.strip()]
+  tickers = resolve_universe_symbols(run)
   if "SPY" not in tickers:
     tickers = ["SPY", *tickers]
 
@@ -283,6 +392,7 @@ def _process_job(io: SupabaseIO, job: Job) -> None:
     run = io.fetch_run(job.run_id)
     if run is None:
       raise RuntimeError(f"Run not found for run_id={job.run_id}")
+    resolve_and_snapshot_universe_symbols(io, run)
 
     strategy = run["strategy_id"]
     if strategy in {"ml_ridge", "ml_lightgbm"}:

@@ -32,6 +32,23 @@ function isUuid(value: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
 }
 
+function getUniversePreset(run: {
+  universe?: string | null
+  run_params?: unknown
+}): string {
+  if (typeof run.universe === "string" && run.universe.trim()) {
+    return run.universe.trim().toUpperCase()
+  }
+  const nested =
+    run.run_params && typeof run.run_params === "object"
+      ? (run.run_params as Record<string, unknown>)["universe"]
+      : null
+  if (typeof nested === "string" && nested.trim()) {
+    return nested.trim().toUpperCase()
+  }
+  return "ETF8"
+}
+
 export default async function RunDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
   if (!isUuid(id)) {
@@ -55,6 +72,8 @@ export default async function RunDetailPage({ params }: { params: Promise<{ id: 
   const metrics = getMetrics(run.run_metrics)
   const status = run.status as RunStatus
   const strategyLabel = STRATEGY_LABELS[run.strategy_id as StrategyId] ?? run.strategy_id
+  const universePreset = getUniversePreset(run)
+  const universeCount = Array.isArray(run.universe_symbols) ? run.universe_symbols.length : null
   const canGenerateReport = status === "completed" && equityCurve.length > 0
   const generateReportAction = generateRunReport.bind(null, id)
 
@@ -74,16 +93,24 @@ export default async function RunDetailPage({ params }: { params: Promise<{ id: 
             </Button>
           </Link>
           <div className="flex items-center gap-2.5 min-w-0">
-            <h2 className="text-base font-semibold text-foreground truncate">
-              {run.name}
-            </h2>
-            <Badge
-              variant="outline"
-              className="text-[10px] font-medium px-2 py-0 h-5 leading-5 rounded-md border-border text-muted-foreground bg-secondary/50 shrink-0"
-            >
-              {strategyLabel}
-            </Badge>
-            <StatusBadge status={status} />
+            <div className="min-w-0">
+              <div className="flex items-center gap-2.5 min-w-0">
+                <h2 className="text-base font-semibold text-foreground truncate">
+                  {run.name}
+                </h2>
+                <Badge
+                  variant="outline"
+                  className="text-[10px] font-medium px-2 py-0 h-5 leading-5 rounded-md border-border text-muted-foreground bg-secondary/50 shrink-0"
+                >
+                  {strategyLabel}
+                </Badge>
+                <StatusBadge status={status} />
+              </div>
+              <p className="text-[12px] text-muted-foreground mt-0.5">
+                Universe: {universePreset}
+                {typeof universeCount === "number" ? ` (${universeCount})` : ""}
+              </p>
+            </div>
           </div>
         </div>
         {report?.url ? (
@@ -159,10 +186,10 @@ export default async function RunDetailPage({ params }: { params: Promise<{ id: 
           <OverviewTab metrics={metrics} equityCurve={equityCurve} />
         </TabsContent>
         <TabsContent value="holdings" className="mt-4">
-          <HoldingsTab />
+          <HoldingsTab predictions={modelPredictions} />
         </TabsContent>
         <TabsContent value="trades" className="mt-4">
-          <TradesTab />
+          <TradesTab predictions={modelPredictions} />
         </TabsContent>
         <TabsContent value="ml-insights" className="mt-4">
           <MlInsightsTab metadata={modelMetadata} predictions={modelPredictions} />

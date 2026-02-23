@@ -3,20 +3,15 @@
 import { useMemo, useState } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
-import {
   ChartContainer,
   ChartTooltip,
   ChartTooltipContent,
   type ChartConfig,
 } from "@/components/ui/chart"
+import { NativeSelect } from "@/components/ui/native-select"
 import { Line, LineChart, CartesianGrid, XAxis, YAxis } from "recharts"
-import type { CompareRunBundle } from "@/lib/supabase/queries"
+import type { CompareRunBundle, RunWithMetrics, RunMetricsRow } from "@/lib/supabase/queries"
+import { STRATEGY_LABELS, type StrategyId } from "@/lib/types"
 
 const config = {
   runA: { label: "Run A", color: "var(--color-chart-1)" },
@@ -25,8 +20,15 @@ const config = {
   benchB: { label: "SPY B", color: "var(--color-chart-4)" },
 } satisfies ChartConfig
 
+function extractMetrics(run: RunWithMetrics): RunMetricsRow | null {
+  if (!run.run_metrics) return null
+  if (Array.isArray(run.run_metrics)) return run.run_metrics[0] ?? null
+  return run.run_metrics
+}
+
 type Props = {
   bundles: CompareRunBundle[]
+  strategyRuns?: RunWithMetrics[]
 }
 
 type MetricDef = {
@@ -54,7 +56,21 @@ function normalizeSeries(equity: CompareRunBundle["equity"]) {
   }))
 }
 
-export function CompareWorkbench({ bundles }: Props) {
+const LEADERBOARD_METRICS: {
+  key: keyof RunMetricsRow
+  label: string
+  higherIsBetter: boolean
+  format: (v: number) => string
+}[] = [
+  { key: "cagr", label: "CAGR", higherIsBetter: true, format: (v) => `${(v * 100).toFixed(1)}%` },
+  { key: "sharpe", label: "Sharpe", higherIsBetter: true, format: (v) => v.toFixed(2) },
+  { key: "max_drawdown", label: "Max DD", higherIsBetter: false, format: (v) => `${(Math.abs(v) * 100).toFixed(1)}%` },
+  { key: "volatility", label: "Volatility", higherIsBetter: false, format: (v) => `${(v * 100).toFixed(1)}%` },
+  { key: "turnover", label: "Turnover", higherIsBetter: false, format: (v) => `${(v * 100).toFixed(1)}%` },
+  { key: "calmar", label: "Calmar", higherIsBetter: true, format: (v) => v.toFixed(2) },
+]
+
+export function CompareWorkbench({ bundles, strategyRuns = [] }: Props) {
   const [runAId, setRunAId] = useState(bundles[0]?.run.id ?? "")
   const [runBId, setRunBId] = useState(bundles[1]?.run.id ?? bundles[0]?.run.id ?? "")
 
@@ -94,6 +110,49 @@ export function CompareWorkbench({ bundles }: Props) {
 
   return (
     <div className="flex flex-col gap-4">
+      {/* Strategy leaderboard */}
+      {strategyRuns.length > 0 && (
+        <Card className="bg-card border-border">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-semibold text-foreground">Strategy Leaderboard</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="border-b border-border/70 text-muted-foreground">
+                    <th className="text-left py-2 pr-3 font-medium">Strategy</th>
+                    {LEADERBOARD_METRICS.map((m) => (
+                      <th key={m.key} className="text-right py-2 px-2 font-medium">{m.label}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {strategyRuns.map((run) => {
+                    const m = extractMetrics(run)
+                    return (
+                      <tr key={run.id} className="border-b border-border/40 last:border-0">
+                        <td className="py-2 pr-3 font-medium text-foreground">
+                          {STRATEGY_LABELS[run.strategy_id as StrategyId] ?? run.strategy_id}
+                        </td>
+                        {LEADERBOARD_METRICS.map((def) => {
+                          const val = m ? Number(m[def.key]) : null
+                          return (
+                            <td key={def.key} className="py-2 px-2 text-right font-mono text-card-foreground">
+                              {val != null && !Number.isNaN(val) ? def.format(val) : "--"}
+                            </td>
+                          )
+                        })}
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       <Card className="bg-card border-border">
         <CardHeader className="pb-2">
           <CardTitle className="text-sm font-semibold text-foreground">Select Runs</CardTitle>
@@ -101,33 +160,33 @@ export function CompareWorkbench({ bundles }: Props) {
         <CardContent className="grid gap-3 md:grid-cols-2">
           <div className="space-y-1">
             <p className="text-xs text-muted-foreground">Run A</p>
-            <Select value={runAId} onValueChange={setRunAId}>
-              <SelectTrigger>
-                <SelectValue placeholder="Select run A" />
-              </SelectTrigger>
-              <SelectContent>
-                {bundles.map((b) => (
-                  <SelectItem key={`a-${b.run.id}`} value={b.run.id}>
-                    {b.run.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <NativeSelect
+              value={runAId}
+              onChange={(e) => setRunAId(e.target.value)}
+              className="h-9 border-input bg-transparent px-3 pr-8 text-sm"
+              iconClassName="opacity-50"
+            >
+              {bundles.map((b) => (
+                <option key={`a-${b.run.id}`} value={b.run.id}>
+                  {b.run.name}
+                </option>
+              ))}
+            </NativeSelect>
           </div>
           <div className="space-y-1">
             <p className="text-xs text-muted-foreground">Run B</p>
-            <Select value={runBId} onValueChange={setRunBId}>
-              <SelectTrigger>
-                <SelectValue placeholder="Select run B" />
-              </SelectTrigger>
-              <SelectContent>
-                {bundles.map((b) => (
-                  <SelectItem key={`b-${b.run.id}`} value={b.run.id}>
-                    {b.run.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <NativeSelect
+              value={runBId}
+              onChange={(e) => setRunBId(e.target.value)}
+              className="h-9 border-input bg-transparent px-3 pr-8 text-sm"
+              iconClassName="opacity-50"
+            >
+              {bundles.map((b) => (
+                <option key={`b-${b.run.id}`} value={b.run.id}>
+                  {b.run.name}
+                </option>
+              ))}
+            </NativeSelect>
           </div>
         </CardContent>
       </Card>

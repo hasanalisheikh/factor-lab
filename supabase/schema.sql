@@ -13,6 +13,8 @@ CREATE TABLE runs (
   status       TEXT        NOT NULL DEFAULT 'queued'
                            CHECK (status IN ('queued', 'running', 'completed', 'failed')),
   benchmark_ticker TEXT    NOT NULL DEFAULT 'SPY',
+  universe     TEXT        NOT NULL DEFAULT 'ETF8',
+  universe_symbols TEXT[],
   costs_bps    NUMERIC     NOT NULL DEFAULT 10 CHECK (costs_bps >= 0),
   top_n        INTEGER     NOT NULL DEFAULT 10 CHECK (top_n > 0),
   run_params   JSONB       NOT NULL DEFAULT '{}'::JSONB,

@@ -16,6 +16,8 @@ export type Database = {
           strategy_id: string
           status: string
           benchmark_ticker: string
+          universe: string
+          universe_symbols: string[] | null
           costs_bps: number
           top_n: number
           run_params: Json
@@ -29,6 +31,8 @@ export type Database = {
           strategy_id: string
           status?: string
           benchmark_ticker?: string
+          universe?: string
+          universe_symbols?: string[] | null
           costs_bps?: number
           top_n?: number
           run_params?: Json

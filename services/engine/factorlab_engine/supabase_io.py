@@ -80,13 +80,21 @@ class SupabaseIO:
     result = (
       self.client.table("runs")
       .select(
-        "id,name,strategy_id,status,start_date,end_date,benchmark_ticker,costs_bps,top_n,run_params"
+        "id,name,strategy_id,status,start_date,end_date,benchmark_ticker,costs_bps,top_n,universe,universe_symbols,run_params"
       )
       .eq("id", run_id)
       .maybe_single()
       .execute()
     )
     return result.data
+
+  def update_run_universe_symbols(self, run_id: str, symbols: list[str]) -> None:
+    (
+      self.client.table("runs")
+      .update({"universe_symbols": symbols})
+      .eq("id", run_id)
+      .execute()
+    )
 
   def update_job_progress(self, job_id: str, *, stage: str, progress: int) -> None:
     bounded = max(0, min(int(progress), 100))

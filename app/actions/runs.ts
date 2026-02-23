@@ -22,6 +22,7 @@ const schema = z
       .trim()
       .toUpperCase()
       .regex(/^[A-Z.\-]{1,10}$/, "Benchmark must be a valid ticker"),
+    universe: z.enum(["ETF8", "SP100", "NASDAQ100"]).default("ETF8"),
     costs_bps: z.coerce
       .number({ invalid_type_error: "Costs must be a number" })
       .min(0, "Costs must be >= 0 bps")
@@ -50,7 +51,16 @@ export async function createRun(
     return { error: parsed.error.issues[0].message }
   }
 
-  const { name, strategy_id, start_date, end_date, benchmark_ticker, costs_bps, top_n } = parsed.data
+  const {
+    name,
+    strategy_id,
+    start_date,
+    end_date,
+    benchmark_ticker,
+    universe,
+    costs_bps,
+    top_n,
+  } = parsed.data
 
   const supabase = createAdminClient()
 
@@ -63,9 +73,11 @@ export async function createRun(
       start_date,
       end_date,
       benchmark_ticker,
+      universe,
       costs_bps,
       top_n,
       run_params: {
+        universe,
         benchmark_ticker,
         costs_bps,
         top_n,

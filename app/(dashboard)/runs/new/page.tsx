@@ -8,20 +8,16 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
+import { NativeSelect } from "@/components/ui/native-select"
 import { createRun, type CreateRunState } from "@/app/actions/runs"
 import { STRATEGY_LABELS, type StrategyId } from "@/lib/types"
 
 const STRATEGIES = Object.entries(STRATEGY_LABELS) as [StrategyId, string][]
+const UNIVERSE_PRESETS = ["ETF8", "SP100", "NASDAQ100"] as const
 
 export default function NewRunPage() {
   const [strategy, setStrategy] = useState<string>("")
+  const [universe, setUniverse] = useState<string>("ETF8")
   const [state, formAction, isPending] = useActionState<CreateRunState, FormData>(
     createRun,
     null
@@ -51,9 +47,6 @@ export default function NewRunPage() {
         </CardHeader>
         <CardContent className="px-5 pb-5">
           <form action={formAction} className="flex flex-col gap-4">
-            {/* Hidden strategy input for FormData */}
-            <input type="hidden" name="strategy_id" value={strategy} />
-
             {/* Name */}
             <div className="flex flex-col gap-1.5">
               <Label
@@ -76,25 +69,44 @@ export default function NewRunPage() {
               <Label className="text-[12px] font-medium text-muted-foreground">
                 Strategy
               </Label>
-              <Select value={strategy} onValueChange={setStrategy} required>
-                <SelectTrigger className="h-8 w-full text-[13px] bg-secondary/40 border-border">
-                  <SelectValue placeholder="Select a strategy…" />
-                </SelectTrigger>
-                <SelectContent
-                  portal={false}
-                  position="popper"
-                  sideOffset={4}
-                  align="start"
-                  collisionPadding={12}
-                  className="w-[var(--radix-select-trigger-width)] max-w-[calc(100vw-2rem)]"
-                >
-                  {STRATEGIES.map(([id, label]) => (
-                    <SelectItem key={id} value={id} className="text-[13px]">
-                      {label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <NativeSelect
+                name="strategy_id"
+                value={strategy}
+                onChange={(e) => setStrategy(e.target.value)}
+                required
+                hasValue={!!strategy}
+                className="h-8 border-border bg-secondary/40 pl-3 pr-8 text-[13px]"
+              >
+                <option value="" disabled>
+                  Select a strategy...
+                </option>
+                {STRATEGIES.map(([id, label]) => (
+                  <option key={id} value={id} className="text-foreground">
+                    {label}
+                  </option>
+                ))}
+              </NativeSelect>
+            </div>
+
+            {/* Universe */}
+            <div className="flex flex-col gap-1.5">
+              <Label className="text-[12px] font-medium text-muted-foreground">
+                Universe
+              </Label>
+              <NativeSelect
+                name="universe"
+                value={universe}
+                onChange={(e) => setUniverse(e.target.value)}
+                required
+                hasValue
+                className="h-8 border-border bg-secondary/40 pl-3 pr-8 text-[13px]"
+              >
+                {UNIVERSE_PRESETS.map((preset) => (
+                  <option key={preset} value={preset} className="text-foreground">
+                    {preset}
+                  </option>
+                ))}
+              </NativeSelect>
             </div>
 
             {/* Date range */}

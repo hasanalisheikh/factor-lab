@@ -5,8 +5,12 @@ pyproject.toml
 ./factorlab_engine/ml.py
 ./factorlab_engine/supabase_io.py
 ./factorlab_engine/worker.py
+./tests/test_backtest_core.py
+./tests/test_ml.py
+./tests/test_universe_resolution.py
 factorlab_engine/__init__.py
 factorlab_engine/ingest.py
+factorlab_engine/ml.py
 factorlab_engine/supabase_io.py
 factorlab_engine/worker.py
 factorlab_engine.egg-info/PKG-INFO
@@ -15,3 +19,6 @@ factorlab_engine.egg-info/dependency_links.txt
 factorlab_engine.egg-info/entry_points.txt
 factorlab_engine.egg-info/requires.txt
 factorlab_engine.egg-info/top_level.txt
+tests/test_backtest_core.py
+tests/test_ml.py
+tests/test_universe_resolution.py
