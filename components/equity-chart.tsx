@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useMemo } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import {
@@ -11,19 +11,15 @@ import {
 } from "@/components/ui/chart"
 import { Area, AreaChart, CartesianGrid, XAxis, YAxis } from "recharts"
 import { cn } from "@/lib/utils"
+import {
+  dashboardTimeframes as timeframes,
+  getAlignedTimeframeEquityCurve,
+} from "@/lib/equity-curve"
 
 const chartConfig = {
   portfolio: { label: "Portfolio", color: "var(--color-chart-1)" },
   benchmark: { label: "S&P 500", color: "var(--color-chart-5)" },
 } satisfies ChartConfig
-
-const timeframes = [
-  { label: "1W", days: 7 },
-  { label: "1M", days: 30 },
-  { label: "3M", days: 90 },
-  { label: "6M", days: 180 },
-  { label: "1Y", days: 365 },
-]
 
 interface EquityPoint {
   date: string
@@ -33,13 +29,27 @@ interface EquityPoint {
 
 interface EquityChartProps {
   data: EquityPoint[]
+  /** Controlled mode: externally managed selected timeframe label */
+  timeframe?: string
+  /** Controlled mode: called when user clicks a timeframe button */
+  onTimeframeChange?: (label: string) => void
 }
 
-export function EquityChart({ data }: EquityChartProps) {
-  const [selectedTf, setSelectedTf] = useState("1Y")
+export function EquityChart({ data, timeframe, onTimeframeChange }: EquityChartProps) {
+  const [internalTf, setInternalTf] = useState("1Y")
 
-  const tf = timeframes.find((t) => t.label === selectedTf)
-  const chartData = tf ? data.slice(-tf.days) : data
+  const selectedTf = timeframe ?? internalTf
+  const handleTfChange = (label: string) => {
+    if (onTimeframeChange) {
+      onTimeframeChange(label)
+    } else {
+      setInternalTf(label)
+    }
+  }
+
+  const chartData = useMemo(() => {
+    return getAlignedTimeframeEquityCurve(data, selectedTf)
+  }, [selectedTf, data])
 
   return (
     <Card className="bg-card border-border min-w-0 overflow-hidden">
@@ -72,7 +82,7 @@ export function EquityChart({ data }: EquityChartProps) {
                     ? "bg-accent text-accent-foreground"
                     : "text-muted-foreground hover:text-foreground"
                 )}
-                onClick={() => setSelectedTf(tf.label)}
+                onClick={() => handleTfChange(tf.label)}
               >
                 {tf.label}
               </Button>

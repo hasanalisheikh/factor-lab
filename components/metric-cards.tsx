@@ -37,11 +37,18 @@ export function MetricCards({ metrics }: MetricCardsProps) {
                 <p className="text-xl font-semibold font-mono text-card-foreground tracking-tight leading-none">
                   {m.value}
                 </p>
-                <DeltaPill value={m.delta} />
+                <DeltaPill
+                  deltaRaw={m.deltaRaw}
+                  deltaFormatted={m.deltaFormatted}
+                  label={m.deltaLabel}
+                  lowerIsBetter={m.lowerIsBetter}
+                />
               </div>
-              <div className="w-16 h-8 shrink-0">
-                <Sparkline data={m.sparkline} height={32} />
-              </div>
+              {m.sparkline.length > 1 && (
+                <div className="w-16 h-8 shrink-0">
+                  <Sparkline data={m.sparkline} height={32} />
+                </div>
+              )}
             </div>
           </CardContent>
         </Card>

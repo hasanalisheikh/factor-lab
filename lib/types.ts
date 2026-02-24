@@ -97,9 +97,16 @@ export type ModelMeta = {
 
 export type DashboardMetric = {
   label: string
+  /** Pre-formatted display value, e.g. "+22.4%", "2.02", "8.3%" or "—" */
   value: string
-  delta: number
+  /** Raw signed number used only for green/red direction logic */
+  deltaRaw: number | null
+  /** Pre-formatted delta string, e.g. "+3.2 pp", "+0.15", or null when unavailable */
+  deltaFormatted: string | null
+  /** Short label shown after the delta value, e.g. "vs SPY" */
   deltaLabel: string
+  /** When true: negative delta is GOOD (Max Drawdown, Turnover) */
+  lowerIsBetter: boolean
   sparkline: number[]
 }
 

@@ -1,33 +1,66 @@
 import { cn } from "@/lib/utils"
 import { TrendingUp, TrendingDown } from "lucide-react"
 
-export function DeltaPill({
-  value,
-  label,
-  className,
-}: {
-  value: number
+interface DeltaPillProps {
+  /** Raw signed number – used only to determine green vs red direction */
+  deltaRaw: number | null
+  /** Pre-formatted string to display, e.g. "+3.2 pp" or "+0.15" */
+  deltaFormatted: string | null
+  /** Short suffix label, e.g. "vs SPY" */
   label?: string
+  /**
+   * When true: negative delta is GOOD (lower-is-better metrics like Max Drawdown).
+   * Defaults to false (higher-is-better).
+   */
+  lowerIsBetter?: boolean
   className?: string
-}) {
-  const isPositive = value >= 0
+}
+
+export function DeltaPill({
+  deltaRaw,
+  deltaFormatted,
+  label,
+  lowerIsBetter = false,
+  className,
+}: DeltaPillProps) {
+  // Null / unavailable delta → neutral pill
+  if (deltaRaw === null || deltaFormatted === null) {
+    return (
+      <span
+        className={cn(
+          "inline-flex items-center gap-1 text-[11px] font-medium px-1.5 py-0.5 rounded-md",
+          "text-muted-foreground bg-muted/30",
+          className,
+        )}
+      >
+        —{label ? ` ${label}` : ""}
+      </span>
+    )
+  }
+
+  // Higher-is-better: positive = green. Lower-is-better: negative = green.
+  // Zero delta is neutral.
+  const isNeutral = deltaRaw === 0
+  const isGood = lowerIsBetter ? deltaRaw < 0 : deltaRaw > 0
+
   return (
     <span
       className={cn(
         "inline-flex items-center gap-1 text-[11px] font-medium px-1.5 py-0.5 rounded-md",
-        isPositive
+        isNeutral
+          ? "text-muted-foreground bg-muted/30"
+          : isGood
           ? "text-success bg-success/8"
           : "text-destructive bg-destructive/8",
-        className
+        className,
       )}
     >
-      {isPositive ? (
-        <TrendingUp className="w-3 h-3" />
+      {isNeutral ? null : isGood ? (
+        <TrendingUp className="w-3 h-3 shrink-0" />
       ) : (
-        <TrendingDown className="w-3 h-3" />
+        <TrendingDown className="w-3 h-3 shrink-0" />
       )}
-      {isPositive ? "+" : ""}
-      {value}
+      {deltaFormatted}
       {label ? ` ${label}` : ""}
     </span>
   )
