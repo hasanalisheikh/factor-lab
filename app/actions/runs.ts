@@ -52,6 +52,12 @@ const schema = z
 
 export type CreateRunState = { error: string } | null
 
+function isMissingBenchmarkColumnError(message?: string): boolean {
+  if (!message) return false
+  const m = message.toLowerCase()
+  return m.includes("benchmark") && m.includes("does not exist")
+}
+
 export async function createRun(
   _prev: CreateRunState,
   formData: FormData
@@ -76,30 +82,44 @@ export async function createRun(
 
   const supabase = createAdminClient()
 
-  const { data: run, error: runError } = await supabase
-    .from("runs")
-    .insert({
-      name,
-      strategy_id,
-      status: "queued",
-      start_date,
-      end_date,
+  const basePayload = {
+    name,
+    strategy_id,
+    status: "queued",
+    start_date,
+    end_date,
+    benchmark_ticker: benchmark,
+    universe,
+    costs_bps,
+    top_n,
+    run_params: {
+      universe,
       benchmark,
       benchmark_ticker: benchmark,
-      universe,
       costs_bps,
       top_n,
-      run_params: {
-        universe,
-        benchmark,
-        benchmark_ticker: benchmark,
-        costs_bps,
-        top_n,
-        created_via: "runs/new",
-      },
+      created_via: "runs/new",
+    },
+  }
+
+  let { data: run, error: runError } = await supabase
+    .from("runs")
+    .insert({
+      ...basePayload,
+      benchmark,
     })
     .select("id")
     .single()
+
+  if (runError && isMissingBenchmarkColumnError(runError.message)) {
+    const fallback = await supabase
+      .from("runs")
+      .insert(basePayload)
+      .select("id")
+      .single()
+    run = fallback.data
+    runError = fallback.error
+  }
 
   if (runError || !run) {
     console.error("createRun insert error:", runError?.message)

@@ -55,11 +55,17 @@ type GetRunsOptions = {
   limit?: number
 }
 
+function isMissingBenchmarkColumnError(message?: string): boolean {
+  if (!message) return false
+  const m = message.toLowerCase()
+  return m.includes("benchmark") && m.includes("does not exist")
+}
+
 export async function getRuns(options: GetRunsOptions = {}): Promise<RunWithMetrics[]> {
   const { limit = 100 } = options
   try {
     const supabase = await createClient()
-    let query = supabase
+    let queryWithBenchmark = supabase
       .from("runs")
       .select(`
         id,
@@ -75,10 +81,32 @@ export async function getRuns(options: GetRunsOptions = {}): Promise<RunWithMetr
       `)
       .order("created_at", { ascending: false })
     if (limit > 0) {
-      query = query.limit(limit)
+      queryWithBenchmark = queryWithBenchmark.limit(limit)
     }
 
-    const { data, error } = await query
+    let { data, error } = await queryWithBenchmark
+    if (error && isMissingBenchmarkColumnError(error.message)) {
+      let queryLegacy = supabase
+        .from("runs")
+        .select(`
+          id,
+          name,
+          strategy_id,
+          status,
+          benchmark_ticker,
+          start_date,
+          end_date,
+          created_at,
+          run_metrics(cagr, sharpe, max_drawdown, turnover)
+        `)
+        .order("created_at", { ascending: false })
+      if (limit > 0) {
+        queryLegacy = queryLegacy.limit(limit)
+      }
+      const fallback = await queryLegacy
+      data = fallback.data
+      error = fallback.error
+    }
 
     if (error) {
       console.error("getRuns error:", error.message)
@@ -471,7 +499,7 @@ export async function getRunsBacktestWindowSummary(): Promise<BacktestWindowSumm
 
     const { data: runs, error: runsError } = await supabase
       .from("runs")
-      .select("id, name, strategy_id, benchmark, start_date, end_date")
+      .select("id, name, strategy_id, start_date, end_date")
       .eq("status", "completed")
       .order("created_at", { ascending: false })
 
