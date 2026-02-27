@@ -27,14 +27,14 @@ def _prices(periods: int = 320) -> pd.DataFrame:
 def test_equal_weight_matches_average_asset_return():
   prices = _prices()
   rets = prices.pct_change().fillna(0.0)
-  ew_rets, _, _ = _equal_weight(prices)
+  ew_rets, _, _, _ = _equal_weight(prices)
   expected = rets.mean(axis=1)
   assert np.allclose(ew_rets.values, expected.values)
 
 
 def test_momentum_turnover_is_bounded():
   prices = _prices()
-  _, annual_turnover, rebalance_turnover = _momentum_12_1(prices)
+  _, annual_turnover, rebalance_turnover, _ = _momentum_12_1(prices)
   assert 0.0 <= annual_turnover <= 12.0
   assert (rebalance_turnover >= 0).all()
   assert (rebalance_turnover <= 1).all()
