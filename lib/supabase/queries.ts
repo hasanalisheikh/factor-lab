@@ -10,6 +10,7 @@ type PriceRow = Database["public"]["Tables"]["prices"]["Row"]
 type DataLastUpdatedRow = Database["public"]["Tables"]["data_last_updated"]["Row"]
 type ModelMetadataRow = Database["public"]["Tables"]["model_metadata"]["Row"]
 type ModelPredictionRow = Database["public"]["Tables"]["model_predictions"]["Row"]
+type PositionRow = Database["public"]["Tables"]["positions"]["Row"]
 
 export type {
   RunRow,
@@ -21,6 +22,7 @@ export type {
   DataLastUpdatedRow,
   ModelMetadataRow,
   ModelPredictionRow,
+  PositionRow,
 }
 
 export type RunWithMetrics = RunRow & { run_metrics: RunMetricsRow[] | RunMetricsRow | null }
@@ -422,5 +424,27 @@ export async function getDataHealthSummary(): Promise<DataHealthSummary> {
   } catch (err) {
     console.error("getDataHealthSummary exception:", err)
     return empty
+  }
+}
+
+export async function getPositionsByRunId(runId: string): Promise<PositionRow[]> {
+  try {
+    const supabase = await createClient()
+    const { data, error } = await supabase
+      .from("positions")
+      .select("*")
+      .eq("run_id", runId)
+      .order("date", { ascending: false })
+      .order("symbol", { ascending: true })
+      .limit(2000)
+
+    if (error) {
+      console.error("getPositionsByRunId error:", error.message)
+      return []
+    }
+    return (data ?? []) as PositionRow[]
+  } catch (err) {
+    console.error("getPositionsByRunId exception:", err)
+    return []
   }
 }

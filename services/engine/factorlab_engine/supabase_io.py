@@ -138,6 +138,7 @@ class SupabaseIO:
     feature_rows: list[dict[str, Any]] | None = None,
     prediction_rows: list[dict[str, Any]] | None = None,
     model_metadata: dict[str, Any] | None = None,
+    position_rows: list[dict[str, Any]] | None = None,
   ) -> None:
     rows = list(equity_rows)
     self._replace_equity_curve(job.run_id, rows)
@@ -148,6 +149,8 @@ class SupabaseIO:
       self._replace_model_predictions(job.run_id, prediction_rows)
     if model_metadata is not None:
       self._upsert_model_metadata(model_metadata)
+    if position_rows is not None:
+      self._replace_positions(job.run_id, position_rows)
 
     (
       self.client.table("jobs")
@@ -238,6 +241,16 @@ class SupabaseIO:
     for start in range(0, len(rows), chunk_size):
       chunk = rows[start : start + chunk_size]
       self.client.table("model_predictions").insert(chunk).execute()
+
+  def _replace_positions(
+    self, run_id: str, rows: list[dict[str, Any]], chunk_size: int = 500
+  ) -> None:
+    self.client.table("positions").delete().eq("run_id", run_id).execute()
+    if not rows:
+      return
+    for start in range(0, len(rows), chunk_size):
+      chunk = rows[start : start + chunk_size]
+      self.client.table("positions").insert(chunk).execute()
 
   def _upsert_model_metadata(self, metadata: dict[str, Any]) -> None:
     self.client.table("model_metadata").upsert(

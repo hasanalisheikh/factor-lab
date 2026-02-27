@@ -73,6 +73,7 @@ class BacktestResult:
   feature_rows: list[dict[str, Any]] | None = None
   prediction_rows: list[dict[str, Any]] | None = None
   model_metadata: dict[str, Any] | None = None
+  position_rows: list[dict[str, Any]] | None = None
 
 
 def _to_date(value: str) -> pd.Timestamp:
@@ -190,7 +191,7 @@ def _download_prices(start: str, end: str, tickers: list[str]) -> pd.DataFrame:
   return close
 
 
-def _equal_weight(prices: pd.DataFrame) -> tuple[pd.Series, float, pd.Series]:
+def _equal_weight(prices: pd.DataFrame) -> tuple[pd.Series, float, pd.Series, list[dict[str, Any]]]:
   rets = prices.pct_change().fillna(0.0)
   n = prices.shape[1]
   weights = np.full(n, 1.0 / n)
@@ -201,10 +202,26 @@ def _equal_weight(prices: pd.DataFrame) -> tuple[pd.Series, float, pd.Series]:
   )
   monthly_turnover.loc[rebalance_mask.values] = 0.08
   annualized_turnover = float(monthly_turnover[monthly_turnover > 0].mean() * 12.0)
-  return portfolio_rets, annualized_turnover, monthly_turnover
+
+  # Collect rebalance-date positions (first day of each month)
+  weight_per_asset = 1.0 / n if n > 0 else 0.0
+  rebalance_positions: list[dict[str, Any]] = []
+  prev_month = None
+  for dt in prices.index:
+    current_month = dt.to_period("M")
+    if current_month != prev_month:
+      prev_month = current_month
+      for col in prices.columns:
+        rebalance_positions.append({
+          "date": pd.Timestamp(dt).strftime("%Y-%m-%d"),
+          "symbol": str(col),
+          "weight": weight_per_asset,
+        })
+
+  return portfolio_rets, annualized_turnover, monthly_turnover, rebalance_positions
 
 
-def _momentum_12_1(prices: pd.DataFrame) -> tuple[pd.Series, float, pd.Series]:
+def _momentum_12_1(prices: pd.DataFrame) -> tuple[pd.Series, float, pd.Series, list[dict[str, Any]]]:
   asset_rets = prices.pct_change().fillna(0.0)
   scores = prices.shift(21) / prices.shift(252) - 1.0
 
@@ -213,6 +230,7 @@ def _momentum_12_1(prices: pd.DataFrame) -> tuple[pd.Series, float, pd.Series]:
   top_n = max(1, prices.shape[1] // 2)
   rebalance_turnover = pd.Series(0.0, index=prices.index)
   prev_rebalance_weights = pd.Series(0.0, index=prices.columns)
+  rebalance_positions: list[dict[str, Any]] = []
 
   for i, dt in enumerate(prices.index):
     if i == 0 or dt.month != prices.index[i - 1].month:
@@ -225,12 +243,20 @@ def _momentum_12_1(prices: pd.DataFrame) -> tuple[pd.Series, float, pd.Series]:
         (current_w - prev_rebalance_weights).abs().sum() / 2.0
       )
       prev_rebalance_weights = current_w.copy()
+
+      # Snapshot positions at this rebalance date
+      for sym, wt in current_w[current_w > 0].items():
+        rebalance_positions.append({
+          "date": pd.Timestamp(dt).strftime("%Y-%m-%d"),
+          "symbol": str(sym),
+          "weight": float(wt),
+        })
     weights.loc[dt] = current_w
 
   shifted = weights.shift(1).fillna(0.0)
   portfolio_rets = (asset_rets * shifted).sum(axis=1)
   annualized_turnover = float(rebalance_turnover[rebalance_turnover > 0].mean() * 12.0)
-  return portfolio_rets, annualized_turnover, rebalance_turnover
+  return portfolio_rets, annualized_turnover, rebalance_turnover, rebalance_positions
 
 
 def _apply_rebalance_costs(
@@ -308,10 +334,11 @@ def _build_baseline_result(io: SupabaseIO, run: dict[str, Any]) -> BacktestResul
   strat = run["strategy_id"]
   costs_bps = float(run.get("costs_bps") or 0.0)
   benchmark_ticker = str(run.get("benchmark_ticker") or "SPY").upper()
+  rebalance_positions: list[dict[str, Any]] = []
   if strat == "equal_weight":
-    daily_rets, turnover, rebalance_turnover = _equal_weight(prices)
+    daily_rets, turnover, rebalance_turnover, rebalance_positions = _equal_weight(prices)
   elif strat == "momentum_12_1":
-    daily_rets, turnover, rebalance_turnover = _momentum_12_1(prices)
+    daily_rets, turnover, rebalance_turnover, rebalance_positions = _momentum_12_1(prices)
   else:
     raise ValueError(f"Unsupported baseline strategy: {strat}")
 
@@ -325,7 +352,12 @@ def _build_baseline_result(io: SupabaseIO, run: dict[str, Any]) -> BacktestResul
   benchmark = 100_000.0 * (1.0 + benchmark_rets).cumprod()
   rows = _equity_rows(prices.index, portfolio, benchmark)
   metrics = _compute_metrics(daily_rets, turnover)
-  return BacktestResult(equity_rows=rows, metrics=metrics)
+
+  # Attach run_id to each position row
+  position_rows: list[dict[str, Any]] = [
+    {"run_id": run["id"], **p} for p in rebalance_positions
+  ]
+  return BacktestResult(equity_rows=rows, metrics=metrics, position_rows=position_rows)
 
 
 def _build_ml_result(io: SupabaseIO, run: dict[str, Any]) -> BacktestResult:
@@ -416,6 +448,7 @@ def _process_job(io: SupabaseIO, job: Job) -> None:
       feature_rows=result.feature_rows,
       prediction_rows=result.prediction_rows,
       model_metadata=result.model_metadata,
+      position_rows=result.position_rows,
     )
     print(f"[engine] completed job={job.id} in {duration}s")
   except Exception as exc:

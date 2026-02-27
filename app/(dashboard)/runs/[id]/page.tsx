@@ -17,6 +17,7 @@ import {
   getReportByRunId,
   getModelMetadataByRunId,
   getModelPredictionsByRunId,
+  getPositionsByRunId,
   type RunMetricsRow,
 } from "@/lib/supabase/queries"
 import { STRATEGY_LABELS, type StrategyId, type RunStatus } from "@/lib/types"
@@ -61,12 +62,13 @@ export default async function RunDetailPage({ params }: { params: Promise<{ id: 
     notFound()
   }
 
-  const [equityCurve, job, report, modelMetadata, modelPredictions] = await Promise.all([
+  const [equityCurve, job, report, modelMetadata, modelPredictions, positions] = await Promise.all([
     getEquityCurve(id),
     getJobByRunId(id),
     getReportByRunId(id),
     getModelMetadataByRunId(id),
     getModelPredictionsByRunId(id),
+    getPositionsByRunId(id),
   ])
 
   const metrics = getMetrics(run.run_metrics)
@@ -76,6 +78,8 @@ export default async function RunDetailPage({ params }: { params: Promise<{ id: 
   const universeCount = Array.isArray(run.universe_symbols) ? run.universe_symbols.length : null
   const canGenerateReport = status === "completed" && equityCurve.length > 0
   const generateReportAction = generateRunReport.bind(null, id)
+  const costsBps = run.costs_bps ?? 10
+  const benchmarkTicker = run.benchmark_ticker ?? "SPY"
 
   return (
     <AppShell title={run.name}>
@@ -106,9 +110,18 @@ export default async function RunDetailPage({ params }: { params: Promise<{ id: 
                 </Badge>
                 <StatusBadge status={status} />
               </div>
-              <p className="text-[12px] text-muted-foreground mt-0.5">
-                Universe: {universePreset}
-                {typeof universeCount === "number" ? ` (${universeCount})` : ""}
+              {/* Run configuration line */}
+              <p className="text-[12px] text-muted-foreground mt-0.5 flex flex-wrap gap-x-2">
+                <span>
+                  Universe: {universePreset}
+                  {typeof universeCount === "number" ? ` (${universeCount})` : ""}
+                </span>
+                <span className="text-border">·</span>
+                <span>Benchmark: {benchmarkTicker}</span>
+                <span className="text-border">·</span>
+                <span>Costs: {costsBps} bps</span>
+                <span className="text-border">·</span>
+                <span>Monthly rebalance</span>
               </p>
             </div>
           </div>
@@ -186,7 +199,7 @@ export default async function RunDetailPage({ params }: { params: Promise<{ id: 
           <OverviewTab metrics={metrics} equityCurve={equityCurve} />
         </TabsContent>
         <TabsContent value="holdings" className="mt-4">
-          <HoldingsTab predictions={modelPredictions} />
+          <HoldingsTab predictions={modelPredictions} positions={positions} />
         </TabsContent>
         <TabsContent value="trades" className="mt-4">
           <TradesTab predictions={modelPredictions} />

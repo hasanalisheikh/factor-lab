@@ -147,6 +147,18 @@ CREATE TABLE model_predictions (
   UNIQUE (run_id, model_name, as_of_date, ticker)
 );
 
+-- ─── positions ───────────────────────────────────────────────────────────────
+-- Rebalance-date holdings snapshot for all strategy runs.
+-- Worker writes here for baseline strategies (equal_weight, momentum_12_1).
+-- ML strategies derive holdings from model_predictions.
+CREATE TABLE positions (
+  run_id  UUID    NOT NULL REFERENCES runs (id) ON DELETE CASCADE,
+  date    DATE    NOT NULL,
+  symbol  TEXT    NOT NULL,
+  weight  NUMERIC NOT NULL CHECK (weight >= 0),
+  PRIMARY KEY (run_id, date, symbol)
+);
+
 -- ─── Row-Level Security ───────────────────────────────────────────────────────
 -- Allow anonymous reads so the UI works with the anon key.
 -- Tighten these policies when you add auth.
@@ -160,6 +172,7 @@ ALTER TABLE data_last_updated ENABLE ROW LEVEL SECURITY;
 ALTER TABLE features_monthly  ENABLE ROW LEVEL SECURITY;
 ALTER TABLE model_metadata    ENABLE ROW LEVEL SECURITY;
 ALTER TABLE model_predictions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE positions    ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY "public read"   ON runs         FOR SELECT USING (true);
 CREATE POLICY "public read"   ON run_metrics  FOR SELECT USING (true);
@@ -171,6 +184,7 @@ CREATE POLICY "public read"   ON data_last_updated FOR SELECT USING (true);
 CREATE POLICY "public read"   ON features_monthly  FOR SELECT USING (true);
 CREATE POLICY "public read"   ON model_metadata    FOR SELECT USING (true);
 CREATE POLICY "public read"   ON model_predictions FOR SELECT USING (true);
+CREATE POLICY "public read"   ON positions    FOR SELECT USING (true);
 
 -- ─── Migration (existing databases) ──────────────────────────────────────────
 -- If your DB was created before Phase 4, run this in the Supabase SQL Editor:

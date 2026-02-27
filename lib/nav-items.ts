@@ -6,6 +6,7 @@ import {
   Server,
   Database,
   Settings,
+  BookOpen,
   type LucideIcon,
 } from "lucide-react"
 
@@ -24,6 +25,7 @@ export const mainNavItems: NavItem[] = [
   { name: "Compare", href: "/compare", icon: GitCompare },
   { name: "Jobs", href: "/jobs", icon: Server },
   { name: "Data", href: "/data", icon: Database },
+  { name: "Strategies", href: "/strategies", icon: BookOpen },
 ]
 
 export const bottomNavItems: NavItem[] = [

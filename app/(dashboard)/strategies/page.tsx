@@ -1,0 +1,362 @@
+import { AppShell } from "@/components/layout/app-shell"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Badge } from "@/components/ui/badge"
+import { Separator } from "@/components/ui/separator"
+
+// ── Data ──────────────────────────────────────────────────────────────────────
+
+const strategies = [
+  {
+    id: "equal_weight",
+    label: "Equal Weight",
+    tag: "Baseline",
+    tagVariant: "secondary" as const,
+    summary:
+      "Hold every asset in the universe at equal weight, reset monthly. The simplest possible diversification approach.",
+    rule: "At each monthly rebalance, assign weight 1/N to all N assets in the universe.",
+    selection: "All assets in the universe — no filtering.",
+    weightScheme: "1/N per asset (e.g., 12.5% each for the 8-asset ETF8 universe).",
+    turnover:
+      "Low (~8% per rebalance). Weights drift slightly as prices move; the monthly reset corrects them.",
+    signal: null,
+    mlDetails: null,
+    expectations:
+      "Captures broad market beta. The implicit contrarian tilt (buying laggards, trimming winners) can outperform market-cap-weighted benchmarks over long horizons.",
+    reference: "DeMiguel, Garlappi & Uppal (2009) — '1/N has no reason to underperform optimized portfolios.'",
+  },
+  {
+    id: "momentum_12_1",
+    label: "Momentum 12-1",
+    tag: "Factor",
+    tagVariant: "outline" as const,
+    summary:
+      "Rank assets by 12-month return excluding the most recent month, then hold the top half.",
+    rule: "At each rebalance, score each asset by its 12-1 momentum and select the top 50% with a positive score.",
+    selection: "Top half of the universe ranked by momentum score; only assets with a positive score qualify.",
+    weightScheme: "Equal weight among selected assets (1/k where k ≤ N/2).",
+    turnover:
+      "Moderate. Changes monthly as rankings shift.",
+    signal:
+      "score = price(t−21 trading days) / price(t−252 trading days) − 1\n\nThe 1-month skip (t−21) removes short-term price reversal contamination. Momentum is a 2–12 month phenomenon.",
+    mlDetails: null,
+    expectations:
+      "Outperforms in trending markets. Sharp reversals (e.g., crisis recoveries) cause outsized drawdowns — a known property of momentum strategies.",
+    reference: "Jegadeesh & Titman (1993); Fama & French (1996).",
+  },
+  {
+    id: "ml_ridge",
+    label: "ML Ridge",
+    tag: "ML · Walk-Forward",
+    tagVariant: "outline" as const,
+    summary:
+      "Walk-forward Ridge regression trained on 5 cross-sectional features. Retrained each month using all available history.",
+    rule: "Each month, retrain a Ridge regressor on all past data, rank assets by predicted next-month return, and hold the top N equal-weighted.",
+    selection: `Top N assets by predicted return (N = run.top_n, default 10). Requires ≥ 24 months of training history before first prediction.`,
+    weightScheme: "Equal weight among the top-N selected assets.",
+    turnover: "Variable. Typically moderate as rankings shift with new predictions.",
+    signal: null,
+    mlDetails: {
+      features: [
+        { name: "momentum", desc: "12-month trailing return (same as the momentum strategy signal)" },
+        { name: "reversal", desc: "Inverted prior-month return (short-term mean-reversion)" },
+        { name: "volatility", desc: "Annualized 6-month rolling standard deviation of returns" },
+        { name: "beta", desc: "Rolling 12-month beta to the benchmark (SPY)" },
+        { name: "drawdown", desc: "Rolling 12-month max drawdown (price / rolling-max − 1)" },
+      ],
+      target: "Next month total return.",
+      model: "Ridge(α=1.0) with StandardScaler preprocessing. L2 regularization shrinks coefficients to reduce cross-sectional overfitting.",
+      warmup: "5 years of price history before run.start_date to build the initial training set.",
+      walkForward:
+        "The model is retrained from scratch at every rebalance date, using all available history up to (but not including) that date. There is no look-ahead bias.",
+    },
+    expectations:
+      "Aims to combine multiple factor signals with a regularized model. Performance depends on regime stability; walk-forward discipline ensures realistic out-of-sample simulation.",
+    reference: null,
+  },
+  {
+    id: "ml_lightgbm",
+    label: "ML LightGBM",
+    tag: "ML · Walk-Forward",
+    tagVariant: "outline" as const,
+    summary:
+      "Same walk-forward framework as ML Ridge, but uses gradient-boosted trees to capture non-linear feature interactions.",
+    rule: "Identical to ML Ridge, substituting a LightGBM regressor for the Ridge model.",
+    selection: "Top N assets by predicted return.",
+    weightScheme: "Equal weight among selected assets.",
+    turnover: "Variable.",
+    signal: null,
+    mlDetails: {
+      features: [
+        { name: "momentum", desc: "12-month trailing return" },
+        { name: "reversal", desc: "Inverted prior-month return" },
+        { name: "volatility", desc: "Annualized 6-month rolling volatility" },
+        { name: "beta", desc: "Rolling 12-month beta to benchmark" },
+        { name: "drawdown", desc: "Rolling 12-month max drawdown" },
+      ],
+      target: "Next month total return.",
+      model:
+        "LGBMRegressor(n_estimators=300, learning_rate=0.05, num_leaves=31, min_child_samples=20). Falls back to Ridge(α=0.7) if LightGBM is not installed.",
+      warmup: "5 years of price history before run.start_date.",
+      walkForward:
+        "Same expanding-window walk-forward as ML Ridge. No look-ahead bias.",
+    },
+    expectations:
+      "May outperform Ridge when factor relationships are non-linear or interaction effects are important. More sensitive to small dataset sizes.",
+    reference: null,
+  },
+]
+
+const metricDefs = [
+  {
+    name: "CAGR",
+    full: "Compound Annual Growth Rate",
+    desc: "Annualized total return. Formula: (final_NAV / initial_NAV)^(252 / trading_days) − 1. Higher is better.",
+  },
+  {
+    name: "Sharpe",
+    full: "Sharpe Ratio",
+    desc: "Risk-adjusted return: (mean_daily_return / std_daily_return) × √252. Measures excess return per unit of daily volatility. > 1.0 is generally considered strong.",
+  },
+  {
+    name: "Max DD",
+    full: "Maximum Drawdown",
+    desc: "Largest peak-to-trough decline in portfolio NAV, expressed as a percentage. Measures the worst historical loss from any peak. Lower magnitude is better.",
+  },
+  {
+    name: "Turnover (Ann.)",
+    full: "Annualized Turnover",
+    desc: "Average annual fraction of the portfolio replaced. Computed as mean(rebalance_turnover) × 12. 100% = entire portfolio replaced once per year. Lower means lower transaction cost drag.",
+  },
+  {
+    name: "Volatility",
+    full: "Annualized Volatility",
+    desc: "Standard deviation of daily returns × √252. Measures total portfolio risk regardless of direction.",
+  },
+  {
+    name: "Win Rate",
+    full: "Win Rate",
+    desc: "Fraction of trading days (or months for ML) with a positive return. > 50% means more up days than down days.",
+  },
+  {
+    name: "Profit Factor",
+    full: "Profit Factor",
+    desc: "Total gains ÷ total losses. > 1.0 means cumulative gains exceed cumulative losses. A value of 1.5 means $1.50 gained for every $1.00 lost.",
+  },
+  {
+    name: "Calmar",
+    full: "Calmar Ratio",
+    desc: "CAGR ÷ |Max Drawdown|. Measures annualized return per unit of drawdown risk. Higher is better; > 1.0 means annual return exceeds worst drawdown.",
+  },
+]
+
+// ── Sub-components ─────────────────────────────────────────────────────────────
+
+function SectionTitle({ children }: { children: React.ReactNode }) {
+  return (
+    <h2 className="text-[15px] font-semibold text-foreground mb-3">{children}</h2>
+  )
+}
+
+function FieldRow({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="flex gap-3 py-2 border-b border-border/40 last:border-0">
+      <span className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider w-28 shrink-0 pt-0.5">
+        {label}
+      </span>
+      <span className="text-[13px] text-foreground/90 leading-relaxed flex-1">{children}</span>
+    </div>
+  )
+}
+
+// ── Page ───────────────────────────────────────────────────────────────────────
+
+export default function StrategiesPage() {
+  return (
+    <AppShell title="Strategies">
+      {/* Hero */}
+      <div className="mb-6">
+        <h1 className="text-xl font-semibold text-foreground">Strategy Glossary &amp; Methodology</h1>
+        <p className="text-[13px] text-muted-foreground mt-1 max-w-2xl">
+          How FactorLab strategies are constructed, executed, and measured. All strategies share a common
+          equal-weight, monthly-rebalance framework with configurable transaction costs and a SPY benchmark.
+        </p>
+      </div>
+
+      {/* Common Framework */}
+      <section className="mb-8">
+        <SectionTitle>Common Framework</SectionTitle>
+        <Card className="bg-card border-border">
+          <CardContent className="px-4 py-3 divide-y divide-border/40">
+            <FieldRow label="Universe">
+              Defined at run creation and snapshotted to <code className="text-[12px] bg-secondary px-1 rounded">runs.universe_symbols</code> at
+              execution time. The snapshot is used for all display and audit purposes, preventing label drift
+              between the UI and the actual execution.
+              <br />
+              <span className="text-muted-foreground text-[12px]">
+                Presets — ETF8: 8 cross-asset ETFs (SPY, QQQ, IWM, EFA, EEM, TLT, GLD, VNQ) ·
+                SP100: 20 large-cap S&amp;P 500 members · NASDAQ100: 20 Nasdaq-100 tech leaders.
+              </span>
+            </FieldRow>
+            <FieldRow label="Rebalance">
+              Monthly, at calendar month boundaries. On each rebalance the portfolio is reset to the
+              new target weights. Between rebalances, weights drift as prices move — this drift is the
+              source of turnover at the next rebalance.
+            </FieldRow>
+            <FieldRow label="Construction">
+              All strategies use <strong>equal weighting</strong>: each selected asset receives weight
+              1/k where k is the number of selected assets. No mean-variance optimization is applied.
+            </FieldRow>
+            <FieldRow label="Costs">
+              Transaction costs are modeled as:{" "}
+              <code className="text-[12px] bg-secondary px-1 rounded">cost = (costs_bps / 10,000) × turnover</code>,
+              deducted from returns at each rebalance date. Default is 10 bps. Configurable per run.
+            </FieldRow>
+            <FieldRow label="Benchmark">
+              SPY (S&amp;P 500 ETF) is the default benchmark, rebased to the same starting NAV
+              ($100,000) as the portfolio. The benchmark ticker is configurable per run and is included
+              in universe downloads for the ML strategies.
+            </FieldRow>
+            <FieldRow label="Starting NAV">
+              $100,000 for both portfolio and benchmark. All equity curve values are absolute NAV.
+            </FieldRow>
+          </CardContent>
+        </Card>
+      </section>
+
+      {/* Strategies */}
+      <section className="mb-8">
+        <SectionTitle>Strategies</SectionTitle>
+        <div className="flex flex-col gap-4">
+          {strategies.map((s) => (
+            <Card key={s.id} className="bg-card border-border">
+              <CardHeader className="pb-2 px-4 pt-4">
+                <div className="flex items-center gap-2.5 flex-wrap">
+                  <CardTitle className="text-[14px] font-semibold text-card-foreground">
+                    {s.label}
+                  </CardTitle>
+                  <Badge
+                    variant={s.tagVariant}
+                    className="text-[10px] px-2 py-0 h-5 leading-5 font-medium"
+                  >
+                    {s.tag}
+                  </Badge>
+                </div>
+                <p className="text-[12px] text-muted-foreground mt-1">{s.summary}</p>
+              </CardHeader>
+              <Separator className="opacity-50" />
+              <CardContent className="px-4 py-3 divide-y divide-border/40">
+                <FieldRow label="Rule">{s.rule}</FieldRow>
+                <FieldRow label="Selection">{s.selection}</FieldRow>
+                <FieldRow label="Weights">{s.weightScheme}</FieldRow>
+                {s.signal && (
+                  <FieldRow label="Signal">
+                    <pre className="text-[12px] font-mono whitespace-pre-wrap text-foreground/80">
+                      {s.signal}
+                    </pre>
+                  </FieldRow>
+                )}
+                {s.mlDetails && (
+                  <>
+                    <FieldRow label="Features">
+                      <ul className="space-y-1">
+                        {s.mlDetails.features.map((f) => (
+                          <li key={f.name} className="text-[13px]">
+                            <code className="text-[12px] bg-secondary px-1 rounded font-mono">
+                              {f.name}
+                            </code>{" "}
+                            — {f.desc}
+                          </li>
+                        ))}
+                      </ul>
+                    </FieldRow>
+                    <FieldRow label="Target">{s.mlDetails.target}</FieldRow>
+                    <FieldRow label="Model">{s.mlDetails.model}</FieldRow>
+                    <FieldRow label="Walk-Forward">{s.mlDetails.walkForward}</FieldRow>
+                    <FieldRow label="Warmup">{s.mlDetails.warmup}</FieldRow>
+                  </>
+                )}
+                <FieldRow label="Turnover">{s.turnover}</FieldRow>
+                <FieldRow label="Expectations">{s.expectations}</FieldRow>
+                {s.reference && (
+                  <FieldRow label="Reference">
+                    <span className="text-muted-foreground italic text-[12px]">{s.reference}</span>
+                  </FieldRow>
+                )}
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      </section>
+
+      {/* Rebalance Mechanics */}
+      <section className="mb-8">
+        <SectionTitle>How Rebalancing Works</SectionTitle>
+        <Card className="bg-card border-border">
+          <CardContent className="px-4 py-4 space-y-3 text-[13px] text-foreground/90 leading-relaxed">
+            <p>
+              On the <strong>last trading day of each calendar month</strong>, the engine computes new
+              target weights and calculates the turnover required to move from the current (drifted)
+              weights to the target.
+            </p>
+            <p>
+              <strong>Example:</strong> You start January with ETF8 at equal weight (12.5% each).
+              By end-of-month, QQQ rallied and now represents 15% of the portfolio while TLT fell to 10%.
+              The rebalance sells 2.5% of QQQ and buys 2.5% of TLT to restore equal weight.
+              The one-way turnover is 2.5% → transaction cost = 10 bps × 5% two-way = 0.05% drag.
+            </p>
+            <p>
+              For momentum strategies, <strong>turnover is higher</strong> because the set of selected
+              assets can change entirely between months — a replaced asset requires both a full sell and
+              a full buy.
+            </p>
+          </CardContent>
+        </Card>
+      </section>
+
+      {/* Metrics Glossary */}
+      <section className="mb-8">
+        <SectionTitle>Metrics Glossary</SectionTitle>
+        <Card className="bg-card border-border">
+          <CardContent className="px-4 py-3 divide-y divide-border/40">
+            {metricDefs.map((m) => (
+              <div key={m.name} className="flex gap-3 py-2.5">
+                <div className="w-32 shrink-0">
+                  <span className="text-[12px] font-medium font-mono text-foreground">{m.name}</span>
+                  <p className="text-[10px] text-muted-foreground mt-0.5">{m.full}</p>
+                </div>
+                <p className="text-[13px] text-foreground/80 leading-relaxed flex-1">{m.desc}</p>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      </section>
+
+      {/* Limitations */}
+      <section className="mb-2">
+        <SectionTitle>Known Limitations</SectionTitle>
+        <Card className="bg-card border-border">
+          <CardContent className="px-4 py-3 divide-y divide-border/40">
+            <FieldRow label="Survivorship bias">
+              Universe presets are static snapshots. They do not account for assets that were delisted,
+              merged, or replaced during the backtest period. This may overstate historical performance
+              for long backtest windows.
+            </FieldRow>
+            <FieldRow label="Simplified costs">
+              The cost model applies a flat <code className="text-[12px] bg-secondary px-1 rounded">bps × turnover</code> rate.
+              It does not model market impact, bid-ask spread, slippage, or short-selling costs.
+            </FieldRow>
+            <FieldRow label="Data quality">
+              Price data is sourced from Yahoo Finance via <code className="text-[12px] bg-secondary px-1 rounded">yfinance</code>.
+              Gaps are forward-filled. Significant coverage gaps may affect results for smaller or
+              less-liquid assets.
+            </FieldRow>
+            <FieldRow label="Research only">
+              FactorLab is a research and backtesting tool with no live brokerage integration. Results
+              reflect historical simulations and should not be taken as a guarantee of future returns.
+            </FieldRow>
+          </CardContent>
+        </Card>
+      </section>
+    </AppShell>
+  )
+}

@@ -9,6 +9,7 @@ const config = [
       ".next/**",
       "node_modules/**",
       "services/engine/**",
+      ".venv/**",
     ],
   },
 ]

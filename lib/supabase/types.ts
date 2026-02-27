@@ -269,6 +269,22 @@ export type Database = {
         Update: Partial<Database['public']['Tables']['model_predictions']['Insert']>
         Relationships: []
       }
+      positions: {
+        Row: {
+          run_id: string
+          date: string
+          symbol: string
+          weight: number
+        }
+        Insert: {
+          run_id: string
+          date: string
+          symbol: string
+          weight: number
+        }
+        Update: Partial<Database['public']['Tables']['positions']['Insert']>
+        Relationships: []
+      }
     }
     Views: Record<string, never>
     Functions: Record<string, never>
