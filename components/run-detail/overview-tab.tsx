@@ -10,11 +10,6 @@ import {
 import { Area, AreaChart, CartesianGrid, XAxis, YAxis } from "recharts"
 import type { RunMetricsRow, EquityCurveRow } from "@/lib/supabase/queries"
 
-const equityConfig = {
-  portfolio: { label: "Portfolio", color: "var(--color-chart-1)" },
-  benchmark: { label: "Benchmark", color: "var(--color-chart-5)" },
-} satisfies ChartConfig
-
 const ddConfig = {
   drawdown: { label: "Drawdown", color: "var(--color-chart-4)" },
 } satisfies ChartConfig
@@ -42,9 +37,14 @@ const metricDefs: { key: keyof RunMetricsRow; label: string; format: (v: number)
 interface OverviewTabProps {
   metrics: RunMetricsRow | null
   equityCurve: EquityCurveRow[]
+  benchmarkTicker: string
 }
 
-export function OverviewTab({ metrics, equityCurve }: OverviewTabProps) {
+export function OverviewTab({ metrics, equityCurve, benchmarkTicker }: OverviewTabProps) {
+  const equityConfig = {
+    portfolio: { label: "Portfolio", color: "var(--color-chart-1)" },
+    benchmark: { label: benchmarkTicker, color: "var(--color-chart-5)" },
+  } satisfies ChartConfig
   const drawdownData = computeDrawdown(equityCurve)
 
   return (

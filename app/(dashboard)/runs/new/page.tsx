@@ -11,9 +11,20 @@ import { Label } from "@/components/ui/label"
 import { NativeSelect } from "@/components/ui/native-select"
 import { createRun, type CreateRunState } from "@/app/actions/runs"
 import { STRATEGY_LABELS, type StrategyId } from "@/lib/types"
+import { BENCHMARK_OPTIONS } from "@/lib/benchmark"
 
 const STRATEGIES = Object.entries(STRATEGY_LABELS) as [StrategyId, string][]
 const UNIVERSE_PRESETS = ["ETF8", "SP100", "NASDAQ100"] as const
+
+function defaultStartDate() {
+  const d = new Date()
+  d.setFullYear(d.getFullYear() - 3)
+  return d.toISOString().split("T")[0]
+}
+
+function defaultEndDate() {
+  return new Date().toISOString().split("T")[0]
+}
 
 export default function NewRunPage() {
   const [strategy, setStrategy] = useState<string>("")
@@ -110,33 +121,29 @@ export default function NewRunPage() {
             </div>
 
             {/* Date range */}
-            <div className="grid grid-cols-2 gap-3">
-              <div className="flex flex-col gap-1.5">
-                <Label
-                  htmlFor="start_date"
-                  className="text-[12px] font-medium text-muted-foreground"
-                >
-                  Start date
+            <div className="flex flex-col gap-1.5">
+              <div className="flex items-baseline justify-between">
+                <Label className="text-[12px] font-medium text-muted-foreground">
+                  Date range
                 </Label>
+                <span className="text-[11px] text-muted-foreground">
+                  Min 2 years · 3+ recommended
+                </span>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
                 <Input
                   id="start_date"
                   name="start_date"
                   type="date"
+                  defaultValue={defaultStartDate()}
                   className="h-8 text-[13px] bg-secondary/40 border-border"
                   required
                 />
-              </div>
-              <div className="flex flex-col gap-1.5">
-                <Label
-                  htmlFor="end_date"
-                  className="text-[12px] font-medium text-muted-foreground"
-                >
-                  End date
-                </Label>
                 <Input
                   id="end_date"
                   name="end_date"
                   type="date"
+                  defaultValue={defaultEndDate()}
                   className="h-8 text-[13px] bg-secondary/40 border-border"
                   required
                 />
@@ -147,18 +154,24 @@ export default function NewRunPage() {
             <div className="grid grid-cols-3 gap-3">
               <div className="flex flex-col gap-1.5">
                 <Label
-                  htmlFor="benchmark_ticker"
+                  htmlFor="benchmark"
                   className="text-[12px] font-medium text-muted-foreground"
                 >
                   Benchmark
                 </Label>
-                <Input
-                  id="benchmark_ticker"
-                  name="benchmark_ticker"
+                <NativeSelect
+                  id="benchmark"
+                  name="benchmark"
                   defaultValue="SPY"
-                  className="h-8 text-[13px] bg-secondary/40 border-border uppercase"
-                  required
-                />
+                  hasValue
+                  className="h-8 border-border bg-secondary/40 pl-3 pr-8 text-[13px]"
+                >
+                  {BENCHMARK_OPTIONS.map((benchmark) => (
+                    <option key={benchmark} value={benchmark} className="text-foreground">
+                      {benchmark}
+                    </option>
+                  ))}
+                </NativeSelect>
               </div>
               <div className="flex flex-col gap-1.5">
                 <Label

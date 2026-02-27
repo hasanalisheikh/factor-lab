@@ -3,7 +3,13 @@
 import { revalidatePath } from "next/cache"
 import { redirect } from "next/navigation"
 import { createAdminClient } from "@/lib/supabase/admin"
-import type { EquityCurveRow, RunMetricsRow, RunRow } from "@/lib/supabase/queries"
+import {
+  getBenchmarkOverlapStateForRun,
+  type EquityCurveRow,
+  type RunMetricsRow,
+  type RunRow,
+} from "@/lib/supabase/queries"
+import { getRunBenchmark } from "@/lib/benchmark"
 
 const REPORTS_BUCKET = process.env.SUPABASE_REPORTS_BUCKET ?? "reports"
 
@@ -69,10 +75,22 @@ function buildReportHtml(params: {
   startDate: string
   endDate: string
   generatedAt: string
+  benchmarkTicker: string
+  benchmarkOverlapDetected: boolean
   metrics: RunMetricsRow
   equityCurve: EquityCurveRow[]
 }): string {
-  const { runName, strategyId, startDate, endDate, generatedAt, metrics, equityCurve } = params
+  const {
+    runName,
+    strategyId,
+    startDate,
+    endDate,
+    generatedAt,
+    benchmarkTicker,
+    benchmarkOverlapDetected,
+    metrics,
+    equityCurve,
+  } = params
   const { series: chartSeries, trimmedPoints } = trimWarmup(equityCurve)
   const drawdown = computeDrawdownSeries(chartSeries)
   const portfolioSeries = chartSeries.map((pt) => pt.portfolio)
@@ -173,11 +191,11 @@ function buildReportHtml(params: {
       <div class="kpi"><div class="label">Calmar</div><div class="value">${fmtRatio(metrics.calmar)}</div></div>
     </div>
 
-    <h2>Equity Curve vs SPY</h2>
+    <h2>Equity Curve vs ${escapeHtml(benchmarkTicker)}</h2>
     <div class="panel">
       <div class="legend">
         <span><i class="dot" style="background: var(--portfolio)"></i>Portfolio</span>
-        <span><i class="dot" style="background: var(--benchmark)"></i>SPY (Benchmark)</span>
+        <span><i class="dot" style="background: var(--benchmark)"></i>${escapeHtml(benchmarkTicker)} (Benchmark)</span>
       </div>
       <svg viewBox="0 0 ${eqWidth} ${eqHeight}" width="${eqWidth}" height="${eqHeight}" role="img" aria-label="Equity curve chart">
         <rect x="0" y="0" width="${eqWidth}" height="${eqHeight}" fill="#ffffff" />
@@ -186,6 +204,7 @@ function buildReportHtml(params: {
       </svg>
       <p><strong>Start NAV:</strong> ${fmtMoney(first?.portfolio ?? 0)} | <strong>End NAV:</strong> ${fmtMoney(last?.portfolio ?? 0)}</p>
       <p><strong>Benchmark End:</strong> ${fmtMoney(last?.benchmark ?? 0)}</p>
+      ${benchmarkOverlapDetected ? `<p><strong>Benchmark overlap:</strong> portfolio holds ${escapeHtml(benchmarkTicker)} at some rebalances.</p>` : ""}
       ${trimmedPoints > 0 ? `<p><strong>Warmup Trim:</strong> Omitted ${trimmedPoints} initial trading days before first active portfolio change.</p>` : ""}
     </div>
 
@@ -257,6 +276,21 @@ export async function generateRunReport(runId: string) {
     throw new Error(`Failed to load equity curve: ${equityError.message}`)
   }
   const runRow = run as RunRow
+  const benchmarkTicker = getRunBenchmark(runRow)
+  const overlapState = await getBenchmarkOverlapStateForRun(runRow)
+  let benchmarkOverlapDetected = overlapState.confirmed
+  if (!benchmarkOverlapDetected) {
+    const { data: overlapRows, error: overlapError } = await supabase
+      .from("positions")
+      .select("date")
+      .eq("run_id", runId)
+      .eq("symbol", benchmarkTicker)
+      .gt("weight", 0)
+      .limit(1)
+    if (!overlapError && (overlapRows?.length ?? 0) > 0) {
+      benchmarkOverlapDetected = true
+    }
+  }
   if (runRow.status !== "completed") {
     throw new Error("Report generation is only available for completed runs")
   }
@@ -271,6 +305,8 @@ export async function generateRunReport(runId: string) {
     startDate: runRow.start_date,
     endDate: runRow.end_date,
     generatedAt: new Date().toISOString(),
+    benchmarkTicker,
+    benchmarkOverlapDetected,
     metrics: metrics as RunMetricsRow,
     equityCurve: equity as EquityCurveRow[],
   })

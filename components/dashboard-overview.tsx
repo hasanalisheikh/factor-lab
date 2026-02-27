@@ -13,52 +13,8 @@ import {
   formatSignedNum,
 } from "@/lib/format"
 import type { DashboardMetric } from "@/lib/types"
+import { BenchmarkOverlapWarning } from "@/components/benchmark-overlap-warning"
 
-// ── Temporary debug panel ──────────────────────────────────────────────────
-// Renders a small diagnostics block below the metric cards.
-// REMOVE this component and its usage after verifying metrics are correct.
-function KpiDebugPanel({
-  sliced,
-  portfolio,
-  benchmark,
-}: {
-  sliced: Array<{ date: string; portfolio: number; benchmark: number }>
-  portfolio: { cagr: number | null; sharpe: number | null; maxDrawdown: number | null } | null
-  benchmark: { cagr: number | null; sharpe: number | null; maxDrawdown: number | null } | null
-}) {
-  if (sliced.length === 0) return null
-  const first = sliced[0]
-  const last = sliced[sliced.length - 1]
-
-  const cagrDelta =
-    portfolio?.cagr != null && benchmark?.cagr != null
-      ? portfolio.cagr - benchmark.cagr
-      : null
-  const sharpeDelta =
-    portfolio?.sharpe != null && benchmark?.sharpe != null
-      ? portfolio.sharpe - benchmark.sharpe
-      : null
-  const maxDDDelta =
-    portfolio?.maxDrawdown != null && benchmark?.maxDrawdown != null
-      ? portfolio.maxDrawdown - benchmark.maxDrawdown
-      : null
-
-  const fmt = (v: number | null, pct = false) =>
-    v == null ? "—" : pct ? (v * 100).toFixed(2) + "%" : v.toFixed(4)
-  const fmtPP = (v: number | null) =>
-    v == null ? "—" : (v > 0 ? "+" : "") + (v * 100).toFixed(2) + " pp"
-
-  return (
-    <pre className="text-[10px] text-muted-foreground/60 bg-muted/20 rounded px-3 py-2 font-mono leading-relaxed overflow-x-auto">
-      {`[DEBUG KPI alignment] ${sliced.length} pts  tf-start=${first.date}  tf-end=${last.date}
-Portfolio  start=$${first.portfolio.toFixed(2)}  end=$${last.portfolio.toFixed(2)}
-SPY        start=$${first.benchmark.toFixed(2)}  end=$${last.benchmark.toFixed(2)}
-CAGR   port=${fmt(portfolio?.cagr ?? null, true)}  spy=${fmt(benchmark?.cagr ?? null, true)}  Δ=${fmtPP(cagrDelta)}
-Sharpe port=${fmt(portfolio?.sharpe ?? null)}  spy=${fmt(benchmark?.sharpe ?? null)}  Δ=${sharpeDelta == null ? "—" : (sharpeDelta > 0 ? "+" : "") + sharpeDelta.toFixed(4)}
-MaxDD  port=${fmt(portfolio?.maxDrawdown ?? null, true)}  spy=${fmt(benchmark?.maxDrawdown ?? null, true)}  Δ=${fmtPP(maxDDDelta)}`}
-    </pre>
-  )
-}
 
 interface EquityPoint {
   date: string
@@ -68,6 +24,8 @@ interface EquityPoint {
 
 interface DashboardOverviewProps {
   equityCurve: EquityPoint[]
+  benchmark: string
+  benchmarkOverlapConfirmed: boolean
   /**
    * Annualized turnover fraction from run_metrics (e.g. 0.42 = 42%).
    * Null when not available; displayed as a static metric with no delta.
@@ -82,6 +40,8 @@ interface DashboardOverviewProps {
 
 export function DashboardOverview({
   equityCurve,
+  benchmark,
+  benchmarkOverlapConfirmed,
   storedTurnover,
   children,
 }: DashboardOverviewProps) {
@@ -127,7 +87,7 @@ export function DashboardOverview({
         value: pm?.cagr != null ? formatSignedPct(pm.cagr) : "—",
         deltaRaw: cagrDelta,
         deltaFormatted: cagrDelta != null ? formatSignedPctPoints(cagrDelta) : null,
-        deltaLabel: "vs SPY",
+        deltaLabel: `vs ${benchmark}`,
         lowerIsBetter: false,
         // Normalized equity: starts at 1.0, shape reflects growth trend.
         sparkline: sp?.equity ?? [],
@@ -137,7 +97,7 @@ export function DashboardOverview({
         value: pm?.sharpe != null ? formatNum(pm.sharpe) : "—",
         deltaRaw: sharpeDelta,
         deltaFormatted: sharpeDelta != null ? formatSignedNum(sharpeDelta) : null,
-        deltaLabel: "vs SPY",
+        deltaLabel: `vs ${benchmark}`,
         lowerIsBetter: false,
         // Rolling 60-day Sharpe series (falls back to equity if data < 60 pts).
         sparkline: sp?.rollingSharpe ?? [],
@@ -147,7 +107,7 @@ export function DashboardOverview({
         value: pm?.maxDrawdown != null ? formatPct(pm.maxDrawdown) : "—",
         deltaRaw: maxDDDelta,
         deltaFormatted: maxDDDelta != null ? formatSignedPctPoints(maxDDDelta) : null,
-        deltaLabel: "vs SPY",
+        deltaLabel: `vs ${benchmark}`,
         lowerIsBetter: true,
         // Drawdown series: 0 at peak, negative fraction when underwater.
         sparkline: sp?.drawdown ?? [],
@@ -165,21 +125,20 @@ export function DashboardOverview({
         sparkline: sp?.equity ?? [],
       },
     ]
-  }, [computed, storedTurnover])
+  }, [benchmark, computed, storedTurnover])
 
   return (
     <>
+      {benchmarkOverlapConfirmed ? (
+        <BenchmarkOverlapWarning benchmark={benchmark} />
+      ) : null}
       <MetricCards metrics={dashboardMetrics} />
-      {/* DEBUG: remove after verifying KPI values are correct */}
-      <KpiDebugPanel
-        sliced={sliced}
-        portfolio={computed?.portfolio ?? null}
-        benchmark={computed?.benchmark ?? null}
-      />
+
       <div className="grid grid-cols-1 lg:grid-cols-[340px_minmax(0,1fr)] gap-4">
         {children}
         <EquityChart
           data={equityCurve}
+          benchmarkTicker={benchmark}
           timeframe={selectedTf}
           onTimeframeChange={setSelectedTf}
         />

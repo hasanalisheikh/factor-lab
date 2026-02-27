@@ -1,5 +1,11 @@
 import { createClient } from "./server"
 import type { Database } from "./types"
+import {
+  getRunBenchmark,
+  inferPossibleOverlapFromUniverse,
+  isBenchmarkHeldAtLatestRebalance,
+  type BenchmarkOverlapState,
+} from "@/lib/benchmark"
 
 type RunRow = Database["public"]["Tables"]["runs"]["Row"]
 type RunMetricsRow = Database["public"]["Tables"]["run_metrics"]["Row"]
@@ -40,6 +46,11 @@ export type CompareRunBundle = {
   equity: EquityCurveRow[]
 }
 
+type RunBenchmarkContext = Pick<
+  RunRow,
+  "id" | "benchmark" | "benchmark_ticker" | "strategy_id" | "universe_symbols"
+>
+
 type GetRunsOptions = {
   limit?: number
 }
@@ -55,6 +66,8 @@ export async function getRuns(options: GetRunsOptions = {}): Promise<RunWithMetr
         name,
         strategy_id,
         status,
+        benchmark,
+        benchmark_ticker,
         start_date,
         end_date,
         created_at,
@@ -427,6 +440,106 @@ export async function getDataHealthSummary(): Promise<DataHealthSummary> {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Backtest window verification
+// ---------------------------------------------------------------------------
+
+export const BACKTEST_MIN_SPAN_DAYS = 730
+export const BACKTEST_MIN_DATA_POINTS = 500
+
+export type BacktestWindowSummaryRow = {
+  run_id: string
+  name: string
+  strategy_id: string
+  start_date: string
+  end_date: string
+  span_days: number
+  data_points: number
+  data_points_with_benchmark: number
+  meets_min_span: boolean
+  meets_min_points: boolean
+}
+
+/**
+ * Returns a per-run backtest-window summary for all completed runs.
+ * Span is computed from runs.start_date / end_date; data_points are counted
+ * from equity_curve rows fetched in a single batch query.
+ */
+export async function getRunsBacktestWindowSummary(): Promise<BacktestWindowSummaryRow[]> {
+  try {
+    const supabase = await createClient()
+
+    const { data: runs, error: runsError } = await supabase
+      .from("runs")
+      .select("id, name, strategy_id, benchmark, start_date, end_date")
+      .eq("status", "completed")
+      .order("created_at", { ascending: false })
+
+    if (runsError) {
+      console.error("getRunsBacktestWindowSummary runs error:", runsError.message)
+      return []
+    }
+    if (!runs?.length) return []
+
+    const runIds = runs.map((r) => r.id)
+
+    // Fetch only the columns needed for aggregation — avoids loading full curve.
+    const { data: ecRows, error: ecError } = await supabase
+      .from("equity_curve")
+      .select("run_id, date, benchmark")
+      .in("run_id", runIds)
+
+    if (ecError) {
+      console.error("getRunsBacktestWindowSummary equity_curve error:", ecError.message)
+    }
+
+    // Aggregate counts per run_id.
+    type Counts = { total: number; withBenchmark: number }
+    const countsMap = new Map<string, Counts>()
+    for (const row of (ecRows ?? []) as { run_id: string; date: string; benchmark: number | null }[]) {
+      const c = countsMap.get(row.run_id) ?? { total: 0, withBenchmark: 0 }
+      c.total += 1
+      if (row.benchmark != null) c.withBenchmark += 1
+      countsMap.set(row.run_id, c)
+    }
+
+    const summary: BacktestWindowSummaryRow[] = runs.map((run) => {
+      const startMs = new Date(run.start_date + "T00:00:00Z").getTime()
+      const endMs = new Date(run.end_date + "T00:00:00Z").getTime()
+      const spanDays = Math.floor((endMs - startMs) / (1000 * 60 * 60 * 24))
+      const c = countsMap.get(run.id) ?? { total: 0, withBenchmark: 0 }
+      return {
+        run_id: run.id,
+        name: run.name,
+        strategy_id: run.strategy_id,
+        start_date: run.start_date,
+        end_date: run.end_date,
+        span_days: spanDays,
+        data_points: c.total,
+        data_points_with_benchmark: c.withBenchmark,
+        meets_min_span: spanDays >= BACKTEST_MIN_SPAN_DAYS,
+        meets_min_points: c.total >= BACKTEST_MIN_DATA_POINTS,
+      }
+    })
+
+    // Console-log summary for server-side audit visibility.
+    console.log("[backtest-audit]", JSON.stringify(
+      summary.map(({ run_id, name, span_days, data_points, meets_min_span, meets_min_points }) => ({
+        run_id,
+        name,
+        span_days,
+        data_points,
+        pass: meets_min_span && meets_min_points,
+      }))
+    ))
+
+    return summary
+  } catch (err) {
+    console.error("getRunsBacktestWindowSummary exception:", err)
+    return []
+  }
+}
+
 export async function getPositionsByRunId(runId: string): Promise<PositionRow[]> {
   try {
     const supabase = await createClient()
@@ -446,5 +559,43 @@ export async function getPositionsByRunId(runId: string): Promise<PositionRow[]>
   } catch (err) {
     console.error("getPositionsByRunId exception:", err)
     return []
+  }
+}
+
+export async function getBenchmarkOverlapStateForRun(
+  run: RunBenchmarkContext
+): Promise<BenchmarkOverlapState> {
+  const benchmark = getRunBenchmark(run)
+  const fallbackPossible = inferPossibleOverlapFromUniverse({
+    benchmark,
+    strategyId: run.strategy_id,
+    universeSymbols: run.universe_symbols,
+  })
+
+  try {
+    const supabase = await createClient()
+    const { data, error } = await supabase
+      .from("positions")
+      .select("date, symbol, weight")
+      .eq("run_id", run.id)
+      .order("date", { ascending: false })
+      .order("symbol", { ascending: true })
+      .limit(3000)
+
+    if (error) {
+      return { confirmed: false, possible: fallbackPossible }
+    }
+
+    const positions = (data ?? []) as Pick<PositionRow, "date" | "symbol" | "weight">[]
+    if (positions.length === 0) {
+      return { confirmed: false, possible: fallbackPossible }
+    }
+
+    return {
+      confirmed: isBenchmarkHeldAtLatestRebalance(positions, benchmark),
+      possible: false,
+    }
+  } catch {
+    return { confirmed: false, possible: fallbackPossible }
   }
 }

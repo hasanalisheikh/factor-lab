@@ -80,7 +80,7 @@ class SupabaseIO:
     result = (
       self.client.table("runs")
       .select(
-        "id,name,strategy_id,status,start_date,end_date,benchmark_ticker,costs_bps,top_n,universe,universe_symbols,run_params"
+        "id,name,strategy_id,status,start_date,end_date,benchmark,benchmark_ticker,costs_bps,top_n,universe,universe_symbols,run_params"
       )
       .eq("id", run_id)
       .maybe_single()

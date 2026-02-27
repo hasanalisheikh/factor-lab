@@ -16,11 +16,6 @@ import {
   getAlignedTimeframeEquityCurve,
 } from "@/lib/equity-curve"
 
-const chartConfig = {
-  portfolio: { label: "Portfolio", color: "var(--color-chart-1)" },
-  benchmark: { label: "S&P 500", color: "var(--color-chart-5)" },
-} satisfies ChartConfig
-
 interface EquityPoint {
   date: string
   portfolio: number
@@ -29,14 +24,28 @@ interface EquityPoint {
 
 interface EquityChartProps {
   data: EquityPoint[]
+  benchmarkTicker: string
   /** Controlled mode: externally managed selected timeframe label */
   timeframe?: string
   /** Controlled mode: called when user clicks a timeframe button */
   onTimeframeChange?: (label: string) => void
 }
 
-export function EquityChart({ data, timeframe, onTimeframeChange }: EquityChartProps) {
+export function EquityChart({
+  data,
+  benchmarkTicker,
+  timeframe,
+  onTimeframeChange,
+}: EquityChartProps) {
   const [internalTf, setInternalTf] = useState("1Y")
+  const chartConfig = useMemo(
+    () =>
+      ({
+        portfolio: { label: "Portfolio", color: "var(--color-chart-1)" },
+        benchmark: { label: benchmarkTicker, color: "var(--color-chart-5)" },
+      }) satisfies ChartConfig,
+    [benchmarkTicker]
+  )
 
   const selectedTf = timeframe ?? internalTf
   const handleTfChange = (label: string) => {
@@ -66,7 +75,7 @@ export function EquityChart({ data, timeframe, onTimeframeChange }: EquityChartP
               </div>
               <div className="flex items-center gap-1.5">
                 <div className="w-1.5 h-1.5 rounded-full bg-chart-5" />
-                <span className="text-[10px] text-muted-foreground">SPY</span>
+                <span className="text-[10px] text-muted-foreground">{benchmarkTicker}</span>
               </div>
             </div>
           </div>

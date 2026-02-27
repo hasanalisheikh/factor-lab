@@ -15,6 +15,7 @@ export type Database = {
           name: string
           strategy_id: string
           status: string
+          benchmark: string
           benchmark_ticker: string
           universe: string
           universe_symbols: string[] | null
@@ -30,6 +31,7 @@ export type Database = {
           name: string
           strategy_id: string
           status?: string
+          benchmark?: string
           benchmark_ticker?: string
           universe?: string
           universe_symbols?: string[] | null

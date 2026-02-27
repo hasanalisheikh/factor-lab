@@ -7,8 +7,10 @@ import {
   getRunsCount,
   getMostRecentCompletedRun,
   getEquityCurve,
+  getBenchmarkOverlapStateForRun,
   type RunMetricsRow,
 } from "@/lib/supabase/queries"
+import { getRunBenchmark } from "@/lib/benchmark"
 
 export const revalidate = 30
 
@@ -25,8 +27,16 @@ export default async function DashboardPage() {
   ])
 
   let equityCurve: Awaited<ReturnType<typeof getEquityCurve>> = []
+  let benchmark = "SPY"
+  let benchmarkOverlapConfirmed = false
   if (featuredRun) {
-    equityCurve = await getEquityCurve(featuredRun.id)
+    const [curve, overlap] = await Promise.all([
+      getEquityCurve(featuredRun.id),
+      getBenchmarkOverlapStateForRun(featuredRun),
+    ])
+    equityCurve = curve
+    benchmark = getRunBenchmark(featuredRun)
+    benchmarkOverlapConfirmed = overlap.confirmed
   }
 
   const featuredMetrics = featuredRun ? getMetrics(featuredRun.run_metrics) : null
@@ -41,7 +51,12 @@ export default async function DashboardPage() {
         It computes KPIs from the same sliced equity curve shown in the chart,
         and renders <RecentRuns> (server component, passed as children) in its sidebar slot.
       */}
-      <DashboardOverview equityCurve={equityCurve} storedTurnover={storedTurnover}>
+      <DashboardOverview
+        equityCurve={equityCurve}
+        storedTurnover={storedTurnover}
+        benchmark={benchmark}
+        benchmarkOverlapConfirmed={benchmarkOverlapConfirmed}
+      >
         <RecentRuns runs={recentRuns} total={totalRuns} />
       </DashboardOverview>
       <RunsTable runs={allRuns} />

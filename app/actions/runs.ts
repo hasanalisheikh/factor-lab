@@ -3,6 +3,7 @@
 import { redirect } from "next/navigation"
 import { z } from "zod"
 import { createAdminClient } from "@/lib/supabase/admin"
+import { BENCHMARK_OPTIONS } from "@/lib/benchmark"
 
 const schema = z
   .object({
@@ -17,11 +18,7 @@ const schema = z
     end_date: z
       .string()
       .regex(/^\d{4}-\d{2}-\d{2}$/, "Invalid end date"),
-    benchmark_ticker: z
-      .string()
-      .trim()
-      .toUpperCase()
-      .regex(/^[A-Z.\-]{1,10}$/, "Benchmark must be a valid ticker"),
+    benchmark: z.enum(BENCHMARK_OPTIONS),
     universe: z.enum(["ETF8", "SP100", "NASDAQ100"]).default("ETF8"),
     costs_bps: z.coerce
       .number({ invalid_type_error: "Costs must be a number" })
@@ -37,6 +34,21 @@ const schema = z
     message: "End date must be after start date",
     path: ["end_date"],
   })
+  .refine(
+    (d) => {
+      const start = new Date(d.start_date + "T00:00:00Z")
+      const end = new Date(d.end_date + "T00:00:00Z")
+      const spanDays = Math.floor(
+        (end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)
+      )
+      return spanDays >= 730
+    },
+    {
+      message:
+        "Date range must span at least 2 years (730 days) for a robust backtest. We recommend 3+ years.",
+      path: ["start_date"],
+    }
+  )
 
 export type CreateRunState = { error: string } | null
 
@@ -56,7 +68,7 @@ export async function createRun(
     strategy_id,
     start_date,
     end_date,
-    benchmark_ticker,
+    benchmark,
     universe,
     costs_bps,
     top_n,
@@ -72,13 +84,15 @@ export async function createRun(
       status: "queued",
       start_date,
       end_date,
-      benchmark_ticker,
+      benchmark,
+      benchmark_ticker: benchmark,
       universe,
       costs_bps,
       top_n,
       run_params: {
         universe,
-        benchmark_ticker,
+        benchmark,
+        benchmark_ticker: benchmark,
         costs_bps,
         top_n,
         created_via: "runs/new",

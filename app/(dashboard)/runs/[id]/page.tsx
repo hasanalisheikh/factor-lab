@@ -18,11 +18,14 @@ import {
   getModelMetadataByRunId,
   getModelPredictionsByRunId,
   getPositionsByRunId,
+  getBenchmarkOverlapStateForRun,
   type RunMetricsRow,
 } from "@/lib/supabase/queries"
 import { STRATEGY_LABELS, type StrategyId, type RunStatus } from "@/lib/types"
 import { JobStatusPanel } from "@/components/run-detail/job-status-panel"
 import { generateRunReport } from "@/app/actions/reports"
+import { getRunBenchmark } from "@/lib/benchmark"
+import { BenchmarkOverlapWarning } from "@/components/benchmark-overlap-warning"
 
 function getMetrics(value: RunMetricsRow[] | RunMetricsRow | null): RunMetricsRow | null {
   if (Array.isArray(value)) return value[0] ?? null
@@ -62,13 +65,14 @@ export default async function RunDetailPage({ params }: { params: Promise<{ id: 
     notFound()
   }
 
-  const [equityCurve, job, report, modelMetadata, modelPredictions, positions] = await Promise.all([
+  const [equityCurve, job, report, modelMetadata, modelPredictions, positions, benchmarkOverlap] = await Promise.all([
     getEquityCurve(id),
     getJobByRunId(id),
     getReportByRunId(id),
     getModelMetadataByRunId(id),
     getModelPredictionsByRunId(id),
     getPositionsByRunId(id),
+    getBenchmarkOverlapStateForRun(run),
   ])
 
   const metrics = getMetrics(run.run_metrics)
@@ -79,7 +83,7 @@ export default async function RunDetailPage({ params }: { params: Promise<{ id: 
   const canGenerateReport = status === "completed" && equityCurve.length > 0
   const generateReportAction = generateRunReport.bind(null, id)
   const costsBps = run.costs_bps ?? 10
-  const benchmarkTicker = run.benchmark_ticker ?? "SPY"
+  const benchmarkTicker = getRunBenchmark(run)
 
   return (
     <AppShell title={run.name}>
@@ -165,6 +169,9 @@ export default async function RunDetailPage({ params }: { params: Promise<{ id: 
 
       {/* Job status panel — visible for queued / running runs */}
       <JobStatusPanel job={job} runStatus={status} />
+      {benchmarkOverlap.confirmed ? (
+        <BenchmarkOverlapWarning benchmark={benchmarkTicker} />
+      ) : null}
 
       {/* Tabs */}
       <Tabs defaultValue="overview" className="w-full">
@@ -196,7 +203,11 @@ export default async function RunDetailPage({ params }: { params: Promise<{ id: 
         </TabsList>
 
         <TabsContent value="overview" className="mt-4">
-          <OverviewTab metrics={metrics} equityCurve={equityCurve} />
+          <OverviewTab
+            metrics={metrics}
+            equityCurve={equityCurve}
+            benchmarkTicker={benchmarkTicker}
+          />
         </TabsContent>
         <TabsContent value="holdings" className="mt-4">
           <HoldingsTab predictions={modelPredictions} positions={positions} />

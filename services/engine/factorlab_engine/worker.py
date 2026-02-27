@@ -15,6 +15,12 @@ from .supabase_io import Job, SupabaseIO
 
 DEFAULT_ETF8_UNIVERSE = ["SPY", "QQQ", "IWM", "EFA", "EEM", "TLT", "GLD", "VNQ"]
 
+# ---------------------------------------------------------------------------
+# Backtest window requirements
+# ---------------------------------------------------------------------------
+MIN_SPAN_DAYS: int = 730    # 2 calendar years
+MIN_DATA_POINTS: int = 500  # ~2 years of daily trading data
+
 # Static preset baskets used for run-level reproducibility. These can be updated
 # later without changing the resolution precedence contract.
 UNIVERSE_PRESETS: dict[str, list[str]] = {
@@ -74,6 +80,61 @@ class BacktestResult:
   prediction_rows: list[dict[str, Any]] | None = None
   model_metadata: dict[str, Any] | None = None
   position_rows: list[dict[str, Any]] | None = None
+
+
+def validate_backtest_window(
+  dates: list[Any],
+  min_span_days: int = MIN_SPAN_DAYS,
+  min_data_points: int = MIN_DATA_POINTS,
+) -> tuple[bool, str]:
+  """Validate that a backtest has sufficient history.
+
+  Checks:
+    - At least ``min_data_points`` data points (default 500, ~2 yr daily).
+    - At least ``min_span_days`` calendar days between first and last date
+      (default 730, 2 years).
+
+  Detects monthly-cadence data (median inter-date gap > 20 days) and adjusts
+  the count-failure message to note that the 500-point guideline targets daily
+  data.
+
+  Returns:
+    (ok, reason): ok=True when all checks pass; reason is empty on success.
+  """
+  n = len(dates)
+  if n == 0:
+    return False, (
+      "No data points produced. Ensure data coverage for the requested date range."
+    )
+
+  ts_dates = sorted(pd.Timestamp(d) for d in dates)
+  span_days = (ts_dates[-1] - ts_dates[0]).days if n >= 2 else 0
+
+  # Detect daily vs monthly cadence from median inter-date gap.
+  is_monthly = False
+  if n >= 4:
+    gaps = [(ts_dates[i] - ts_dates[i - 1]).days for i in range(1, min(n, 11))]
+    median_gap = sorted(gaps)[len(gaps) // 2]
+    is_monthly = median_gap > 20
+
+  if n < min_data_points:
+    cadence_note = (
+      f" Note: the {min_data_points}-point guideline applies to daily data; "
+      "monthly backtests require a much longer time span to accumulate that many observations."
+    ) if is_monthly else ""
+    return False, (
+      f"Insufficient data: {n} data points (need >= {min_data_points}).{cadence_note} "
+      "Choose a longer date range or ensure data ingestion coverage."
+    ).strip()
+
+  if span_days < min_span_days:
+    return False, (
+      f"Backtest span is {span_days} days ({span_days / 365:.1f} years), "
+      f"but at least {min_span_days} days (2 years) are required for a robust backtest. "
+      "Choose an earlier start date or extend your date range."
+    )
+
+  return True, ""
 
 
 def _to_date(value: str) -> pd.Timestamp:
@@ -157,6 +218,20 @@ def _build_synthetic_result(start: str, end: str, seed: int = 7) -> BacktestResu
   metrics = _compute_metrics(pd.Series(daily_r, index=dates), turnover=0.12)
   rows = _equity_rows(dates, portfolio, benchmark)
   return BacktestResult(equity_rows=rows, metrics=metrics)
+
+
+def _resolve_run_benchmark_ticker(run: dict[str, Any]) -> str:
+  raw = run.get("benchmark") or run.get("benchmark_ticker") or os.getenv("FACTORLAB_BENCHMARK")
+  ticker = str(raw or "SPY").strip().upper()
+  return ticker or "SPY"
+
+
+def _select_available_benchmark_ticker(requested: str, columns: pd.Index) -> str:
+  if requested in columns:
+    return requested
+  if "SPY" in columns:
+    return "SPY"
+  return str(columns[0])
 
 
 def _download_prices(start: str, end: str, tickers: list[str]) -> pd.DataFrame:
@@ -313,8 +388,14 @@ def _compute_metrics(daily_returns: pd.Series, turnover: float) -> dict[str, flo
 def _equity_rows(
   dates: pd.Index, portfolio: pd.Series, benchmark: pd.Series
 ) -> list[dict[str, Any]]:
+  aligned_dates = (
+    pd.Index(dates)
+    .intersection(portfolio.index)
+    .intersection(benchmark.index)
+    .sort_values()
+  )
   rows: list[dict[str, Any]] = []
-  for dt in dates:
+  for dt in aligned_dates:
     rows.append(
       {
         "date": pd.Timestamp(dt).strftime("%Y-%m-%d"),
@@ -327,13 +408,15 @@ def _equity_rows(
 
 def _build_baseline_result(io: SupabaseIO, run: dict[str, Any]) -> BacktestResult:
   tickers = resolve_universe_symbols(run)
+  benchmark_ticker = _resolve_run_benchmark_ticker(run)
+  if benchmark_ticker not in tickers:
+    tickers = [*tickers, benchmark_ticker]
 
   prices = io.fetch_prices_frame(tickers, run["start_date"], run["end_date"])
   if prices.empty or prices.shape[0] < 40:
     prices = _download_prices(run["start_date"], run["end_date"], tickers)
   strat = run["strategy_id"]
   costs_bps = float(run.get("costs_bps") or 0.0)
-  benchmark_ticker = str(run.get("benchmark_ticker") or "SPY").upper()
   rebalance_positions: list[dict[str, Any]] = []
   if strat == "equal_weight":
     daily_rets, turnover, rebalance_turnover, rebalance_positions = _equal_weight(prices)
@@ -343,14 +426,12 @@ def _build_baseline_result(io: SupabaseIO, run: dict[str, Any]) -> BacktestResul
     raise ValueError(f"Unsupported baseline strategy: {strat}")
 
   daily_rets = _apply_rebalance_costs(daily_rets, rebalance_turnover, costs_bps)
-  bench_ticker = benchmark_ticker if benchmark_ticker in prices.columns else (
-    "SPY" if "SPY" in prices.columns else prices.columns[0]
-  )
+  bench_ticker = _select_available_benchmark_ticker(benchmark_ticker, prices.columns)
   benchmark_rets = prices[bench_ticker].pct_change().fillna(0.0)
 
   portfolio = 100_000.0 * (1.0 + daily_rets).cumprod()
-  benchmark = 100_000.0 * (1.0 + benchmark_rets).cumprod()
-  rows = _equity_rows(prices.index, portfolio, benchmark)
+  benchmark = 100_000.0 * (1.0 + benchmark_rets.reindex(portfolio.index).fillna(0.0)).cumprod()
+  rows = _equity_rows(portfolio.index, portfolio, benchmark)
   metrics = _compute_metrics(daily_rets, turnover)
 
   # Attach run_id to each position row
@@ -362,8 +443,9 @@ def _build_baseline_result(io: SupabaseIO, run: dict[str, Any]) -> BacktestResul
 
 def _build_ml_result(io: SupabaseIO, run: dict[str, Any]) -> BacktestResult:
   tickers = resolve_universe_symbols(run)
-  if "SPY" not in tickers:
-    tickers = ["SPY", *tickers]
+  requested_benchmark = _resolve_run_benchmark_ticker(run)
+  if requested_benchmark not in tickers:
+    tickers = [requested_benchmark, *tickers]
 
   warmup_years = int(os.getenv("ML_WARMUP_YEARS", "5"))
   warmup_start = (
@@ -374,9 +456,7 @@ def _build_ml_result(io: SupabaseIO, run: dict[str, Any]) -> BacktestResult:
   if prices.empty or prices.shape[0] < 260:
     prices = _download_prices(warmup_start, run["end_date"], tickers)
 
-  benchmark_ticker = str(run.get("benchmark_ticker") or "SPY").upper()
-  if benchmark_ticker not in prices.columns:
-    benchmark_ticker = "SPY" if "SPY" in prices.columns else prices.columns[0]
+  benchmark_ticker = _select_available_benchmark_ticker(requested_benchmark, prices.columns)
   ml = run_walk_forward(
     run_id=run["id"],
     strategy=run["strategy_id"],
@@ -426,6 +506,21 @@ def _process_job(io: SupabaseIO, job: Job) -> None:
       raise RuntimeError(f"Run not found for run_id={job.run_id}")
     resolve_and_snapshot_universe_symbols(io, run)
 
+    # Early span validation — fast-fail before any data fetch or computation.
+    try:
+      start_dt = pd.to_datetime(run["start_date"])
+      end_dt = pd.to_datetime(run["end_date"])
+      requested_span = (end_dt - start_dt).days
+    except Exception:
+      requested_span = 0
+    if requested_span < MIN_SPAN_DAYS:
+      raise ValueError(
+        f"Requested date range is too short: {requested_span} days "
+        f"({requested_span / 365:.1f} years). "
+        f"A robust backtest requires at least {MIN_SPAN_DAYS} days (2 years). "
+        "Please choose an earlier start date."
+      )
+
     strategy = run["strategy_id"]
     if strategy in {"ml_ridge", "ml_lightgbm"}:
       io.update_job_progress(job.id, stage="features", progress=30)
@@ -435,6 +530,14 @@ def _process_job(io: SupabaseIO, job: Job) -> None:
       io.update_job_progress(job.id, stage="backtest", progress=70)
 
     result = _run_backtest(io, run)
+
+    # Post-backtest validation — check actual equity-curve size and span.
+    if result.equity_rows:
+      equity_dates = [pd.to_datetime(row["date"]) for row in result.equity_rows]
+      ok, reason = validate_backtest_window(equity_dates)
+      if not ok:
+        raise ValueError(reason)
+
     io.update_job_progress(job.id, stage="report", progress=95)
     duration = int((datetime.utcnow() - started).total_seconds())
     io.save_success(
