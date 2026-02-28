@@ -2,10 +2,10 @@ import { Card } from "@/components/ui/card"
 
 export function LoginVisual() {
   return (
-    <div className="relative flex h-full min-h-[220px] items-center justify-center overflow-hidden bg-[linear-gradient(140deg,#090c12_0%,#0f141f_45%,#090c12_100%)] p-4 sm:p-6 lg:p-9">
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_74%_18%,rgba(40,199,130,0.14),transparent_42%),radial-gradient(circle_at_20%_78%,rgba(40,199,130,0.08),transparent_45%)]" />
+    <div className="relative flex h-full w-full min-h-[220px] items-center justify-center overflow-hidden p-4 sm:p-5 lg:min-h-0 lg:p-5">
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_74%_18%,rgba(40,199,130,0.1),transparent_42%),radial-gradient(circle_at_20%_78%,rgba(40,199,130,0.05),transparent_45%)]" />
 
-      <Card className="relative w-full max-w-2xl border-white/10 bg-black/25 p-3 shadow-[0_30px_70px_-35px_rgba(0,0,0,0.95)] backdrop-blur-sm sm:p-5">
+      <Card className="relative mx-auto w-full max-w-[86%] border-white/25 bg-black/25 p-3 shadow-[0_30px_70px_-35px_rgba(0,0,0,0.95)] backdrop-blur-sm sm:p-4 lg:p-5">
         <div className="absolute -right-10 -top-10 size-28 rounded-full bg-primary/20 blur-2xl" />
         <div className="absolute -bottom-8 -left-10 size-24 rounded-full bg-primary/15 blur-2xl" />
 
@@ -13,7 +13,7 @@ export function LoginVisual() {
           viewBox="0 0 700 440"
           role="img"
           aria-label="Isometric quant dashboard illustration"
-          className="relative w-full"
+          className="relative w-full max-h-[46vh] lg:max-h-[52vh]"
         >
           <defs>
             <linearGradient id="panelA" x1="0%" y1="0%" x2="100%" y2="100%">
@@ -50,7 +50,7 @@ export function LoginVisual() {
           <rect x="468" y="118" width="78" height="10" rx="5" fill="#5fcfa0" fillOpacity="0.3" />
         </svg>
 
-        <p className="mt-2 text-center text-sm font-medium tracking-wide text-white/65 sm:text-base">
+        <p className="mt-1 text-center text-xs font-medium tracking-[0.01em] text-white/62 sm:text-sm">
           Backtest. Compare. Report.
         </p>
       </Card>

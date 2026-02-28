@@ -75,55 +75,53 @@ export function LoginForm() {
   const signUpError = signUpState?.error ? formatFriendlyError(signUpState.error) : null
 
   const inputClassName =
-    "h-10 border-white/10 bg-white/5 text-white/90 placeholder:text-white/45 focus-visible:border-primary/70 focus-visible:ring-primary/40"
+    "h-9 border-white/10 bg-white/[0.07] text-white/90 placeholder:text-white/45 transition-colors hover:border-white/20 focus-visible:border-primary/70 focus-visible:ring-2 focus-visible:ring-primary/45"
   const primaryButtonClassName =
-    "h-10 w-full bg-primary text-primary-foreground shadow-[0_14px_28px_-14px_rgba(40,199,130,0.7)] hover:bg-primary/90"
+    "h-9 w-full bg-gradient-to-b from-primary to-primary/90 text-primary-foreground shadow-[0_12px_24px_-14px_rgba(40,199,130,0.75)] transition-all duration-150 hover:-translate-y-0.5 hover:from-primary/95 hover:to-primary/85 hover:shadow-[0_18px_34px_-14px_rgba(40,199,130,0.85)]"
 
   return (
-    <div className="flex h-full flex-col">
-      <div className="space-y-3">
-        <div className="space-y-2">
-          <Logo className="[&_span]:!text-[24px]" size={26} />
-          <div className="space-y-1">
-            <h1 className="text-xl font-semibold tracking-tight text-white/90">
-              {activeTab === "signin" ? "Sign in" : "Create account"}
-            </h1>
-            <p className="text-sm text-white/60">
-              Quant research dashboard for backtests and reports.
-            </p>
+    <div className="flex h-full min-h-full flex-col pb-12">
+      <div className="space-y-2.5">
+        <div className="space-y-1">
+          <div className="flex items-center gap-2">
+            <Logo className="[&_span]:!text-[20px]" size={20} />
           </div>
+          <h1 className="text-[1.15rem] font-semibold tracking-tight text-white/92">
+            {activeTab === "signin" ? "Sign in" : "Create account"}
+          </h1>
+          <p className="text-sm text-white/60">Quant research dashboard for backtests and reports.</p>
         </div>
 
         <Tabs
           value={activeTab}
           onValueChange={(value) => switchTab(value as "signin" | "signup")}
-          className="w-full gap-3"
+          className="w-full gap-2"
         >
-          <TabsList className="grid h-10 w-full grid-cols-2 border border-white/10 bg-white/5 p-1">
+          <TabsList className="grid h-9 w-full grid-cols-2 border border-white/10 bg-white/5 p-1">
             <TabsTrigger
               value="signin"
-              className="text-sm text-white/60 data-[state=active]:border-transparent data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-none"
+              className="relative text-sm text-white/45 transition-colors data-[state=active]:border-white/10 data-[state=active]:bg-white/18 data-[state=active]:font-semibold data-[state=active]:text-white data-[state=active]:shadow-none data-[state=active]:after:absolute data-[state=active]:after:bottom-1 data-[state=active]:after:left-1/2 data-[state=active]:after:h-px data-[state=active]:after:w-8 data-[state=active]:after:-translate-x-1/2 data-[state=active]:after:bg-primary/85"
             >
-              Sign In
+              Sign in
             </TabsTrigger>
             <TabsTrigger
               value="signup"
-              className="text-sm text-white/60 data-[state=active]:border-transparent data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-none"
+              className="relative text-sm text-white/45 transition-colors data-[state=active]:border-white/10 data-[state=active]:bg-white/18 data-[state=active]:font-semibold data-[state=active]:text-white data-[state=active]:shadow-none data-[state=active]:after:absolute data-[state=active]:after:bottom-1 data-[state=active]:after:left-1/2 data-[state=active]:after:h-px data-[state=active]:after:w-8 data-[state=active]:after:-translate-x-1/2 data-[state=active]:after:bg-primary/85"
             >
-              Create Account
+              Create account
             </TabsTrigger>
           </TabsList>
 
-          <TabsContent value="signin" className="mt-0 min-h-[274px] sm:min-h-[292px]">
+          <TabsContent value="signin" className="mt-0 min-h-[212px] sm:min-h-[224px]">
             <form
               action={signInAction_}
               onSubmit={() => {
                 setGuestError(null)
                 setPasswordMismatchError(null)
               }}
-              className="space-y-3"
+              className="space-y-2.5"
             >
-              <div className="space-y-2">
+              <div className="space-y-1.5">
                 <Label htmlFor="signin-email" className="text-xs font-medium text-white/60">
                   Email
                 </Label>
@@ -139,7 +137,7 @@ export function LoginForm() {
                   className={inputClassName}
                 />
               </div>
-              <div className="space-y-2">
+              <div className="space-y-1.5">
                 <Label htmlFor="signin-password" className="text-xs font-medium text-white/60">
                   Password
                 </Label>
@@ -195,7 +193,7 @@ export function LoginForm() {
             </form>
           </TabsContent>
 
-          <TabsContent value="signup" className="mt-0 min-h-[274px] sm:min-h-[292px]">
+          <TabsContent value="signup" className="mt-0 min-h-[212px] sm:min-h-[224px]">
             <form
               action={signUpAction_}
               onSubmit={(event) => {
@@ -207,9 +205,9 @@ export function LoginForm() {
                 }
                 setPasswordMismatchError(null)
               }}
-              className="space-y-3"
+              className="space-y-2.5"
             >
-              <div className="space-y-2">
+              <div className="space-y-1.5">
                 <Label htmlFor="signup-email" className="text-xs font-medium text-white/60">
                   Email
                 </Label>
@@ -225,7 +223,7 @@ export function LoginForm() {
                   className={inputClassName}
                 />
               </div>
-              <div className="space-y-2">
+              <div className="space-y-1.5">
                 <Label htmlFor="signup-password" className="text-xs font-medium text-white/60">
                   Password
                 </Label>
@@ -242,7 +240,7 @@ export function LoginForm() {
                   className={inputClassName}
                 />
               </div>
-              <div className="space-y-2">
+              <div className="space-y-1.5">
                 <Label
                   htmlFor="signup-confirm-password"
                   className="text-xs font-medium text-white/60"
@@ -315,7 +313,7 @@ export function LoginForm() {
           onClick={handleGuest}
           disabled={isAnyPending}
           aria-disabled={isAnyPending}
-          className="h-10 w-full border-white/15 bg-transparent text-white/70 hover:border-primary/40 hover:bg-primary/10 hover:text-primary"
+          className="h-8 w-full border-white/18 bg-transparent text-[0.83rem] text-white/72 hover:border-primary/35 hover:bg-primary/10 hover:text-primary"
         >
           {isGuestPending ? (
             <>
@@ -328,11 +326,6 @@ export function LoginForm() {
         </Button>
       </div>
 
-      <p className="mt-3 text-xs text-white/45">
-        FactorLab • Quant Research Dashboard
-        <br />
-        Not financial advice.
-      </p>
     </div>
   )
 }
