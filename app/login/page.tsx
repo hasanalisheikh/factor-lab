@@ -10,11 +10,6 @@ export default function LoginPage() {
         <div className="relative z-10 grid h-full grid-cols-1 lg:grid-cols-5">
           <section className="relative order-2 border-t border-white/10 bg-card/96 p-4 sm:p-5 lg:order-1 lg:col-span-2 lg:h-full lg:border-t-0 lg:border-r lg:p-4">
             <LoginForm />
-            <p className="absolute bottom-4 left-4 text-xs text-white/45 sm:bottom-5 sm:left-5 lg:bottom-4 lg:left-4">
-              FactorLab • Quant Research Dashboard
-              <br />
-              Not financial advice.
-            </p>
           </section>
           <section className="order-1 min-h-[180px] overflow-hidden lg:order-2 lg:col-span-3 lg:h-full lg:min-h-0">
             <LoginVisual />
