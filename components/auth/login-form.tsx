@@ -81,10 +81,10 @@ export function LoginForm() {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="space-y-4">
-        <div className="space-y-2.5">
+      <div className="space-y-3">
+        <div className="space-y-2">
           <Logo className="[&_span]:!text-[24px]" size={26} />
-          <div className="space-y-1.5">
+          <div className="space-y-1">
             <h1 className="text-xl font-semibold tracking-tight text-white/90">
               {activeTab === "signin" ? "Sign in" : "Create account"}
             </h1>
@@ -97,7 +97,7 @@ export function LoginForm() {
         <Tabs
           value={activeTab}
           onValueChange={(value) => switchTab(value as "signin" | "signup")}
-          className="w-full gap-4"
+          className="w-full gap-3"
         >
           <TabsList className="grid h-10 w-full grid-cols-2 border border-white/10 bg-white/5 p-1">
             <TabsTrigger
@@ -114,14 +114,14 @@ export function LoginForm() {
             </TabsTrigger>
           </TabsList>
 
-          <TabsContent value="signin" className="mt-0 min-h-[320px] sm:min-h-[342px]">
+          <TabsContent value="signin" className="mt-0 min-h-[274px] sm:min-h-[292px]">
             <form
               action={signInAction_}
               onSubmit={() => {
                 setGuestError(null)
                 setPasswordMismatchError(null)
               }}
-              className="space-y-3.5"
+              className="space-y-3"
             >
               <div className="space-y-2">
                 <Label htmlFor="signin-email" className="text-xs font-medium text-white/60">
@@ -195,7 +195,7 @@ export function LoginForm() {
             </form>
           </TabsContent>
 
-          <TabsContent value="signup" className="mt-0 min-h-[320px] sm:min-h-[342px]">
+          <TabsContent value="signup" className="mt-0 min-h-[274px] sm:min-h-[292px]">
             <form
               action={signUpAction_}
               onSubmit={(event) => {
@@ -207,7 +207,7 @@ export function LoginForm() {
                 }
                 setPasswordMismatchError(null)
               }}
-              className="space-y-3.5"
+              className="space-y-3"
             >
               <div className="space-y-2">
                 <Label htmlFor="signup-email" className="text-xs font-medium text-white/60">
@@ -303,8 +303,6 @@ export function LoginForm() {
           </TabsContent>
         </Tabs>
 
-        <div className="h-px w-full bg-white/10" />
-
         {guestError && (
           <Alert variant="destructive" className="border-destructive/40 bg-destructive/10">
             <AlertCircle className="size-4" />
@@ -330,7 +328,7 @@ export function LoginForm() {
         </Button>
       </div>
 
-      <p className="mt-5 text-xs text-white/45">
+      <p className="mt-3 text-xs text-white/45">
         FactorLab • Quant Research Dashboard
         <br />
         Not financial advice.
