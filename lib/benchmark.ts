@@ -9,7 +9,7 @@ export const BENCHMARK_OPTIONS = [
   "VNQ",
 ] as const
 
-type StrategyId = "equal_weight" | "momentum_12_1" | "ml_ridge" | "ml_lightgbm"
+type StrategyId = "equal_weight" | "momentum_12_1" | "ml_ridge" | "ml_lightgbm" | "low_vol" | "trend_filter"
 
 type PositionSnapshot = {
   date: string
@@ -64,6 +64,16 @@ export function inferPossibleOverlapFromUniverse(params: {
   if (!universe.has(benchmark)) return false
 
   const strategyId = params.strategyId as StrategyId | null | undefined
-  return strategyId === "equal_weight" || strategyId === "momentum_12_1" || strategyId === "ml_ridge" || strategyId === "ml_lightgbm"
+  return (
+    strategyId === "equal_weight" ||
+    strategyId === "momentum_12_1" ||
+    strategyId === "ml_ridge" ||
+    strategyId === "ml_lightgbm" ||
+    strategyId === "low_vol"
+    // trend_filter uses benchmark for the trend signal but selects from universe (not benchmark).
+    // momentum_12_1 selection is applied in risk-on mode; overlap depends on universe content.
+    // We still check: if benchmark is in universe and strategy picks from universe → possible.
+    || strategyId === "trend_filter"
+  )
 }
 

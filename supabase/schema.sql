@@ -9,7 +9,7 @@ CREATE TABLE runs (
   id           UUID        PRIMARY KEY DEFAULT uuid_generate_v4(),
   name         TEXT        NOT NULL,
   strategy_id  TEXT        NOT NULL
-                           CHECK (strategy_id IN ('equal_weight', 'momentum_12_1', 'ml_ridge', 'ml_lightgbm')),
+                           CHECK (strategy_id IN ('equal_weight', 'momentum_12_1', 'ml_ridge', 'ml_lightgbm', 'low_vol', 'trend_filter')),
   status       TEXT        NOT NULL DEFAULT 'queued'
                            CHECK (status IN ('queued', 'running', 'completed', 'failed')),
   benchmark    TEXT        NOT NULL DEFAULT 'SPY',
@@ -107,6 +107,13 @@ CREATE TABLE features_monthly (
   reversal      NUMERIC     NOT NULL,
   volatility    NUMERIC     NOT NULL,
   beta          NUMERIC     NOT NULL,
+  momentum_12_1 NUMERIC,
+  momentum_6_1  NUMERIC,
+  reversal_1m   NUMERIC,
+  vol_20d       NUMERIC,
+  vol_60d       NUMERIC,
+  beta_60d      NUMERIC,
+  drawdown_6m   NUMERIC,
   drawdown      NUMERIC     NOT NULL,
   created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE (ticker, date)
@@ -150,8 +157,7 @@ CREATE TABLE model_predictions (
 
 -- ─── positions ───────────────────────────────────────────────────────────────
 -- Rebalance-date holdings snapshot for all strategy runs.
--- Worker writes here for baseline strategies (equal_weight, momentum_12_1).
--- ML strategies derive holdings from model_predictions.
+-- Worker writes here for baseline and ML strategies.
 CREATE TABLE positions (
   run_id  UUID    NOT NULL REFERENCES runs (id) ON DELETE CASCADE,
   date    DATE    NOT NULL,

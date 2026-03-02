@@ -1,15 +1,30 @@
 "use server"
 
 import { redirect } from "next/navigation"
+import { spawn } from "child_process"
+import path from "path"
 import { z } from "zod"
 import { createAdminClient } from "@/lib/supabase/admin"
+import { createClient } from "@/lib/supabase/server"
 import { BENCHMARK_OPTIONS } from "@/lib/benchmark"
+
+function spawnWorker() {
+  const engineDir = path.join(process.cwd(), "services", "engine")
+  const python = path.join(engineDir, ".venv", "bin", "python")
+  const child = spawn(python, ["-m", "factorlab_engine.worker"], {
+    cwd: engineDir,
+    env: { ...process.env, RUN_ONCE: "1" },
+    detached: true,
+    stdio: "ignore",
+  })
+  child.unref()
+}
 
 const schema = z
   .object({
     name: z.string().min(1, "Name is required").max(120, "Name too long"),
     strategy_id: z.enum(
-      ["equal_weight", "momentum_12_1", "ml_ridge", "ml_lightgbm"],
+      ["equal_weight", "momentum_12_1", "ml_ridge", "ml_lightgbm", "low_vol", "trend_filter"],
       { message: "Select a valid strategy" }
     ),
     start_date: z
@@ -29,6 +44,18 @@ const schema = z
       .int("Top N must be an integer")
       .min(1, "Top N must be at least 1")
       .max(100, "Top N too high"),
+    initial_capital: z.coerce
+      .number({ invalid_type_error: "Initial capital must be a number" })
+      .positive("Initial capital must be positive")
+      .max(1e10, "Initial capital too large")
+      .default(100000),
+    apply_costs: z.string().optional(),
+    slippage_bps: z.coerce
+      .number()
+      .min(0)
+      .max(500)
+      .default(0)
+      .catch(0),
   })
   .refine((d) => d.end_date > d.start_date, {
     message: "End date must be after start date",
@@ -78,7 +105,20 @@ export async function createRun(
     universe,
     costs_bps,
     top_n,
+    initial_capital,
+    apply_costs,
+    slippage_bps,
   } = parsed.data
+
+  const applyCostsFlag = apply_costs === "on"
+  const effectiveCostsBps = applyCostsFlag ? costs_bps : 0
+
+  // Verify authentication and get the current user's ID
+  const serverClient = await createClient()
+  const { data: { user } } = await serverClient.auth.getUser()
+  if (!user) {
+    return { error: "Authentication required. Please sign in." }
+  }
 
   const supabase = createAdminClient()
 
@@ -90,14 +130,18 @@ export async function createRun(
     end_date,
     benchmark_ticker: benchmark,
     universe,
-    costs_bps,
+    costs_bps: effectiveCostsBps,
     top_n,
+    user_id: user.id,
     run_params: {
       universe,
       benchmark,
       benchmark_ticker: benchmark,
-      costs_bps,
+      costs_bps: effectiveCostsBps,
       top_n,
+      initial_capital,
+      slippage_bps,
+      apply_costs: applyCostsFlag,
       created_via: "runs/new",
     },
   }
@@ -138,6 +182,8 @@ export async function createRun(
     console.error("createRun job insert error:", jobError.message)
     // Run was created — don't fail, just log
   }
+
+  spawnWorker()
 
   redirect(`/runs/${run.id}`)
 }
