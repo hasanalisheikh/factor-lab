@@ -63,17 +63,16 @@ export function inferPossibleOverlapFromUniverse(params: {
   const universe = new Set((params.universeSymbols ?? []).map((s) => s.toUpperCase()))
   if (!universe.has(benchmark)) return false
 
+  // All six strategies select from the universe (risk-on mode for trend_filter),
+  // so if the benchmark ticker is in the universe it may be held.
   const strategyId = params.strategyId as StrategyId | null | undefined
   return (
     strategyId === "equal_weight" ||
     strategyId === "momentum_12_1" ||
     strategyId === "ml_ridge" ||
     strategyId === "ml_lightgbm" ||
-    strategyId === "low_vol"
-    // trend_filter uses benchmark for the trend signal but selects from universe (not benchmark).
-    // momentum_12_1 selection is applied in risk-on mode; overlap depends on universe content.
-    // We still check: if benchmark is in universe and strategy picks from universe → possible.
-    || strategyId === "trend_filter"
+    strategyId === "low_vol" ||
+    strategyId === "trend_filter"
   )
 }
 
