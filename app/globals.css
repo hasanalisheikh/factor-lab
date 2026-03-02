@@ -137,19 +137,37 @@
   }
   html {
     font-size: 17px;
+    overflow-x: hidden;
   }
   body {
     @apply bg-background text-foreground;
-    zoom: var(--ui-scale);
+    overflow-x: hidden;
   }
+}
 
-  /* Fallback for engines without CSS zoom support. */
-  @supports not (zoom: 1) {
-    body {
-      transform: scale(var(--ui-scale));
-      transform-origin: top left;
-      width: calc(100% / var(--ui-scale));
-      min-height: calc(100vh / var(--ui-scale));
-    }
-  }
+/* ── UI zoom wrapper ─────────────────────────────────────────────────────
+   Zoom lives on a wrapper div (not body) so that Radix UI portals that
+   render directly to <body> are in an un-zoomed coordinate space.
+   floating-ui v1 reads getBoundingClientRect() in visual (zoomed) px
+   but writes CSS transform px — when both live in the same zoom context
+   positions are multiplied by the zoom factor and fly off-screen.
+   With zoom on a child div the portal at body-level is 1× so positions
+   land correctly; portal *content* gets its own zoom below.
+── */
+.app-zoom {
+  zoom: var(--ui-scale);
+  /* Keep the div from overflowing the body width */
+  width: calc(100% / var(--ui-scale));
+  /* Clip any internal overflow so it never creates a body-level scrollbar */
+  overflow-x: hidden;
+}
+
+/* Restore visual scale for Radix popper portal content.
+   These elements render at <body> level (outside .app-zoom) so they
+   need their own zoom to appear the same size as the rest of the UI. */
+[data-slot="popover-content"],
+[data-slot="dropdown-menu-content"],
+[data-slot="select-content"],
+[data-slot="tooltip-content"] {
+  zoom: var(--ui-scale);
 }

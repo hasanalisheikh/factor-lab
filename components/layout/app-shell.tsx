@@ -51,8 +51,8 @@ export function AppShell({
   return (
     <>
       <Topbar title={title} />
-      <main ref={mainRef} className="flex-1 overflow-y-auto">
-        <div className="p-4 lg:p-6 flex flex-col gap-4 max-w-[1440px]">
+      <main ref={mainRef} className="flex-1 overflow-y-auto min-w-0 w-full">
+        <div className="p-4 lg:p-6 flex flex-col gap-4 w-full">
           {children}
         </div>
       </main>
