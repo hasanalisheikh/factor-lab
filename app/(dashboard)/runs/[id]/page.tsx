@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/badge"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { AppShell } from "@/components/layout/app-shell"
 import { StatusBadge } from "@/components/status-badge"
-import { OverviewTab } from "@/components/run-detail/overview-tab"
+import { OverviewTab, type RunConfig } from "@/components/run-detail/overview-tab"
 import { HoldingsTab } from "@/components/run-detail/holdings-tab"
 import { TradesTab } from "@/components/run-detail/trades-tab"
 import { MlInsightsTab } from "@/components/run-detail/ml-insights-tab"
@@ -98,6 +98,17 @@ export default async function RunDetailPage({ params }: { params: Promise<{ id: 
   const costsBps = run.costs_bps ?? 10
   const benchmarkTicker = getRunBenchmark(run)
   const isMlRun = run.strategy_id === "ml_ridge" || run.strategy_id === "ml_lightgbm"
+
+  const runConfig: RunConfig = {
+    strategyLabel,
+    universe: universePreset,
+    universeCount,
+    benchmark: benchmarkTicker,
+    startDate: run.start_date ?? null,
+    endDate: run.end_date ?? null,
+    costsBps,
+    topN: run.top_n ?? null,
+  }
 
   return (
     <AppShell title={run.name}>
@@ -224,6 +235,7 @@ export default async function RunDetailPage({ params }: { params: Promise<{ id: 
             metrics={metrics}
             equityCurve={equityCurve}
             benchmarkTicker={benchmarkTicker}
+            runConfig={runConfig}
           />
         </TabsContent>
         <TabsContent value="holdings" className="mt-4">

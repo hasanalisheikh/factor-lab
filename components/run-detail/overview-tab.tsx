@@ -8,7 +8,7 @@ import {
   type ChartConfig,
 } from "@/components/ui/chart"
 import { Area, AreaChart, CartesianGrid, XAxis, YAxis } from "recharts"
-import type { RunMetricsRow, EquityCurveRow } from "@/lib/supabase/queries"
+import type { RunMetricsRow, EquityCurveRow } from "@/lib/supabase/types"
 
 const ddConfig = {
   drawdown: { label: "Drawdown", color: "var(--color-chart-4)" },
@@ -34,13 +34,25 @@ const metricDefs: { key: keyof RunMetricsRow; label: string; format: (v: number)
   { key: "calmar", label: "Calmar", format: (v) => v.toFixed(2) },
 ]
 
+export type RunConfig = {
+  strategyLabel: string
+  universe: string
+  universeCount: number | null
+  benchmark: string
+  startDate: string | null
+  endDate: string | null
+  costsBps: number
+  topN: number | null
+}
+
 interface OverviewTabProps {
   metrics: RunMetricsRow | null
   equityCurve: EquityCurveRow[]
   benchmarkTicker: string
+  runConfig?: RunConfig
 }
 
-export function OverviewTab({ metrics, equityCurve, benchmarkTicker }: OverviewTabProps) {
+export function OverviewTab({ metrics, equityCurve, benchmarkTicker, runConfig }: OverviewTabProps) {
   const equityConfig = {
     portfolio: { label: "Portfolio", color: "var(--color-chart-1)" },
     benchmark: { label: benchmarkTicker, color: "var(--color-chart-5)" },
@@ -169,6 +181,52 @@ export function OverviewTab({ metrics, equityCurve, benchmarkTicker }: OverviewT
           )}
         </CardContent>
       </Card>
+
+      {/* Assumptions */}
+      {runConfig && (
+        <Card className="bg-card border-border">
+          <CardHeader className="pb-1 px-4 pt-4">
+            <CardTitle className="text-[13px] font-medium text-card-foreground">
+              Run Configuration &amp; Assumptions
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="px-4 pb-4">
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-6 gap-y-2.5 text-[12px]">
+              {[
+                { label: "Strategy", value: runConfig.strategyLabel },
+                {
+                  label: "Universe",
+                  value: runConfig.universeCount != null
+                    ? `${runConfig.universe} (${runConfig.universeCount} assets)`
+                    : runConfig.universe,
+                },
+                { label: "Benchmark", value: runConfig.benchmark },
+                {
+                  label: "Period",
+                  value: runConfig.startDate && runConfig.endDate
+                    ? `${runConfig.startDate.slice(0, 7)} – ${runConfig.endDate.slice(0, 7)}`
+                    : "—",
+                },
+                { label: "Costs", value: `${runConfig.costsBps} bps per rebalance` },
+                { label: "Rebalance", value: "Monthly" },
+                { label: "Construction", value: "Equal weight" },
+                ...(runConfig.topN != null ? [{ label: "Top N", value: String(runConfig.topN) }] : []),
+              ].map(({ label, value }) => (
+                <div key={label} className="flex flex-col gap-0.5">
+                  <span className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">
+                    {label}
+                  </span>
+                  <span className="text-foreground/90">{value}</span>
+                </div>
+              ))}
+            </div>
+            <p className="mt-3 text-[11px] text-muted-foreground border-t border-border/40 pt-2.5">
+              Research only — not financial advice. Survivorship bias not accounted for.
+              Cost model applies flat bps × turnover; market impact and bid-ask spread are not modeled.
+            </p>
+          </CardContent>
+        </Card>
+      )}
     </div>
   )
 }
