@@ -10,15 +10,9 @@ import {
 } from "@/components/ui/chart"
 import { NativeSelect } from "@/components/ui/native-select"
 import { Line, LineChart, CartesianGrid, XAxis, YAxis } from "recharts"
-import type { CompareRunBundle, RunWithMetrics, RunMetricsRow } from "@/lib/supabase/queries"
+import type { CompareRunBundle, RunWithMetrics, RunMetricsRow } from "@/lib/supabase/types"
 import { STRATEGY_LABELS, type StrategyId } from "@/lib/types"
-
-const config = {
-  runA: { label: "Run A", color: "var(--color-chart-1)" },
-  runB: { label: "Run B", color: "var(--color-chart-5)" },
-  benchA: { label: "SPY A", color: "var(--color-chart-2)" },
-  benchB: { label: "SPY B", color: "var(--color-chart-4)" },
-} satisfies ChartConfig
+import { getRunBenchmark } from "@/lib/benchmark"
 
 function extractMetrics(run: RunWithMetrics): RunMetricsRow | null {
   if (!run.run_metrics) return null
@@ -76,6 +70,16 @@ export function CompareWorkbench({ bundles, strategyRuns = [] }: Props) {
 
   const runA = bundles.find((b) => b.run.id === runAId) ?? null
   const runB = bundles.find((b) => b.run.id === runBId) ?? null
+
+  const benchLabelA = runA ? getRunBenchmark(runA.run) : "Benchmark"
+  const benchLabelB = runB ? getRunBenchmark(runB.run) : "Benchmark"
+
+  const config = useMemo(() => ({
+    runA: { label: "Run A", color: "var(--color-chart-1)" },
+    runB: { label: "Run B", color: "var(--color-chart-5)" },
+    benchA: { label: `${benchLabelA} (A)`, color: "var(--color-chart-2)" },
+    benchB: { label: `${benchLabelB} (B)`, color: "var(--color-chart-4)" },
+  }) satisfies ChartConfig, [benchLabelA, benchLabelB])
 
   const chartData = useMemo(() => {
     if (!runA || !runB) return []
