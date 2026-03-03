@@ -16,8 +16,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from factorlab_engine.worker import _low_vol, _trend_filter, _TREND_SMA_WINDOW
-
+from factorlab_engine.worker import _TREND_SMA_WINDOW, _low_vol, _trend_filter
 
 # ---------------------------------------------------------------------------
 # Helpers

@@ -6,7 +6,6 @@ import pytest
 
 from factorlab_engine.ml import FEATURE_COLUMNS, compute_monthly_features, run_walk_forward
 
-
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _make_prices(n_months: int = 60, n_assets: int = 5, seed: int = 42) -> pd.DataFrame:

@@ -9,7 +9,6 @@ import yfinance as yf
 
 from .supabase_io import SupabaseIO
 
-
 SP100_TICKERS = [
   "AAPL", "ABBV", "ABT", "ACN", "ADBE", "AIG", "AMD", "AMGN", "AMT", "AMZN",
   "AVGO", "AXP", "BA", "BAC", "BK", "BKNG", "BLK", "BMY", "C", "CAT",
