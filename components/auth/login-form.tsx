@@ -75,46 +75,46 @@ export function LoginForm() {
   const signUpError = signUpState?.error ? formatFriendlyError(signUpState.error) : null
 
   const inputClassName =
-    "h-9 border-white/10 bg-white/[0.07] text-white/90 placeholder:text-white/45 transition-colors hover:border-white/20 focus-visible:border-primary/70 focus-visible:ring-2 focus-visible:ring-primary/45"
+    "h-9 border-white/10 bg-white/5 text-white/90 placeholder:text-white/45 focus-visible:border-primary/70 focus-visible:ring-primary/40"
   const primaryButtonClassName =
-    "h-9 w-full bg-gradient-to-b from-primary to-primary/90 text-primary-foreground shadow-[0_12px_24px_-14px_rgba(40,199,130,0.75)] transition-all duration-150 hover:-translate-y-0.5 hover:from-primary/95 hover:to-primary/85 hover:shadow-[0_18px_34px_-14px_rgba(40,199,130,0.85)]"
+    "h-9 w-full bg-primary text-primary-foreground shadow-[0_14px_28px_-14px_rgba(40,199,130,0.7)] hover:bg-primary/90"
 
   return (
-    <div className="flex h-full min-h-full flex-col">
+    <div className="flex h-full flex-col">
       <div className="space-y-2.5">
-        <div className="space-y-4">
-          <div className="flex justify-center">
-            <Logo className="[&_span]:!text-[20px]" size={20} />
-          </div>
-          <div className="space-y-2">
-            <h1 className="text-[1.15rem] font-semibold tracking-tight text-white/92">
+        <div className="space-y-1.5">
+          <Logo className="[&_span]:!text-[24px]" size={26} />
+          <div className="space-y-0.5">
+            <h1 className="text-xl font-semibold tracking-tight text-white/90">
               {activeTab === "signin" ? "Sign in" : "Create account"}
             </h1>
             <p className="text-sm text-white/60">
               Quant research dashboard for backtests and reports.
             </p>
           </div>
-          <Tabs
-            value={activeTab}
-            onValueChange={(value) => switchTab(value as "signin" | "signup")}
-            className="w-full gap-2"
-          >
-            <TabsList className="grid h-9 w-full grid-cols-2 border border-white/10 bg-white/5 p-1">
-              <TabsTrigger
-                value="signin"
-                className="text-sm text-white/50 transition-colors data-[state=active]:border-white/10 data-[state=active]:bg-white/16 data-[state=active]:font-semibold data-[state=active]:text-white/90 data-[state=active]:shadow-none"
-              >
-                Sign in
-              </TabsTrigger>
-              <TabsTrigger
-                value="signup"
-                className="text-sm text-white/50 transition-colors data-[state=active]:border-white/10 data-[state=active]:bg-white/16 data-[state=active]:font-semibold data-[state=active]:text-white/90 data-[state=active]:shadow-none"
-              >
-                Create account
-              </TabsTrigger>
-            </TabsList>
+        </div>
 
-          <TabsContent value="signin" className="mt-0 min-h-[198px] sm:min-h-[210px]">
+        <Tabs
+          value={activeTab}
+          onValueChange={(value) => switchTab(value as "signin" | "signup")}
+          className="w-full gap-2"
+        >
+          <TabsList className="grid h-9 w-full grid-cols-2 border border-white/10 bg-white/5 p-1">
+            <TabsTrigger
+              value="signin"
+              className="text-sm text-white/60 data-[state=active]:border-transparent data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-none"
+            >
+              Sign In
+            </TabsTrigger>
+            <TabsTrigger
+              value="signup"
+              className="text-sm text-white/60 data-[state=active]:border-transparent data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-none"
+            >
+              Create Account
+            </TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="signin" className="mt-0 min-h-[240px] sm:min-h-[252px]">
             <form
               action={signInAction_}
               onSubmit={() => {
@@ -195,7 +195,7 @@ export function LoginForm() {
             </form>
           </TabsContent>
 
-          <TabsContent value="signup" className="mt-0 min-h-[198px] sm:min-h-[210px]">
+          <TabsContent value="signup" className="mt-0 min-h-[240px] sm:min-h-[252px]">
             <form
               action={signUpAction_}
               onSubmit={(event) => {
@@ -235,12 +235,15 @@ export function LoginForm() {
                   type="password"
                   autoComplete="new-password"
                   required
-                  minLength={6}
+                  minLength={8}
                   value={signUpPassword}
                   onChange={(event) => setSignUpPassword(event.target.value)}
                   disabled={isAnyPending}
                   className={inputClassName}
                 />
+                <p className="text-[11px] text-white/40">
+                  8+ characters, one uppercase letter, one special character
+                </p>
               </div>
               <div className="space-y-1.5">
                 <Label
@@ -301,8 +304,7 @@ export function LoginForm() {
               </p>
             </form>
           </TabsContent>
-          </Tabs>
-        </div>
+        </Tabs>
 
         {guestError && (
           <Alert variant="destructive" className="border-destructive/40 bg-destructive/10">
@@ -316,7 +318,7 @@ export function LoginForm() {
           onClick={handleGuest}
           disabled={isAnyPending}
           aria-disabled={isAnyPending}
-          className="h-8 w-full border-white/18 bg-transparent text-[0.83rem] text-white/72 hover:border-primary/35 hover:bg-primary/10 hover:text-primary"
+          className="h-9 w-full border-white/15 bg-transparent text-white/70 hover:border-primary/40 hover:bg-primary/10 hover:text-primary"
         >
           {isGuestPending ? (
             <>
@@ -328,7 +330,8 @@ export function LoginForm() {
           )}
         </Button>
       </div>
-      <p className="mt-auto pt-3 text-xs text-white/45">
+
+      <p className="mt-auto text-xs text-white/45">
         FactorLab • Quant Research Dashboard
         <br />
         Not financial advice.

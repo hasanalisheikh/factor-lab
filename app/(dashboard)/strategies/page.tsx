@@ -1,4 +1,5 @@
 import { AppShell } from "@/components/layout/app-shell"
+import { PageContainer } from "@/components/layout/page-container"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Separator } from "@/components/ui/separator"
@@ -49,7 +50,7 @@ const strategies = [
     tag: "ML · Walk-Forward",
     tagVariant: "outline" as const,
     summary:
-      "Walk-forward Ridge regression trained on 5 cross-sectional features. Retrained each month using all available history.",
+      "Walk-forward Ridge regression trained on 7 cross-sectional features. Retrained each month using all available history.",
     rule: "Each month, retrain a Ridge regressor on all past data, rank assets by predicted next-month return, and hold the top N equal-weighted.",
     selection: `Top N assets by predicted return (N = run.top_n, default 10). Requires ≥ 24 months of training history before first prediction.`,
     weightScheme: "Equal weight among the top-N selected assets.",
@@ -57,15 +58,17 @@ const strategies = [
     signal: null,
     mlDetails: {
       features: [
-        { name: "momentum", desc: "12-month trailing return (same as the momentum strategy signal)" },
-        { name: "reversal", desc: "Inverted prior-month return (short-term mean-reversion)" },
-        { name: "volatility", desc: "Annualized 6-month rolling standard deviation of returns" },
-        { name: "beta", desc: "Rolling 12-month beta to the benchmark (SPY)" },
-        { name: "drawdown", desc: "Rolling 12-month max drawdown (price / rolling-max − 1)" },
+        { name: "momentum_12_1", desc: "12-month momentum: price(t−1mo) / price(t−12mo) − 1. The 1-month skip removes short-term reversal contamination." },
+        { name: "momentum_6_1", desc: "6-month momentum: price(t−1mo) / price(t−6mo) − 1. Captures intermediate-term trends at a shorter horizon." },
+        { name: "reversal_1m", desc: "Short-term reversal: −(prior-month return). Negative sign exploits mean-reversion of the most recent month." },
+        { name: "vol_20d", desc: "20-day rolling daily return standard deviation, sampled at month-end. Short-term risk proxy." },
+        { name: "vol_60d", desc: "60-day rolling daily return standard deviation, sampled at month-end. Medium-term risk proxy." },
+        { name: "beta_60d", desc: "60-day rolling beta to the benchmark. Measures recent systematic risk exposure." },
+        { name: "drawdown_6m", desc: "6-month (126-day) max drawdown: price / rolling_max(126d) − 1. Captures recent price weakness." },
       ],
       target: "Next month total return.",
       model: "Ridge(α=1.0) with StandardScaler preprocessing. L2 regularization shrinks coefficients to reduce cross-sectional overfitting.",
-      warmup: "5 years of price history before run.start_date to build the initial training set.",
+      warmup: "Requires ≥ 24 months of training history before the first prediction. Price data is fetched with a 5-year lookback before run.start_date to build the initial training set.",
       walkForward:
         "The model is retrained from scratch at every rebalance date, using all available history up to (but not including) that date. There is no look-ahead bias.",
     },
@@ -87,22 +90,67 @@ const strategies = [
     signal: null,
     mlDetails: {
       features: [
-        { name: "momentum", desc: "12-month trailing return" },
-        { name: "reversal", desc: "Inverted prior-month return" },
-        { name: "volatility", desc: "Annualized 6-month rolling volatility" },
-        { name: "beta", desc: "Rolling 12-month beta to benchmark" },
-        { name: "drawdown", desc: "Rolling 12-month max drawdown" },
+        { name: "momentum_12_1", desc: "12-month momentum: price(t−1mo) / price(t−12mo) − 1." },
+        { name: "momentum_6_1", desc: "6-month momentum: price(t−1mo) / price(t−6mo) − 1." },
+        { name: "reversal_1m", desc: "Short-term reversal: −(prior-month return)." },
+        { name: "vol_20d", desc: "20-day rolling daily return std, sampled at month-end." },
+        { name: "vol_60d", desc: "60-day rolling daily return std, sampled at month-end." },
+        { name: "beta_60d", desc: "60-day rolling beta to benchmark." },
+        { name: "drawdown_6m", desc: "6-month (126-day) max drawdown: price / rolling_max(126d) − 1." },
       ],
       target: "Next month total return.",
       model:
         "LGBMRegressor(n_estimators=300, learning_rate=0.05, num_leaves=31, min_child_samples=20). Falls back to Ridge(α=0.7) if LightGBM is not installed.",
-      warmup: "5 years of price history before run.start_date.",
+      warmup: "Requires ≥ 24 months of training history before the first prediction. Price data fetched with 5-year lookback before run.start_date.",
       walkForward:
         "Same expanding-window walk-forward as ML Ridge. No look-ahead bias.",
     },
     expectations:
       "May outperform Ridge when factor relationships are non-linear or interaction effects are important. More sensitive to small dataset sizes.",
     reference: null,
+  },
+  {
+    id: "low_vol",
+    label: "Low Volatility",
+    tag: "Factor",
+    tagVariant: "outline" as const,
+    summary:
+      "Rank assets by 60-day realized volatility and hold the lowest-vol names. Targets the low-volatility anomaly: lower-risk assets tend to deliver superior risk-adjusted returns over time.",
+    rule: "At each monthly rebalance, compute 60-day realized volatility (std of daily returns) for every asset. Select the top N with the lowest vol and equal-weight the selection.",
+    selection:
+      "Top N assets by lowest 60-day realized vol (N = run.top_n, clamped to universe size). Requires ≥ 60 daily data points before the first selection.",
+    weightScheme: "Equal weight among selected assets (1/N).",
+    turnover:
+      "Low to moderate. Vol rankings are persistent month-to-month; turnover spikes mainly when a high-vol event shifts the ranking.",
+    signal:
+      "vol_60 = std(daily_returns, window=60 trading days)\n\nAssets ranked ascending by vol_60. The N lowest-vol names are selected.",
+    mlDetails: null,
+    expectations:
+      "Tends to outperform in choppy or declining markets where low-volatility assets hold up better. Typically lags in strong bull markets when high-beta growth assets surge. Complements momentum-based strategies whose largest drawdowns coincide with volatility spikes.",
+    reference:
+      "Baker, Bradley & Wurgler (2011) — 'Benchmarks as Limits to Arbitrage: Understanding the Low-Volatility Anomaly.'",
+  },
+  {
+    id: "trend_filter",
+    label: "Trend Filter",
+    tag: "Macro",
+    tagVariant: "outline" as const,
+    summary:
+      "A regime-switching overlay: hold momentum-selected assets when the benchmark is in an uptrend, and rotate to bonds (TLT) when the benchmark falls below its 200-day moving average.",
+    rule: "At each monthly rebalance: if benchmark close > 200-day SMA → risk-on (hold Momentum 12-1 selection from universe); if benchmark close ≤ 200-day SMA → risk-off (100% TLT). Falls back to BIL (cash proxy) if TLT data is unavailable.",
+    selection:
+      "Risk-on: top 50% of universe by Momentum 12-1 score with a positive score (equal-weight universe when no asset qualifies). Risk-off: 100% TLT (BIL fallback). Requires ≥ 200 daily benchmark data points to compute the 200-day SMA.",
+    weightScheme:
+      "Equal weight among risk-on selected assets. 100% single-asset weight when risk-off.",
+    turnover:
+      "Variable and regime-dependent. Transitions between risk-on and risk-off generate near-full-portfolio turnover; sustained regimes produce normal momentum turnover.",
+    signal:
+      "Trend signal: benchmark_close > SMA(benchmark_close, 200)\n\nRisk-on  → Momentum 12-1 selection (top 50%, positive score only).\nRisk-off → 100% TLT (or BIL if TLT unavailable).\n\nMethodology note: Risk-on when benchmark > 200D SMA; risk-off allocates to TLT.",
+    mlDetails: null,
+    expectations:
+      "Designed to reduce drawdowns during sustained bear markets by rotating into safety. May underperform in whipsaw markets where the 200D SMA triggers false switches. Tends to lag recovery entries after swift reversals, and will underperform buy-and-hold in a straight-up bull market.",
+    reference:
+      "Faber (2007) — 'A Quantitative Approach to Tactical Asset Allocation.'",
   },
 ]
 
@@ -173,12 +221,13 @@ function FieldRow({ label, children }: { label: string; children: React.ReactNod
 export default function StrategiesPage() {
   return (
     <AppShell title="Strategies">
+      <PageContainer size="medium">
       {/* Hero */}
       <div className="mb-6">
         <h1 className="text-xl font-semibold text-foreground">Strategy Glossary &amp; Methodology</h1>
         <p className="text-[13px] text-muted-foreground mt-1 max-w-2xl">
           How FactorLab strategies are constructed, executed, and measured. All strategies share a common
-          equal-weight, monthly-rebalance framework with configurable transaction costs and a SPY benchmark.
+          equal-weight, monthly-rebalance framework with configurable transaction costs and benchmarks.
         </p>
       </div>
 
@@ -217,7 +266,8 @@ export default function StrategiesPage() {
               in universe downloads for the ML strategies.
             </FieldRow>
             <FieldRow label="Starting NAV">
-              $100,000 for both portfolio and benchmark. All equity curve values are absolute NAV.
+              Configurable per run (default $100,000; range $1,000–$10,000,000). Both portfolio and
+              benchmark are rebased to the same starting NAV. All equity curve values are absolute NAV.
             </FieldRow>
           </CardContent>
         </Card>
@@ -357,6 +407,7 @@ export default function StrategiesPage() {
           </CardContent>
         </Card>
       </section>
+      </PageContainer>
     </AppShell>
   )
 }

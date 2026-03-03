@@ -97,6 +97,7 @@ export default async function RunDetailPage({ params }: { params: Promise<{ id: 
 
   const costsBps = run.costs_bps ?? 10
   const benchmarkTicker = getRunBenchmark(run)
+  const isMlRun = run.strategy_id === "ml_ridge" || run.strategy_id === "ml_lightgbm"
 
   return (
     <AppShell title={run.name}>
@@ -208,12 +209,14 @@ export default async function RunDetailPage({ params }: { params: Promise<{ id: 
           >
             Trades
           </TabsTrigger>
-          <TabsTrigger
-            value="ml-insights"
-            className="text-[12px] font-medium h-8 rounded-md px-3 data-[state=active]:bg-accent data-[state=active]:text-accent-foreground"
-          >
-            ML Insights
-          </TabsTrigger>
+          {isMlRun && (
+            <TabsTrigger
+              value="ml-insights"
+              className="text-[12px] font-medium h-8 rounded-md px-3 data-[state=active]:bg-accent data-[state=active]:text-accent-foreground"
+            >
+              ML Insights
+            </TabsTrigger>
+          )}
         </TabsList>
 
         <TabsContent value="overview" className="mt-4">
@@ -229,9 +232,11 @@ export default async function RunDetailPage({ params }: { params: Promise<{ id: 
         <TabsContent value="trades" className="mt-4">
           <TradesTab predictions={modelPredictions} positions={positions} />
         </TabsContent>
-        <TabsContent value="ml-insights" className="mt-4">
-          <MlInsightsTab metadata={modelMetadata} predictions={modelPredictions} />
-        </TabsContent>
+        {isMlRun && (
+          <TabsContent value="ml-insights" className="mt-4">
+            <MlInsightsTab metadata={modelMetadata} predictions={modelPredictions} />
+          </TabsContent>
+        )}
       </Tabs>
     </AppShell>
   )
