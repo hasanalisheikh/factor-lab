@@ -8,24 +8,28 @@ interface BenchmarkOverlapWarningProps {
 }
 
 export function BenchmarkOverlapWarning({ benchmark }: BenchmarkOverlapWarningProps) {
-  const message = `This strategy holds ${benchmark} while using it as the benchmark. This is not incorrect, but 'vs ${benchmark}' deltas may be less informative because part of the portfolio is the benchmark.`
-
   return (
     <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[12px] text-amber-100">
-      <div className="flex items-center gap-1.5">
-        <span>{`Note: ${message}`}</span>
+      <div className="flex items-center gap-1.5 flex-wrap">
+        <span>
+          Note: This strategy holds <strong>{benchmark}</strong> while using it as the benchmark.
+          {" "}&ldquo;vs {benchmark}&rdquo; deltas may be less informative.
+        </span>
         <Tooltip>
           <TooltipTrigger asChild>
             <button
               type="button"
-              className="inline-flex items-center gap-1 text-amber-200 underline underline-offset-2"
+              className="inline-flex items-center gap-1 text-amber-200 underline underline-offset-2 shrink-0"
             >
               <CircleHelp className="h-3 w-3" />
               Why?
             </button>
           </TooltipTrigger>
           <TooltipContent sideOffset={8} className="max-w-xs">
-            {message}
+            When a strategy holds the same asset used as its benchmark, part of the
+            portfolio <em>is</em> the benchmark. This can understate or overstate relative
+            performance deltas (e.g. CAGR vs {benchmark}), since the strategy is partially
+            tracking itself against the benchmark.
           </TooltipContent>
         </Tooltip>
       </div>

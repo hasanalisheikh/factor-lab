@@ -1,6 +1,9 @@
 "use client"
 
 import { useMemo, useState } from "react"
+import Link from "next/link"
+import { Plus } from "lucide-react"
+import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import {
   ChartContainer,
@@ -105,8 +108,21 @@ export function CompareWorkbench({ bundles, strategyRuns = [] }: Props) {
   if (bundles.length < 2) {
     return (
       <Card className="bg-card border-border">
-        <CardContent className="py-12 text-center text-sm text-muted-foreground">
-          At least two completed runs are required to compare.
+        <CardContent className="py-16 flex flex-col items-center gap-3 text-center">
+          <p className="text-[13px] font-medium text-foreground">
+            At least two completed runs are required to compare.
+          </p>
+          <p className="text-[12px] text-muted-foreground max-w-[320px]">
+            {bundles.length === 0
+              ? "You don't have any completed runs yet. Create a backtest run to get started."
+              : "You only have one completed run. Create another backtest to enable comparison."}
+          </p>
+          <Link href="/runs/new">
+            <Button size="sm" className="mt-1 h-8 text-[12px] font-medium">
+              <Plus className="w-3.5 h-3.5 mr-1.5" />
+              New Run
+            </Button>
+          </Link>
         </CardContent>
       </Card>
     )
