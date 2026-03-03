@@ -23,7 +23,8 @@ import {
 } from "@/lib/supabase/queries"
 import { STRATEGY_LABELS, type StrategyId, type RunStatus } from "@/lib/types"
 import { JobStatusPanel } from "@/components/run-detail/job-status-panel"
-import { generateRunReport } from "@/app/actions/reports"
+import { RunStatusPoller } from "@/components/run-detail/run-status-poller"
+import { generateRunReport, ensureRunReport } from "@/app/actions/reports"
 import { getRunBenchmark } from "@/lib/benchmark"
 import { BenchmarkOverlapWarning } from "@/components/benchmark-overlap-warning"
 
@@ -80,8 +81,20 @@ export default async function RunDetailPage({ params }: { params: Promise<{ id: 
   const strategyLabel = STRATEGY_LABELS[run.strategy_id as StrategyId] ?? run.strategy_id
   const universePreset = getUniversePreset(run)
   const universeCount = Array.isArray(run.universe_symbols) ? run.universe_symbols.length : null
-  const canGenerateReport = status === "completed" && equityCurve.length > 0
+  const canGenerateReport = status === "completed" && equityCurve.length > 0 && metrics != null
   const generateReportAction = generateRunReport.bind(null, id)
+
+  // Auto-generate report on first visit to a completed run that has no report yet.
+  let resolvedReport = report
+  if (canGenerateReport && !resolvedReport) {
+    try {
+      await ensureRunReport(id)
+      resolvedReport = await getReportByRunId(id).catch(() => null)
+    } catch (err) {
+      console.error("[RunDetailPage] auto-report generation failed:", err)
+    }
+  }
+
   const costsBps = run.costs_bps ?? 10
   const benchmarkTicker = getRunBenchmark(run)
 
@@ -130,14 +143,14 @@ export default async function RunDetailPage({ params }: { params: Promise<{ id: 
             </div>
           </div>
         </div>
-        {report?.url ? (
+        {resolvedReport?.url ? (
           <Button
             asChild
             variant="outline"
             size="sm"
             className="h-8 text-[12px] font-medium border-border text-muted-foreground hover:text-foreground shrink-0"
           >
-            <a href={report.url} target="_blank" rel="noreferrer">
+            <a href={resolvedReport.url} target="_blank" rel="noreferrer">
               <Download className="w-3.5 h-3.5 mr-1.5" />
               Download Report
             </a>
@@ -169,6 +182,7 @@ export default async function RunDetailPage({ params }: { params: Promise<{ id: 
 
       {/* Job status panel — visible for queued / running runs */}
       <JobStatusPanel job={job} runStatus={status} />
+      <RunStatusPoller status={status} />
       {benchmarkOverlap.confirmed ? (
         <BenchmarkOverlapWarning benchmark={benchmarkTicker} />
       ) : null}
@@ -213,7 +227,7 @@ export default async function RunDetailPage({ params }: { params: Promise<{ id: 
           <HoldingsTab predictions={modelPredictions} positions={positions} />
         </TabsContent>
         <TabsContent value="trades" className="mt-4">
-          <TradesTab predictions={modelPredictions} />
+          <TradesTab predictions={modelPredictions} positions={positions} />
         </TabsContent>
         <TabsContent value="ml-insights" className="mt-4">
           <MlInsightsTab metadata={modelMetadata} predictions={modelPredictions} />

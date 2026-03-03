@@ -1,23 +1,28 @@
+import "server-only"
 import { createClient } from "./server"
-import type { Database } from "./types"
 import {
   getRunBenchmark,
   inferPossibleOverlapFromUniverse,
   isBenchmarkHeldAtLatestRebalance,
   type BenchmarkOverlapState,
 } from "@/lib/benchmark"
+import type {
+  RunRow,
+  RunMetricsRow,
+  EquityCurveRow,
+  ReportRow,
+  JobRow,
+  PriceRow,
+  DataLastUpdatedRow,
+  ModelMetadataRow,
+  ModelPredictionRow,
+  PositionRow,
+  UserSettings,
+  RunWithMetrics,
+  CompareRunBundle,
+} from "./types"
 
-type RunRow = Database["public"]["Tables"]["runs"]["Row"]
-type RunMetricsRow = Database["public"]["Tables"]["run_metrics"]["Row"]
-type EquityCurveRow = Database["public"]["Tables"]["equity_curve"]["Row"]
-type ReportRow = Database["public"]["Tables"]["reports"]["Row"]
-type JobRow = Database["public"]["Tables"]["jobs"]["Row"]
-type PriceRow = Database["public"]["Tables"]["prices"]["Row"]
-type DataLastUpdatedRow = Database["public"]["Tables"]["data_last_updated"]["Row"]
-type ModelMetadataRow = Database["public"]["Tables"]["model_metadata"]["Row"]
-type ModelPredictionRow = Database["public"]["Tables"]["model_predictions"]["Row"]
-type PositionRow = Database["public"]["Tables"]["positions"]["Row"]
-
+// Re-export for server-side consumers that import types from this module
 export type {
   RunRow,
   RunMetricsRow,
@@ -29,21 +34,17 @@ export type {
   ModelMetadataRow,
   ModelPredictionRow,
   PositionRow,
+  UserSettings,
+  RunWithMetrics,
+  CompareRunBundle,
 }
 
-export type RunWithMetrics = RunRow & { run_metrics: RunMetricsRow[] | RunMetricsRow | null }
 export type DataHealthSummary = {
   tickersCount: number
   dateStart: string | null
   dateEnd: string | null
   missingDaysCount: number
   lastUpdatedAt: string | null
-}
-
-export type CompareRunBundle = {
-  run: RunRow
-  metrics: RunMetricsRow
-  equity: EquityCurveRow[]
 }
 
 type RunBenchmarkContext = Pick<
@@ -53,6 +54,10 @@ type RunBenchmarkContext = Pick<
 
 type GetRunsOptions = {
   limit?: number
+  search?: string
+  status?: string
+  strategy?: string
+  universe?: string
 }
 
 function isMissingBenchmarkColumnError(message?: string): boolean {
@@ -61,8 +66,14 @@ function isMissingBenchmarkColumnError(message?: string): boolean {
   return m.includes("benchmark") && m.includes("does not exist")
 }
 
+function isMissingPositionsTableError(message?: string): boolean {
+  if (!message) return false
+  const m = message.toLowerCase()
+  return m.includes("public.positions") && m.includes("could not find the table")
+}
+
 export async function getRuns(options: GetRunsOptions = {}): Promise<RunWithMetrics[]> {
-  const { limit = 100 } = options
+  const { limit = 100, search, status, strategy, universe } = options
   try {
     const supabase = await createClient()
     let queryWithBenchmark = supabase
@@ -80,6 +91,19 @@ export async function getRuns(options: GetRunsOptions = {}): Promise<RunWithMetr
         run_metrics(cagr, sharpe, max_drawdown, turnover)
       `)
       .order("created_at", { ascending: false })
+
+    if (search) {
+      queryWithBenchmark = queryWithBenchmark.ilike("name", `%${search}%`)
+    }
+    if (status) {
+      queryWithBenchmark = queryWithBenchmark.eq("status", status)
+    }
+    if (strategy) {
+      queryWithBenchmark = queryWithBenchmark.eq("strategy_id", strategy)
+    }
+    if (universe) {
+      queryWithBenchmark = queryWithBenchmark.eq("universe", universe)
+    }
     if (limit > 0) {
       queryWithBenchmark = queryWithBenchmark.limit(limit)
     }
@@ -100,6 +124,19 @@ export async function getRuns(options: GetRunsOptions = {}): Promise<RunWithMetr
           run_metrics(cagr, sharpe, max_drawdown, turnover)
         `)
         .order("created_at", { ascending: false })
+
+      if (search) {
+        queryLegacy = queryLegacy.ilike("name", `%${search}%`)
+      }
+      if (status) {
+        queryLegacy = queryLegacy.eq("status", status)
+      }
+      if (strategy) {
+        queryLegacy = queryLegacy.eq("strategy_id", strategy)
+      }
+      if (universe) {
+        queryLegacy = queryLegacy.eq("universe", universe)
+      }
       if (limit > 0) {
         queryLegacy = queryLegacy.limit(limit)
       }
@@ -120,12 +157,26 @@ export async function getRuns(options: GetRunsOptions = {}): Promise<RunWithMetr
   }
 }
 
-export async function getRunsCount(): Promise<number> {
+export async function getRunsCount(options: Omit<GetRunsOptions, "limit"> = {}): Promise<number> {
+  const { search, status, strategy, universe } = options
   try {
     const supabase = await createClient()
-    const { count, error } = await supabase
-      .from("runs")
-      .select("*", { count: "exact", head: true })
+    let query = supabase.from("runs").select("*", { count: "exact", head: true })
+
+    if (search) {
+      query = query.ilike("name", `%${search}%`)
+    }
+    if (status) {
+      query = query.eq("status", status)
+    }
+    if (strategy) {
+      query = query.eq("strategy_id", strategy)
+    }
+    if (universe) {
+      query = query.eq("universe", universe)
+    }
+
+    const { count, error } = await query
 
     if (error) {
       console.error("getRunsCount error:", error.message)
@@ -300,7 +351,7 @@ export async function getStrategyComparisonRuns(): Promise<RunWithMetrics[]> {
   const empty: RunWithMetrics[] = []
   try {
     const supabase = await createClient()
-    const strategies = ["equal_weight", "momentum_12_1", "ml_ridge", "ml_lightgbm"]
+    const strategies = ["equal_weight", "momentum_12_1", "low_vol", "trend_filter", "ml_ridge", "ml_lightgbm"]
 
     const results = await Promise.all(
       strategies.map(async (strategyId) => {
@@ -580,6 +631,9 @@ export async function getPositionsByRunId(runId: string): Promise<PositionRow[]>
       .limit(2000)
 
     if (error) {
+      if (isMissingPositionsTableError(error.message)) {
+        return []
+      }
       console.error("getPositionsByRunId error:", error.message)
       return []
     }
@@ -588,6 +642,40 @@ export async function getPositionsByRunId(runId: string): Promise<PositionRow[]>
     console.error("getPositionsByRunId exception:", err)
     return []
   }
+}
+
+export async function getUserSettings(): Promise<UserSettings | null> {
+  try {
+    const supabase = await createClient()
+    const { data, error } = await supabase
+      .from("user_settings")
+      .select("*")
+      .maybeSingle()
+
+    if (error || !data) return null
+    return data as UserSettings
+  } catch (err) {
+    console.error("getUserSettings exception:", err)
+    return null
+  }
+}
+
+export async function upsertUserSettings(
+  settings: Partial<Omit<UserSettings, "user_id" | "updated_at">>
+): Promise<void> {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) throw new Error("Not authenticated")
+
+  const { error } = await supabase.from("user_settings").upsert(
+    {
+      user_id: user.id,
+      ...settings,
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: "user_id" }
+  )
+  if (error) throw new Error(error.message)
 }
 
 export async function getBenchmarkOverlapStateForRun(

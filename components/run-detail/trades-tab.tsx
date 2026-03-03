@@ -17,7 +17,7 @@ import {
   type ChartConfig,
 } from "@/components/ui/chart"
 import { Bar, BarChart, CartesianGrid, XAxis, YAxis } from "recharts"
-import type { ModelPredictionRow } from "@/lib/supabase/queries"
+import type { ModelPredictionRow, PositionRow } from "@/lib/supabase/types"
 
 const turnoverConfig = {
   turnover: { label: "Turnover %", color: "var(--color-chart-2)" },
@@ -30,10 +30,12 @@ type RebalanceEntry = {
   count: number
 }
 
-function buildRebalanceData(predictions: ModelPredictionRow[]): {
+type TradesData = {
   turnoverData: { date: string; turnover: number }[]
   rebalanceLog: RebalanceEntry[]
-} {
+}
+
+function buildFromPredictions(predictions: ModelPredictionRow[]): TradesData {
   if (predictions.length === 0) return { turnoverData: [], rebalanceLog: [] }
 
   // Group by as_of_date
@@ -43,12 +45,9 @@ function buildRebalanceData(predictions: ModelPredictionRow[]): {
     byDate[row.as_of_date].push(row)
   }
 
-  // Sort chronologically (ISO strings sort correctly)
   const dates = Object.keys(byDate).sort()
-
   const turnoverData: { date: string; turnover: number }[] = []
   const rebalanceLog: RebalanceEntry[] = []
-
   let prevSelected = new Set<string>()
   let prevWeights = new Map<string, number>()
 
@@ -57,7 +56,6 @@ function buildRebalanceData(predictions: ModelPredictionRow[]): {
     const currWeights = new Map(rows.map((r) => [r.ticker, Number(r.weight)]))
     const currSelected = new Set(rows.filter((r) => r.selected).map((r) => r.ticker))
 
-    // Compute one-way turnover
     const allTickers = new Set([...prevWeights.keys(), ...currWeights.keys()])
     let to = 0
     for (const t of allTickers) {
@@ -66,7 +64,46 @@ function buildRebalanceData(predictions: ModelPredictionRow[]): {
     to /= 2
     turnoverData.push({ date, turnover: Math.round(to * 1000) / 10 })
 
-    // Entries and exits vs previous period
+    const entered = [...currSelected].filter((t) => !prevSelected.has(t))
+    const exited = [...prevSelected].filter((t) => !currSelected.has(t))
+    rebalanceLog.push({ date, entered, exited, count: currSelected.size })
+
+    prevSelected = currSelected
+    prevWeights = currWeights
+  }
+
+  return { turnoverData, rebalanceLog }
+}
+
+function buildFromPositions(positions: PositionRow[]): TradesData {
+  if (positions.length === 0) return { turnoverData: [], rebalanceLog: [] }
+
+  // Group by date (rebalance snapshots)
+  const byDate: Record<string, PositionRow[]> = {}
+  for (const row of positions) {
+    if (!byDate[row.date]) byDate[row.date] = []
+    byDate[row.date].push(row)
+  }
+
+  const dates = Object.keys(byDate).sort()
+  const turnoverData: { date: string; turnover: number }[] = []
+  const rebalanceLog: RebalanceEntry[] = []
+  let prevSelected = new Set<string>()
+  let prevWeights = new Map<string, number>()
+
+  for (const date of dates) {
+    const rows = byDate[date]
+    const currWeights = new Map(rows.map((r) => [r.symbol, Number(r.weight)]))
+    const currSelected = new Set(rows.filter((r) => Number(r.weight) > 0).map((r) => r.symbol))
+
+    const allTickers = new Set([...prevWeights.keys(), ...currWeights.keys()])
+    let to = 0
+    for (const t of allTickers) {
+      to += Math.abs((currWeights.get(t) ?? 0) - (prevWeights.get(t) ?? 0))
+    }
+    to /= 2
+    turnoverData.push({ date, turnover: Math.round(to * 1000) / 10 })
+
     const entered = [...currSelected].filter((t) => !prevSelected.has(t))
     const exited = [...prevSelected].filter((t) => !currSelected.has(t))
     rebalanceLog.push({ date, entered, exited, count: currSelected.size })
@@ -80,11 +117,15 @@ function buildRebalanceData(predictions: ModelPredictionRow[]): {
 
 interface TradesTabProps {
   predictions?: ModelPredictionRow[]
+  positions?: PositionRow[]
 }
 
-export function TradesTab({ predictions = [] }: TradesTabProps) {
-  const { turnoverData, rebalanceLog } = buildRebalanceData(predictions)
-  const isEmpty = predictions.length === 0
+export function TradesTab({ predictions = [], positions = [] }: TradesTabProps) {
+  const { turnoverData, rebalanceLog } =
+    predictions.length > 0
+      ? buildFromPredictions(predictions)
+      : buildFromPositions(positions)
+  const isEmpty = predictions.length === 0 && positions.length === 0
 
   return (
     <div className="flex flex-col gap-4">
@@ -98,7 +139,7 @@ export function TradesTab({ predictions = [] }: TradesTabProps) {
         <CardContent className="px-2 pb-3 pt-1">
           {isEmpty ? (
             <div className="h-[180px] flex items-center justify-center text-[12px] text-muted-foreground">
-              Turnover chart available for ML strategy runs.
+              Turnover data not available. Re-run the strategy to populate trades.
             </div>
           ) : (
             <ChartContainer config={turnoverConfig} className="h-[180px] w-full">
@@ -162,7 +203,7 @@ export function TradesTab({ predictions = [] }: TradesTabProps) {
         <CardContent className="px-0 pb-1">
           {isEmpty ? (
             <div className="px-4 py-8 text-center text-[12px] text-muted-foreground">
-              Rebalance log available for ML strategy runs.
+              Rebalance log not available. Re-run the strategy to populate trades.
             </div>
           ) : (
             <div className="overflow-x-auto">
