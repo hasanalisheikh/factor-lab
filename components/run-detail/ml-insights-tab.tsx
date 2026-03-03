@@ -8,7 +8,7 @@ import {
   type ChartConfig,
 } from "@/components/ui/chart"
 import { Bar, BarChart, XAxis, YAxis } from "recharts"
-import type { ModelMetadataRow, ModelPredictionRow } from "@/lib/supabase/queries"
+import type { ModelMetadataRow, ModelPredictionRow } from "@/lib/supabase/types"
 
 const fiConfig = {
   importance: { label: "Importance", color: "var(--color-chart-1)" },

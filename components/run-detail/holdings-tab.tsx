@@ -18,7 +18,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { cn } from "@/lib/utils"
-import type { ModelPredictionRow, PositionRow } from "@/lib/supabase/queries"
+import type { ModelPredictionRow, PositionRow } from "@/lib/supabase/types"
 
 function formatPct(v: number | null | undefined): string {
   if (v == null || Number.isNaN(v)) return "--"

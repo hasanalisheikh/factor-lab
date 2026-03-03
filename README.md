@@ -16,6 +16,38 @@ FactorLab is a hybrid quant research product with:
 
 ## Architecture
 
+```mermaid
+graph TB
+  subgraph Browser
+    UI[Next.js App Router]
+  end
+  subgraph Vercel
+    SA[Server Actions]
+    MW[Auth Middleware]
+  end
+  subgraph Supabase
+    DB[(Postgres)]
+    ST[Storage — tearsheets]
+    AU[Auth + RLS]
+  end
+  subgraph "Python Worker"
+    WK[worker.py — job polling]
+    ML[ml.py — walk-forward]
+    IN[ingest.py — prices]
+  end
+  subgraph "GitHub Actions"
+    CI[CI — lint · test · build]
+    IG[Ingest — Mon–Fri 21:00 UTC]
+  end
+  UI --> MW --> SA
+  SA --> DB
+  SA --> ST
+  SA --> AU
+  WK --> DB
+  WK --> ML
+  IG --> IN --> DB
+```
+
 - Frontend: Next.js App Router + TypeScript + Tailwind + shadcn/ui
 - Database: Supabase Postgres
 - Reports: Supabase Storage bucket (`reports`)
@@ -186,24 +218,161 @@ For momentum strategies, turnover is higher because the *set* of held assets can
 
 ---
 
+## Environment Variables
+
+### Required
+
+| Variable | Where used | Description |
+|----------|-----------|-------------|
+| `NEXT_PUBLIC_SUPABASE_URL` | Client + Server | Your Supabase project URL |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Client + Server | Supabase anon key (public) |
+| `SUPABASE_SERVICE_ROLE_KEY` | Server only — **never expose to browser** | Supabase service role key for admin operations (create runs, write results) |
+| `SUPABASE_REPORTS_BUCKET` | Server only | Storage bucket name for HTML tearsheets (default: `reports`) |
+
+### Auth — Account Creation Rate Limiting (Upstash Redis)
+
+| Variable | Description |
+|----------|-------------|
+| `UPSTASH_REDIS_REST_URL` | Upstash Redis REST endpoint |
+| `UPSTASH_REDIS_REST_TOKEN` | Upstash Redis REST token |
+
+Rate limiting is **skipped gracefully** when these are not set (useful for local dev). Create a free Redis database at [upstash.com](https://upstash.com) for production.
+
+**Rate limit defaults:** 10 account creations per IP per hour (covers both sign-up and guest creation).
+
+---
+
+## Authentication
+
+All app routes require authentication. The `/login` page offers:
+- **Sign in** — email + password
+- **Create account** — email + password (rate-limited)
+- **Continue as Guest** — one click creates an isolated guest account (rate-limited)
+
+Guest accounts are full accounts: `guest_<uuid>@factorlab.local`, never exposed to the user, fully private via RLS.
+
+### Supabase Auth Setup
+
+1. In your Supabase project → **Authentication** → **URL Configuration**, add:
+   - **Site URL**: `http://localhost:3000` (local) or your Vercel domain
+   - **Redirect URLs**: `http://localhost:3000/**` and `https://your-app.vercel.app/**`
+
+2. Under **Email** provider settings, you can disable "Confirm email" for development (guests require this to be off, or handled via `email_confirm: true` in admin API).
+
+3. For production, optionally re-enable email confirmation for regular sign-ups. The sign-up flow will return a friendly "check your email" message.
+
+---
+
 ## Local Setup
 
 1. Install JS deps: `npm install`
-2. Configure env vars (`.env.local`):
-   - `NEXT_PUBLIC_SUPABASE_URL`
-   - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
-   - `SUPABASE_SERVICE_ROLE_KEY`
-3. Apply SQL:
+2. Copy and fill in env vars:
+   ```bash
+   cp .env.example .env.local
+   ```
+   Required minimum:
+   ```
+   NEXT_PUBLIC_SUPABASE_URL=https://xxx.supabase.co
+   NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJ...
+   SUPABASE_SERVICE_ROLE_KEY=eyJ...
+   SUPABASE_REPORTS_BUCKET=reports
+   # Optional but recommended for rate limiting:
+   UPSTASH_REDIS_REST_URL=https://xxx.upstash.io
+   UPSTASH_REDIS_REST_TOKEN=AXxx...
+   ```
+3. Apply SQL in Supabase SQL Editor (in order):
    - `supabase/schema.sql`
-   - `supabase/seed.sql`
-   - migrations in `supabase/migrations/`
-4. Run app: `npm run dev`
-5. Run worker (from `services/engine` environment):
-   - `factorlab-engine-worker`
+   - `supabase/migrations/20260302_auth_rls.sql` ← **new: auth + RLS**
+   - other migrations in `supabase/migrations/`
+4. Run app + worker together: `npm run dev`
+   - Set `SKIP_FACTORLAB_WORKER=1` to run web app only.
+5. (Optional) Run worker manually:
+   - `cd services/engine && factorlab-engine-worker`
+
+### Testing Auth Locally
+
+| Flow | Steps |
+|------|-------|
+| Create account | Visit `localhost:3000` (redirects to `/login`) → Create account tab → fill email + password → submit |
+| Sign in | Sign out → Sign in tab → same credentials |
+| Guest | Visit `/login` → "Continue as Guest" → land on `/dashboard` |
+| Sign out | Click user avatar (top-right) → Sign out → back to `/login` |
+| RLS isolation | Log in as User A, create a run. Open incognito, sign in as User B → `/runs` shows 0 runs |
+
+### Testing on Vercel
+
+1. Add all env vars in Vercel project → Settings → Environment Variables
+2. In Supabase Auth → URL Configuration, add your Vercel preview and production domains to Redirect URLs
+3. Deploy: `git push` → Vercel builds automatically
+
+## Running the Worker
+
+### Install
+
+```bash
+cd services/engine
+pip install -e ".[dev]"
+```
+
+This installs all runtime dependencies (NumPy, pandas, scikit-learn, LightGBM, yfinance, supabase) and pytest.
+
+### Start the worker
+
+```bash
+# From repo root — reads NEXT_PUBLIC_SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY from env
+factorlab-engine-worker
+
+# Or via Python module
+python -m factorlab_engine.worker
+```
+
+The worker polls `jobs` WHERE `status = 'queued'`, claims each job atomically, runs all backtest stages, and writes results to `equity_curve`, `run_metrics`, `positions`, and `model_predictions`.
+
+### Run a manual ingest
+
+```bash
+# Full 10-year history (SP100, ~104 tickers)
+factorlab-engine-ingest
+
+# Rolling 7-day update (useful for daily cron)
+factorlab-engine-ingest --start-date $(date -u -d "7 days ago" +%Y-%m-%d)
+
+# Custom tickers and date range
+factorlab-engine-ingest --tickers "AAPL,MSFT,NVDA" --start-date 2020-01-01
+```
+
+The scheduled GitHub Actions workflow ([`.github/workflows/ingest.yml`](.github/workflows/ingest.yml)) runs this automatically Monday–Friday at 21:00 UTC. Requires `NEXT_PUBLIC_SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` in GitHub Secrets.
+
+---
+
+## Worker Deployment (Render)
+
+A [`render.yaml`](render.yaml) at the repo root defines a Render background worker service.
+
+### Deploy to Render
+
+1. Connect the repo at [render.com](https://render.com) → **New** → **Blueprint** → select this repo.
+2. Render reads `render.yaml` and creates a **Background Worker** service (`factorlab-engine-worker`).
+3. Set the two environment variables in the Render dashboard (they are marked `sync: false` so they are never committed):
+
+   | Variable | Description |
+   |----------|-------------|
+   | `NEXT_PUBLIC_SUPABASE_URL` | Your Supabase project URL |
+   | `SUPABASE_SERVICE_ROLE_KEY` | Service role key — bypasses RLS, never expose in browser |
+
+4. Click **Deploy** — the worker starts and polls the `jobs` table on a 5-second loop.
+
+Render restarts the process automatically if it crashes. Jobs are claimed atomically (`queued → running`), so running multiple replicas will not double-process a job.
+
+### Alternative: GitHub Actions (polling cron)
+
+If you prefer zero infrastructure cost, you can run the worker as a scheduled GitHub Actions job that polls once per invocation and exits. Add `NEXT_PUBLIC_SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` to GitHub Secrets and create a workflow with `schedule: [{cron: "*/10 * * * *"}]` calling `factorlab-engine-worker --once`. The trade-off is higher latency (up to 10 minutes between queue and execution) and GitHub Actions minute consumption.
+
+---
 
 ## Test Commands
 
 - Web typecheck: `npm run typecheck`
 - Web lint: `npm run lint`
 - Web tests: `npm run test:run`
-- Engine tests: `PYTHONPATH=services/engine python3 -m pytest services/engine/tests -q`
+- Engine tests: `cd services/engine && pip install -e ".[dev]" && pytest ../engine/tests -q`

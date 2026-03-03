@@ -26,11 +26,10 @@ export const mainNavItems: NavItem[] = [
   { name: "Jobs", href: "/jobs", icon: Server },
   { name: "Data", href: "/data", icon: Database },
   { name: "Strategies", href: "/strategies", icon: BookOpen },
-]
-
-export const bottomNavItems: NavItem[] = [
   { name: "Settings", href: "/settings", icon: Settings },
 ]
+
+export const bottomNavItems: NavItem[] = []
 
 /**
  * Determines whether a nav item is "active" given the current pathname.

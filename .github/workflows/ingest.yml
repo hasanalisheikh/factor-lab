@@ -1,0 +1,58 @@
+name: Ingest Prices
+
+on:
+  schedule:
+    # Monday–Friday at 21:00 UTC (after 4 PM ET market close)
+    - cron: "0 21 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      start_date:
+        description: "Start date (YYYY-MM-DD). Leave blank for default."
+        required: false
+        default: ""
+      end_date:
+        description: "End date (YYYY-MM-DD). Leave blank for today."
+        required: false
+        default: ""
+      tickers:
+        description: "Comma-separated tickers. Leave blank for SP100."
+        required: false
+        default: ""
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install engine
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e "services/engine"
+
+      - name: Run ingestion
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          ARGS=""
+
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            # Scheduled: 7-day rolling window for resilience
+            START=$(date -u -d "7 days ago" +%Y-%m-%d)
+            ARGS="--start-date $START"
+          else
+            # Manual: use provided inputs, fall back to ingest.py defaults (10yr)
+            [ -n "${{ inputs.start_date }}" ] && ARGS="$ARGS --start-date ${{ inputs.start_date }}"
+            [ -n "${{ inputs.end_date }}" ]   && ARGS="$ARGS --end-date ${{ inputs.end_date }}"
+            [ -n "${{ inputs.tickers }}" ]    && ARGS="$ARGS --tickers '${{ inputs.tickers }}'"
+          fi
+
+          echo "[ingest] args: $ARGS"
+          python -m factorlab_engine.ingest $ARGS

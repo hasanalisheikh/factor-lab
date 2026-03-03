@@ -14,7 +14,7 @@ import {
 } from "@/components/ui/table"
 import { StatusBadge } from "@/components/status-badge"
 import { cn } from "@/lib/utils"
-import type { RunMetricsRow, RunWithMetrics } from "@/lib/supabase/queries"
+import type { RunMetricsRow, RunWithMetrics } from "@/lib/supabase/types"
 import { STRATEGY_LABELS, type StrategyId, type RunStatus } from "@/lib/types"
 
 type SortKey = "name" | "strategy_id" | "status" | "cagr" | "sharpe" | "max_drawdown" | "start_date"
@@ -34,9 +34,10 @@ function SortHeader({ label, sort, onToggle }: { label: string; sort: SortKey; o
 
 interface RunsTableProps {
   runs: RunWithMetrics[]
+  searchQuery?: string
 }
 
-export function RunsTable({ runs }: RunsTableProps) {
+export function RunsTable({ runs, searchQuery }: RunsTableProps) {
   const [sortKey, setSortKey] = useState<SortKey>("start_date")
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc")
 
@@ -81,15 +82,15 @@ export function RunsTable({ runs }: RunsTableProps) {
   }
 
   return (
-    <Card className="bg-card border-border">
+    <Card className="bg-card border-border overflow-hidden">
       <CardHeader className="pb-2 px-4 pt-4">
         <CardTitle className="text-[13px] font-medium text-card-foreground">
           All Runs
         </CardTitle>
       </CardHeader>
       <CardContent className="px-0 pb-1">
-        <div className="w-full">
-          <Table className="table-fixed">
+        <div className="overflow-x-auto">
+          <Table className="table-fixed min-w-[900px]">
             <TableHeader>
               <TableRow className="border-border hover:bg-transparent">
                 <TableHead className="text-[11px] text-muted-foreground font-medium pl-4">
@@ -170,7 +171,7 @@ export function RunsTable({ runs }: RunsTableProps) {
               {runs.length === 0 && (
                 <TableRow>
                   <TableCell colSpan={7} className="text-center py-10 text-[12px] text-muted-foreground">
-                    No runs found
+                    {searchQuery ? `No runs found for "${searchQuery}"` : "No runs found"}
                   </TableCell>
                 </TableRow>
               )}

@@ -14,7 +14,9 @@ export function Sidebar() {
     <aside className="hidden lg:flex lg:flex-col lg:w-[220px] border-r border-border bg-sidebar shrink-0">
       {/* Logo */}
       <div className="flex items-center px-5 h-14 border-b border-sidebar-border">
-        <Logo size={52} />
+        <Link href="/dashboard" aria-label="Go to dashboard">
+          <Logo size={52} />
+        </Link>
       </div>
 
       {/* Main nav */}
@@ -43,28 +45,29 @@ export function Sidebar() {
         })}
       </nav>
 
-      {/* Bottom nav */}
-      <div className="px-3 pb-4 flex flex-col gap-0.5 border-t border-sidebar-border pt-3">
-        {bottomNavItems.map((item) => {
-          const active = isNavItemActive(item, pathname, allItems)
-          return (
-            <Link
-              key={item.name}
-              href={item.href}
-              className={cn(
-                "flex items-center gap-2.5 rounded-lg px-3 py-[7px] text-[13px] font-medium transition-colors",
-                active
-                  ? "bg-sidebar-accent text-sidebar-primary"
-                  : "text-sidebar-foreground/50 hover:bg-sidebar-accent/40 hover:text-sidebar-foreground/80"
-              )}
-              aria-current={active ? "page" : undefined}
-            >
-              <item.icon className="w-[15px] h-[15px] shrink-0" />
-              {item.name}
-            </Link>
-          )
-        })}
-      </div>
+      {bottomNavItems.length > 0 ? (
+        <div className="px-3 pb-4 flex flex-col gap-0.5 border-t border-sidebar-border pt-3">
+          {bottomNavItems.map((item) => {
+            const active = isNavItemActive(item, pathname, allItems)
+            return (
+              <Link
+                key={item.name}
+                href={item.href}
+                className={cn(
+                  "flex items-center gap-2.5 rounded-lg px-3 py-[7px] text-[13px] font-medium transition-colors",
+                  active
+                    ? "bg-sidebar-accent text-sidebar-primary"
+                    : "text-sidebar-foreground/50 hover:bg-sidebar-accent/40 hover:text-sidebar-foreground/80"
+                )}
+                aria-current={active ? "page" : undefined}
+              >
+                <item.icon className="w-[15px] h-[15px] shrink-0" />
+                {item.name}
+              </Link>
+            )
+          })}
+        </div>
+      ) : null}
     </aside>
   )
 }

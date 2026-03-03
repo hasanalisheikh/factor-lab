@@ -1,0 +1,12 @@
+services:
+  - type: worker
+    name: factorlab-engine-worker
+    env: python
+    plan: starter
+    buildCommand: pip install -e services/engine
+    startCommand: factorlab-engine-worker
+    envVars:
+      - key: NEXT_PUBLIC_SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false

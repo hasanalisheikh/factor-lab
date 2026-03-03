@@ -7,12 +7,16 @@ export type StrategyId =
   | "momentum_12_1"
   | "ml_ridge"
   | "ml_lightgbm"
+  | "low_vol"
+  | "trend_filter"
 
 export const STRATEGY_LABELS: Record<StrategyId, string> = {
   equal_weight: "Equal Weight",
   momentum_12_1: "Momentum 12-1",
   ml_ridge: "ML Ridge",
   ml_lightgbm: "ML LightGBM",
+  low_vol: "Low Volatility",
+  trend_filter: "Trend Filter",
 }
 
 // ── Core Domain Types ──────────────────────────────────

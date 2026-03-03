@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache"
 import { redirect } from "next/navigation"
 import { createAdminClient } from "@/lib/supabase/admin"
+import { createClient } from "@/lib/supabase/server"
 import {
   getBenchmarkOverlapStateForRun,
   type EquityCurveRow,
@@ -12,6 +13,12 @@ import {
 import { getRunBenchmark } from "@/lib/benchmark"
 
 const REPORTS_BUCKET = process.env.SUPABASE_REPORTS_BUCKET ?? "reports"
+
+function isMissingPositionsTableError(message?: string): boolean {
+  if (!message) return false
+  const m = message.toLowerCase()
+  return m.includes("public.positions") && m.includes("could not find the table")
+}
 
 function fmtPercent(value: number, digits = 1): string {
   return `${(value * 100).toFixed(digits)}%`
@@ -69,6 +76,15 @@ function trimWarmup(equity: EquityCurveRow[]): { series: EquityCurveRow[]; trimm
   return { series, trimmedPoints: firstActiveIdx }
 }
 
+const STRATEGY_LABELS: Record<string, string> = {
+  equal_weight: "Equal Weight",
+  momentum_12_1: "Momentum 12-1",
+  ml_ridge: "ML Ridge",
+  ml_lightgbm: "ML LightGBM",
+  low_vol: "Low Volatility",
+  trend_filter: "Trend Filter",
+}
+
 function buildReportHtml(params: {
   runName: string
   strategyId: string
@@ -91,6 +107,7 @@ function buildReportHtml(params: {
     metrics,
     equityCurve,
   } = params
+  const strategyLabel = STRATEGY_LABELS[strategyId] ?? strategyId
   const { series: chartSeries, trimmedPoints } = trimWarmup(equityCurve)
   const drawdown = computeDrawdownSeries(chartSeries)
   const portfolioSeries = chartSeries.map((pt) => pt.portfolio)
@@ -174,7 +191,8 @@ function buildReportHtml(params: {
     <h1>Strategy Tearsheet</h1>
     <div class="meta">
       <p><strong>Run:</strong> ${escapeHtml(runName)}</p>
-      <p><strong>Strategy:</strong> ${escapeHtml(strategyId)}</p>
+      <p><strong>Strategy:</strong> ${escapeHtml(strategyLabel)} <span style="color:var(--muted)">(${escapeHtml(strategyId)})</span></p>
+      <p><strong>Benchmark:</strong> ${escapeHtml(benchmarkTicker)}</p>
       <p><strong>Window:</strong> ${escapeHtml(startDate)} to ${escapeHtml(endDate)}</p>
       <p><strong>Generated:</strong> ${escapeHtml(generatedAt)}</p>
     </div>
@@ -227,6 +245,18 @@ function buildReportHtml(params: {
       </ul>
     </div>
 
+    ${strategyId === "trend_filter" ? `
+    <h2>Strategy Methodology</h2>
+    <div class="panel">
+      <ul>
+        <li>Risk-on when benchmark &gt; 200D SMA; risk-off allocates to TLT.</li>
+        <li>Risk-on holdings: top 50% of universe by Momentum 12-1 score (positive scores only). Falls back to equal-weight universe when no asset qualifies.</li>
+        <li>Risk-off defensive asset: TLT (falls back to BIL if TLT data is unavailable).</li>
+        <li>Regime transitions generate near-full-portfolio turnover; sustained regimes produce normal momentum-level turnover.</li>
+      </ul>
+    </div>
+    ` : ""}
+
     <h2>Limitations</h2>
     <div class="panel">
       <ul>
@@ -241,8 +271,26 @@ function buildReportHtml(params: {
 </html>`
 }
 
-export async function generateRunReport(runId: string) {
+export async function ensureRunReport(runId: string): Promise<void> {
+  // Verify the caller owns this run
+  const serverClient = await createClient()
+  const { data: { user } } = await serverClient.auth.getUser()
+  if (!user) {
+    throw new Error("Authentication required.")
+  }
+
   const supabase = createAdminClient()
+
+  // Confirm ownership before generating
+  const { data: ownerCheck, error: ownerError } = await supabase
+    .from("runs")
+    .select("id")
+    .eq("id", runId)
+    .eq("user_id", user.id)
+    .maybeSingle()
+  if (ownerError || !ownerCheck) {
+    throw new Error("Run not found or access denied.")
+  }
 
   const [
     { data: run, error: runError },
@@ -287,8 +335,12 @@ export async function generateRunReport(runId: string) {
       .eq("symbol", benchmarkTicker)
       .gt("weight", 0)
       .limit(1)
-    if (!overlapError && (overlapRows?.length ?? 0) > 0) {
-      benchmarkOverlapDetected = true
+    if (!overlapError || isMissingPositionsTableError(overlapError.message)) {
+      if ((overlapRows?.length ?? 0) > 0) {
+        benchmarkOverlapDetected = true
+      }
+    } else {
+      console.error("ensureRunReport overlap query error:", overlapError.message)
     }
   }
   if (runRow.status !== "completed") {
@@ -314,12 +366,27 @@ export async function generateRunReport(runId: string) {
   const storagePath = `${runId}/tearsheet.html`
   const fileData = new Blob([html], { type: "text/html; charset=utf-8" })
 
-  const { error: uploadError } = await supabase.storage
+  let { error: uploadError } = await supabase.storage
     .from(REPORTS_BUCKET)
     .upload(storagePath, fileData, {
       upsert: true,
       contentType: "text/html; charset=utf-8",
     })
+
+  if (uploadError && uploadError.message.toLowerCase().includes("bucket")) {
+    const { error: createBucketError } = await supabase.storage.createBucket(
+      REPORTS_BUCKET,
+      { public: true }
+    )
+    if (createBucketError) {
+      throw new Error(`Failed to create reports bucket: ${createBucketError.message}`)
+    }
+    const retry = await supabase.storage.from(REPORTS_BUCKET).upload(storagePath, fileData, {
+      upsert: true,
+      contentType: "text/html; charset=utf-8",
+    })
+    uploadError = retry.error
+  }
 
   if (uploadError) {
     throw new Error(`Failed to upload report: ${uploadError.message}`)
@@ -341,7 +408,10 @@ export async function generateRunReport(runId: string) {
   if (reportError) {
     throw new Error(`Failed to persist report row: ${reportError.message}`)
   }
+}
 
+export async function generateRunReport(runId: string) {
+  await ensureRunReport(runId)
   revalidatePath(`/runs/${runId}`)
   redirect(`/runs/${runId}`)
 }

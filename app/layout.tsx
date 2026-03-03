@@ -23,11 +23,7 @@ export default function RootLayout({
   return (
     <html lang="en" className="dark">
       <body className="font-sans antialiased">
-        {/* Zoom wrapper: keeps portals rendered to <body> in an un-zoomed
-            coordinate space so Radix / floating-ui positioning is accurate. */}
-        <div className="app-zoom">
-          {children}
-        </div>
+        {children}
         <Analytics />
       </body>
     </html>

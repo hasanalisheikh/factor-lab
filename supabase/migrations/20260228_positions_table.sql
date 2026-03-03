@@ -1,7 +1,6 @@
 -- positions table: rebalance-date holdings snapshot for all strategy runs
 -- Stores the held symbols and their weights at each rebalance date.
--- For baseline strategies (equal_weight, momentum_12_1) the worker writes here.
--- For ML strategies, the holdings tab derives from model_predictions.
+-- Worker writes here for baseline and ML strategies.
 
 CREATE TABLE IF NOT EXISTS positions (
   run_id  UUID    NOT NULL REFERENCES runs (id) ON DELETE CASCADE,

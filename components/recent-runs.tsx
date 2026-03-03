@@ -1,7 +1,7 @@
 import Link from "next/link"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { StatusBadge } from "@/components/status-badge"
-import type { RunMetricsRow, RunWithMetrics } from "@/lib/supabase/queries"
+import type { RunMetricsRow, RunWithMetrics } from "@/lib/supabase/types"
 import { STRATEGY_LABELS, type StrategyId, type RunStatus } from "@/lib/types"
 
 interface RecentRunsProps {

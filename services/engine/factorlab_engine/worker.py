@@ -21,6 +21,14 @@ DEFAULT_ETF8_UNIVERSE = ["SPY", "QQQ", "IWM", "EFA", "EEM", "TLT", "GLD", "VNQ"]
 MIN_SPAN_DAYS: int = 730    # 2 calendar years
 MIN_DATA_POINTS: int = 500  # ~2 years of daily trading data
 
+# ---------------------------------------------------------------------------
+# Strategy-specific constants
+# ---------------------------------------------------------------------------
+_LOW_VOL_WINDOW: int = 60          # 60 trading-day realized vol window
+_TREND_SMA_WINDOW: int = 200       # 200-day benchmark SMA for trend signal
+_TREND_DEFENSIVE: str = "TLT"      # Primary risk-off asset
+_TREND_DEFENSIVE_FALLBACK: str = "BIL"  # Cash-proxy fallback
+
 # Static preset baskets used for run-level reproducibility. These can be updated
 # later without changing the resolution precedence contract.
 UNIVERSE_PRESETS: dict[str, list[str]] = {
@@ -266,6 +274,20 @@ def _download_prices(start: str, end: str, tickers: list[str]) -> pd.DataFrame:
   return close
 
 
+def _ensure_min_history(prices: pd.DataFrame, *, context: str) -> None:
+  if prices.empty:
+    raise ValueError(f"No price history available for {context}")
+
+  daily_rows = int(prices.shape[0])
+  span_days = int((prices.index.max() - prices.index.min()).days) if daily_rows > 1 else 0
+  if span_days < MIN_SPAN_DAYS or daily_rows < MIN_DATA_POINTS:
+    raise ValueError(
+      f"Insufficient history for {context}: {daily_rows} daily points across {span_days} days. "
+      f"Need >= {MIN_DATA_POINTS} daily points and >= {MIN_SPAN_DAYS} days. "
+      "Choose a longer date range or ingest more historical data."
+    )
+
+
 def _equal_weight(prices: pd.DataFrame) -> tuple[pd.Series, float, pd.Series, list[dict[str, Any]]]:
   rets = prices.pct_change().fillna(0.0)
   n = prices.shape[1]
@@ -331,6 +353,135 @@ def _momentum_12_1(prices: pd.DataFrame) -> tuple[pd.Series, float, pd.Series, l
   shifted = weights.shift(1).fillna(0.0)
   portfolio_rets = (asset_rets * shifted).sum(axis=1)
   annualized_turnover = float(rebalance_turnover[rebalance_turnover > 0].mean() * 12.0)
+  return portfolio_rets, annualized_turnover, rebalance_turnover, rebalance_positions
+
+
+def _low_vol(
+  prices: pd.DataFrame,
+  top_n: int,
+) -> tuple[pd.Series, float, pd.Series, list[dict[str, Any]]]:
+  """Low Volatility: select the top_n assets with the lowest 60-day realized vol each month."""
+  if prices.shape[0] < _LOW_VOL_WINDOW:
+    raise ValueError(
+      f"Low Volatility strategy requires at least {_LOW_VOL_WINDOW} daily data points "
+      "to compute 60-day realized volatility. Choose a longer date range."
+    )
+
+  asset_rets = prices.pct_change().fillna(0.0)
+  vol_60 = asset_rets.rolling(_LOW_VOL_WINDOW).std(ddof=0)
+
+  n_assets = prices.shape[1]
+  top_n_clamped = min(max(1, top_n), n_assets)
+
+  weights = pd.DataFrame(0.0, index=prices.index, columns=prices.columns)
+  current_w = pd.Series(0.0, index=prices.columns)
+  rebalance_turnover = pd.Series(0.0, index=prices.index)
+  prev_rebalance_weights = pd.Series(0.0, index=prices.columns)
+  rebalance_positions: list[dict[str, Any]] = []
+
+  for i, dt in enumerate(prices.index):
+    if i == 0 or dt.month != prices.index[i - 1].month:
+      vols = vol_60.loc[dt].dropna().sort_values(ascending=True)
+      selected = vols.head(top_n_clamped)
+      current_w = pd.Series(0.0, index=prices.columns)
+      if not selected.empty:
+        current_w.loc[selected.index] = 1.0 / len(selected)
+      rebalance_turnover.loc[dt] = float(
+        (current_w - prev_rebalance_weights).abs().sum() / 2.0
+      )
+      prev_rebalance_weights = current_w.copy()
+      for sym, wt in current_w[current_w > 0].items():
+        rebalance_positions.append({
+          "date": pd.Timestamp(dt).strftime("%Y-%m-%d"),
+          "symbol": str(sym),
+          "weight": float(wt),
+        })
+    weights.loc[dt] = current_w
+
+  shifted = weights.shift(1).fillna(0.0)
+  portfolio_rets = (asset_rets * shifted).sum(axis=1)
+  pos_turnover = rebalance_turnover[rebalance_turnover > 0]
+  annualized_turnover = float(pos_turnover.mean() * 12.0) if len(pos_turnover) > 0 else 0.0
+  return portfolio_rets, annualized_turnover, rebalance_turnover, rebalance_positions
+
+
+def _trend_filter(
+  prices: pd.DataFrame,
+  universe_tickers: list[str],
+  benchmark_ticker: str,
+  defensive_ticker: str,
+) -> tuple[pd.Series, float, pd.Series, list[dict[str, Any]]]:
+  """Trend Filter: risk-on (Momentum 12-1) when benchmark > SMA-200; risk-off (TLT) otherwise."""
+  if benchmark_ticker not in prices.columns:
+    raise ValueError(f"Benchmark ticker {benchmark_ticker!r} not found in price data.")
+  if defensive_ticker not in prices.columns:
+    raise ValueError(
+      f"Defensive ticker {defensive_ticker!r} not available for risk-off allocation. "
+      "Ensure TLT or BIL data is ingested for the requested date range."
+    )
+
+  bench = prices[benchmark_ticker]
+  n_bench_valid = int(bench.dropna().shape[0])
+  if n_bench_valid < _TREND_SMA_WINDOW:
+    raise ValueError(
+      f"Trend Filter strategy requires at least {_TREND_SMA_WINDOW} daily benchmark data points "
+      f"to compute the 200-day SMA. Got {n_bench_valid} points. "
+      "Choose a longer date range or earlier start date."
+    )
+
+  bench_sma200 = bench.rolling(_TREND_SMA_WINDOW).mean()
+
+  universe_cols = [c for c in universe_tickers if c in prices.columns]
+  if not universe_cols:
+    raise ValueError("No universe tickers found in price data.")
+
+  universe_prices = prices[universe_cols]
+  # Momentum 12-1 scores for risk-on selection (replicates _momentum_12_1 logic)
+  scores = universe_prices.shift(21) / universe_prices.shift(252) - 1.0
+  top_n_risk_on = max(1, len(universe_cols) // 2)
+
+  asset_rets = prices.pct_change().fillna(0.0)
+  weights = pd.DataFrame(0.0, index=prices.index, columns=prices.columns)
+  current_w = pd.Series(0.0, index=prices.columns)
+  rebalance_turnover = pd.Series(0.0, index=prices.index)
+  prev_rebalance_weights = pd.Series(0.0, index=prices.columns)
+  rebalance_positions: list[dict[str, Any]] = []
+
+  for i, dt in enumerate(prices.index):
+    if i == 0 or dt.month != prices.index[i - 1].month:
+      bench_val = bench.loc[dt]
+      sma_val = bench_sma200.loc[dt]
+      risk_on = bool(
+        pd.notna(bench_val) and pd.notna(sma_val) and float(bench_val) > float(sma_val)
+      )
+      current_w = pd.Series(0.0, index=prices.columns)
+      if risk_on:
+        s = scores.loc[dt].dropna()
+        s = s[s > 0].sort_values(ascending=False).head(top_n_risk_on)
+        if not s.empty:
+          current_w.loc[s.index] = 1.0 / len(s)
+        else:
+          # No positive momentum signal: fall back to equal-weight universe
+          current_w.loc[universe_cols] = 1.0 / len(universe_cols)
+      else:
+        # Risk-off: 100% defensive asset
+        current_w.loc[defensive_ticker] = 1.0
+      rebalance_turnover.loc[dt] = float(
+        (current_w - prev_rebalance_weights).abs().sum() / 2.0
+      )
+      prev_rebalance_weights = current_w.copy()
+      for sym, wt in current_w[current_w > 0].items():
+        rebalance_positions.append({
+          "date": pd.Timestamp(dt).strftime("%Y-%m-%d"),
+          "symbol": str(sym),
+          "weight": float(wt),
+        })
+    weights.loc[dt] = current_w
+
+  shifted = weights.shift(1).fillna(0.0)
+  portfolio_rets = (asset_rets * shifted).sum(axis=1)
+  pos_turnover = rebalance_turnover[rebalance_turnover > 0]
+  annualized_turnover = float(pos_turnover.mean() * 12.0) if len(pos_turnover) > 0 else 0.0
   return portfolio_rets, annualized_turnover, rebalance_turnover, rebalance_positions
 
 
@@ -407,27 +558,68 @@ def _equity_rows(
 
 
 def _build_baseline_result(io: SupabaseIO, run: dict[str, Any]) -> BacktestResult:
-  tickers = resolve_universe_symbols(run)
-  benchmark_ticker = _resolve_run_benchmark_ticker(run)
-  if benchmark_ticker not in tickers:
-    tickers = [*tickers, benchmark_ticker]
+  universe_tickers = resolve_universe_symbols(run)
+  tickers = list(universe_tickers)
+  benchmark_ticker_raw = _resolve_run_benchmark_ticker(run)
+  if benchmark_ticker_raw not in tickers:
+    tickers = [*tickers, benchmark_ticker_raw]
+
+  strat = run["strategy_id"]
+  costs_bps = float(run.get("costs_bps") or 0.0)
+  top_n = int(run.get("top_n") or 5)
+
+  # trend_filter needs the defensive ticker in the price data
+  defensive_ticker: str | None = None
+  if strat == "trend_filter":
+    defensive_ticker = _TREND_DEFENSIVE
+    if defensive_ticker not in tickers:
+      tickers = [*tickers, defensive_ticker]
 
   prices = io.fetch_prices_frame(tickers, run["start_date"], run["end_date"])
   if prices.empty or prices.shape[0] < 40:
     prices = _download_prices(run["start_date"], run["end_date"], tickers)
-  strat = run["strategy_id"]
-  costs_bps = float(run.get("costs_bps") or 0.0)
+
+  # For trend_filter: if defensive ticker still missing, try BIL fallback
+  if strat == "trend_filter" and defensive_ticker is not None and defensive_ticker not in prices.columns:
+    fallback = _TREND_DEFENSIVE_FALLBACK
+    tickers_fb = [t for t in tickers if t != defensive_ticker] + [fallback]
+    try:
+      prices_fb = _download_prices(run["start_date"], run["end_date"], tickers_fb)
+      if fallback in prices_fb.columns:
+        defensive_ticker = fallback
+        prices = prices_fb
+      else:
+        raise ValueError(
+          f"Trend Filter requires a defensive asset for risk-off allocation. "
+          f"Tried {_TREND_DEFENSIVE!r} and {_TREND_DEFENSIVE_FALLBACK!r} but neither "
+          "was available. Check data coverage for the requested date range."
+        )
+    except RuntimeError as exc:
+      raise ValueError(
+        f"Trend Filter requires {_TREND_DEFENSIVE!r} or {_TREND_DEFENSIVE_FALLBACK!r} "
+        f"for risk-off allocation, but download failed: {exc}"
+      ) from exc
+
+  _ensure_min_history(prices, context=f"run {run['id']} strategy {strat}")
+  bench_col = _select_available_benchmark_ticker(benchmark_ticker_raw, prices.columns)
+
   rebalance_positions: list[dict[str, Any]] = []
   if strat == "equal_weight":
     daily_rets, turnover, rebalance_turnover, rebalance_positions = _equal_weight(prices)
   elif strat == "momentum_12_1":
     daily_rets, turnover, rebalance_turnover, rebalance_positions = _momentum_12_1(prices)
+  elif strat == "low_vol":
+    daily_rets, turnover, rebalance_turnover, rebalance_positions = _low_vol(prices, top_n)
+  elif strat == "trend_filter":
+    assert defensive_ticker is not None
+    daily_rets, turnover, rebalance_turnover, rebalance_positions = _trend_filter(
+      prices, universe_tickers, bench_col, defensive_ticker
+    )
   else:
     raise ValueError(f"Unsupported baseline strategy: {strat}")
 
   daily_rets = _apply_rebalance_costs(daily_rets, rebalance_turnover, costs_bps)
-  bench_ticker = _select_available_benchmark_ticker(benchmark_ticker, prices.columns)
-  benchmark_rets = prices[bench_ticker].pct_change().fillna(0.0)
+  benchmark_rets = prices[bench_col].pct_change().fillna(0.0)
 
   portfolio = 100_000.0 * (1.0 + daily_rets).cumprod()
   benchmark = 100_000.0 * (1.0 + benchmark_rets.reindex(portfolio.index).fillna(0.0)).cumprod()
@@ -455,6 +647,7 @@ def _build_ml_result(io: SupabaseIO, run: dict[str, Any]) -> BacktestResult:
   prices = io.fetch_prices_frame(tickers, warmup_start, run["end_date"])
   if prices.empty or prices.shape[0] < 260:
     prices = _download_prices(warmup_start, run["end_date"], tickers)
+  _ensure_min_history(prices, context=f"run {run['id']} strategy {run['strategy_id']}")
 
   benchmark_ticker = _select_available_benchmark_ticker(requested_benchmark, prices.columns)
   ml = run_walk_forward(
@@ -473,24 +666,18 @@ def _build_ml_result(io: SupabaseIO, run: dict[str, Any]) -> BacktestResult:
     feature_rows=ml.feature_rows,
     prediction_rows=ml.prediction_rows,
     model_metadata=ml.metadata,
+    position_rows=ml.position_rows,
   )
 
 
 def _run_backtest(io: SupabaseIO, run: dict[str, Any]) -> BacktestResult:
   strategy = run["strategy_id"]
-  if strategy in {"equal_weight", "momentum_12_1"}:
-    try:
-      return _build_baseline_result(io, run)
-    except Exception as exc:  # fallback keeps end-to-end loop unblocked
-      print(f"[engine] baseline failed for {strategy}, using synthetic: {exc}")
+  if strategy in {"equal_weight", "momentum_12_1", "low_vol", "trend_filter"}:
+    return _build_baseline_result(io, run)
   if strategy in {"ml_ridge", "ml_lightgbm"}:
-    try:
-      return _build_ml_result(io, run)
-    except Exception as exc:
-      print(f"[engine] ML failed for {strategy}, using synthetic: {exc}")
+    return _build_ml_result(io, run)
 
-  seed = abs(hash(run["id"])) % (2**32)
-  return _build_synthetic_result(run["start_date"], run["end_date"], seed=seed)
+  raise ValueError(f"Unsupported strategy: {strategy}")
 
 
 def _process_job(io: SupabaseIO, job: Job) -> None:
@@ -531,13 +718,6 @@ def _process_job(io: SupabaseIO, job: Job) -> None:
 
     result = _run_backtest(io, run)
 
-    # Post-backtest validation — check actual equity-curve size and span.
-    if result.equity_rows:
-      equity_dates = [pd.to_datetime(row["date"]) for row in result.equity_rows]
-      ok, reason = validate_backtest_window(equity_dates)
-      if not ok:
-        raise ValueError(reason)
-
     io.update_job_progress(job.id, stage="report", progress=95)
     duration = int((datetime.utcnow() - started).total_seconds())
     io.save_success(
@@ -561,6 +741,7 @@ def _process_job(io: SupabaseIO, job: Job) -> None:
 
 
 def main() -> None:
+  once = os.getenv("RUN_ONCE", "").lower() in ("1", "true", "yes")
   poll_seconds = int(os.getenv("POLL_INTERVAL_SECONDS", "5"))
   batch_size = int(os.getenv("JOB_BATCH_SIZE", "3"))
 
@@ -569,6 +750,9 @@ def main() -> None:
   while True:
     jobs = io.fetch_queued_jobs(limit=batch_size)
     if not jobs:
+      if once:
+        print("[engine] no more queued jobs — exiting")
+        break
       time.sleep(poll_seconds)
       continue
 

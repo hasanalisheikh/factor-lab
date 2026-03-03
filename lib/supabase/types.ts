@@ -25,6 +25,7 @@ export type Database = {
           start_date: string
           end_date: string
           created_at: string
+          user_id: string | null
         }
         Insert: {
           id?: string
@@ -41,8 +42,39 @@ export type Database = {
           start_date: string
           end_date: string
           created_at?: string
+          user_id?: string | null
         }
         Update: Partial<Database['public']['Tables']['runs']['Insert']>
+        Relationships: []
+      }
+      user_settings: {
+        Row: {
+          user_id: string
+          default_universe: string
+          default_benchmark: string
+          default_costs_bps: number
+          default_top_n: number
+          default_initial_capital: number
+          default_rebalance_frequency: string
+          default_date_range_years: number
+          apply_costs_default: boolean
+          slippage_bps_default: number
+          updated_at: string
+        }
+        Insert: {
+          user_id: string
+          default_universe?: string
+          default_benchmark?: string
+          default_costs_bps?: number
+          default_top_n?: number
+          default_initial_capital?: number
+          default_rebalance_frequency?: string
+          default_date_range_years?: number
+          apply_costs_default?: boolean
+          slippage_bps_default?: number
+          updated_at?: string
+        }
+        Update: Partial<Database['public']['Tables']['user_settings']['Insert']>
         Relationships: []
       }
       run_metrics: {
@@ -186,6 +218,13 @@ export type Database = {
           reversal: number
           volatility: number
           beta: number
+          momentum_12_1: number | null
+          momentum_6_1: number | null
+          reversal_1m: number | null
+          vol_20d: number | null
+          vol_60d: number | null
+          beta_60d: number | null
+          drawdown_6m: number | null
           drawdown: number
           created_at: string
         }
@@ -198,6 +237,13 @@ export type Database = {
           volatility: number
           beta: number
           drawdown: number
+          momentum_12_1?: number | null
+          momentum_6_1?: number | null
+          reversal_1m?: number | null
+          vol_20d?: number | null
+          vol_60d?: number | null
+          beta_60d?: number | null
+          drawdown_6m?: number | null
           created_at?: string
         }
         Update: Partial<Database['public']['Tables']['features_monthly']['Insert']>
@@ -294,3 +340,20 @@ export type Database = {
     CompositeTypes: Record<string, never>
   }
 }
+
+// Row type aliases — safe to import from client components (no server-side imports here)
+export type RunRow = Database["public"]["Tables"]["runs"]["Row"]
+export type RunMetricsRow = Database["public"]["Tables"]["run_metrics"]["Row"]
+export type EquityCurveRow = Database["public"]["Tables"]["equity_curve"]["Row"]
+export type ReportRow = Database["public"]["Tables"]["reports"]["Row"]
+export type JobRow = Database["public"]["Tables"]["jobs"]["Row"]
+export type PriceRow = Database["public"]["Tables"]["prices"]["Row"]
+export type DataLastUpdatedRow = Database["public"]["Tables"]["data_last_updated"]["Row"]
+export type ModelMetadataRow = Database["public"]["Tables"]["model_metadata"]["Row"]
+export type ModelPredictionRow = Database["public"]["Tables"]["model_predictions"]["Row"]
+export type PositionRow = Database["public"]["Tables"]["positions"]["Row"]
+export type UserSettings = Database["public"]["Tables"]["user_settings"]["Row"]
+
+// Composite types
+export type RunWithMetrics = RunRow & { run_metrics: RunMetricsRow[] | RunMetricsRow | null }
+export type CompareRunBundle = { run: RunRow; metrics: RunMetricsRow; equity: EquityCurveRow[] }

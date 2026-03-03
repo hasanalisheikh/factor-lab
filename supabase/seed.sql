@@ -118,14 +118,17 @@ VALUES
   ('33333333-3333-3333-3333-333333333333', 'Report generation',              'queued',    'ingest',   0, NULL, NULL,                               NULL);
 
 -- ─── ML Feature Store (sample rows) ──────────────────────────────────────────
-INSERT INTO features_monthly (ticker, date, momentum, reversal, volatility, beta, drawdown)
+INSERT INTO features_monthly (
+  ticker, date, momentum, reversal, volatility, beta, drawdown,
+  momentum_12_1, momentum_6_1, reversal_1m, vol_20d, vol_60d, beta_60d, drawdown_6m
+)
 VALUES
-  ('SPY', '2023-10-31', 0.084, -0.021, 0.143, 1.000, -0.037),
-  ('QQQ', '2023-10-31', 0.112, -0.035, 0.192, 1.240, -0.061),
-  ('IWM', '2023-10-31', 0.051, -0.012, 0.181, 1.080, -0.074),
-  ('SPY', '2023-11-30', 0.096,  0.014, 0.137, 1.000, -0.019),
-  ('QQQ', '2023-11-30', 0.134,  0.018, 0.185, 1.210, -0.028),
-  ('IWM', '2023-11-30', 0.067,  0.009, 0.174, 1.050, -0.041)
+  ('SPY', '2023-10-31', 0.084, -0.021, 0.143, 1.000, -0.037, 0.084, 0.043, -0.021, 0.010, 0.014, 1.000, -0.037),
+  ('QQQ', '2023-10-31', 0.112, -0.035, 0.192, 1.240, -0.061, 0.112, 0.056, -0.035, 0.014, 0.019, 1.240, -0.061),
+  ('IWM', '2023-10-31', 0.051, -0.012, 0.181, 1.080, -0.074, 0.051, 0.026, -0.012, 0.013, 0.018, 1.080, -0.074),
+  ('SPY', '2023-11-30', 0.096,  0.014, 0.137, 1.000, -0.019, 0.096, 0.049,  0.014, 0.009, 0.014, 1.000, -0.019),
+  ('QQQ', '2023-11-30', 0.134,  0.018, 0.185, 1.210, -0.028, 0.134, 0.068,  0.018, 0.013, 0.019, 1.210, -0.028),
+  ('IWM', '2023-11-30', 0.067,  0.009, 0.174, 1.050, -0.041, 0.067, 0.031,  0.009, 0.012, 0.017, 1.050, -0.041)
 ON CONFLICT (ticker, date) DO NOTHING;
 
 -- ─── ML Model Metadata ───────────────────────────────────────────────────────
@@ -153,8 +156,8 @@ VALUES (
   24,
   10,
   10,
-  ARRAY['momentum', 'reversal', 'volatility', 'beta', 'drawdown'],
-  '{"momentum":0.34,"reversal":0.12,"volatility":0.18,"beta":0.09,"drawdown":0.27}'::jsonb,
+  ARRAY['momentum_12_1','momentum_6_1','reversal_1m','vol_20d','vol_60d','beta_60d','drawdown_6m'],
+  '{"momentum_12_1":0.27,"momentum_6_1":0.19,"reversal_1m":0.08,"vol_20d":0.10,"vol_60d":0.12,"beta_60d":0.07,"drawdown_6m":0.17}'::jsonb,
   '{"n_estimators":300,"learning_rate":0.05,"num_leaves":31}'::jsonb
 )
 ON CONFLICT (run_id) DO NOTHING;

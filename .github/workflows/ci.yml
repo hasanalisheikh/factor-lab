@@ -30,6 +30,13 @@ jobs:
       - name: Frontend tests
         run: npm run test:run
 
+      - name: Build
+        run: npm run build
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: https://placeholder.supabase.co
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: placeholder
+          SUPABASE_SERVICE_ROLE_KEY: placeholder
+
   engine:
     runs-on: ubuntu-latest
     steps:
@@ -41,12 +48,13 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install engine test deps
+      - name: Install engine
         run: |
           python -m pip install --upgrade pip
-          pip install pytest numpy pandas scikit-learn yfinance supabase
+          pip install -e "services/engine[dev]"
+
+      - name: Lint (ruff)
+        run: ruff check services/engine
 
       - name: Engine tests
-        env:
-          PYTHONPATH: services/engine
         run: pytest services/engine/tests -q

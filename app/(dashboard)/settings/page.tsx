@@ -1,25 +1,35 @@
 import { AppShell } from "@/components/layout/app-shell"
-import { Card, CardContent } from "@/components/ui/card"
-import { Settings } from "lucide-react"
+import { PageContainer } from "@/components/layout/page-container"
+import { SettingsForm } from "@/components/settings-form"
+import { getUserSettings } from "@/lib/supabase/queries"
+import { createClient } from "@/lib/supabase/server"
+import { redirect } from "next/navigation"
 
-export default function SettingsPage() {
+export default async function SettingsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ tab?: string }>
+}) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+
+  if (!user) {
+    redirect("/login")
+  }
+
+  const [settings, params] = await Promise.all([getUserSettings(), searchParams])
+
+  const userInfo = {
+    id: user.id,
+    email: user.email ?? "",
+    is_guest: Boolean(user.user_metadata?.is_guest),
+  }
+
   return (
     <AppShell title="Settings">
-      <Card className="bg-card border-border">
-        <CardContent className="flex flex-col items-center justify-center py-20 gap-4">
-          <div className="w-12 h-12 rounded-xl bg-secondary flex items-center justify-center">
-            <Settings className="w-6 h-6 text-muted-foreground" />
-          </div>
-          <div className="text-center">
-            <h2 className="text-sm font-semibold text-foreground">
-              Settings
-            </h2>
-            <p className="text-xs text-muted-foreground mt-1 max-w-[320px]">
-              Configure your account, API keys, default parameters, and notification preferences.
-            </p>
-          </div>
-        </CardContent>
-      </Card>
+      <PageContainer size="medium">
+        <SettingsForm defaults={settings} user={userInfo} defaultTab={params.tab} />
+      </PageContainer>
     </AppShell>
   )
 }

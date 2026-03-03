@@ -1,6 +1,6 @@
 import { Clock, Loader2 } from "lucide-react"
 import { Card, CardContent } from "@/components/ui/card"
-import type { JobRow } from "@/lib/supabase/queries"
+import type { JobRow } from "@/lib/supabase/types"
 import type { RunStatus } from "@/lib/types"
 
 interface JobStatusPanelProps {

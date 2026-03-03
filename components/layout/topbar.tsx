@@ -1,6 +1,7 @@
 "use client"
 
-import { Bell, Search, Menu } from "lucide-react"
+import Link from "next/link"
+import { Menu } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import {
   Sheet,
@@ -10,6 +11,9 @@ import {
 } from "@/components/ui/sheet"
 import { MobileNav } from "@/components/layout/mobile-nav"
 import { Logo } from "@/components/logo"
+import { TopbarUserMenu } from "@/components/layout/topbar-user-menu"
+import { TopbarSearch } from "@/components/layout/topbar-search"
+import { TopbarNotifications } from "@/components/layout/topbar-notifications"
 
 export function Topbar({ title = "Dashboard" }: { title?: string }) {
   return (
@@ -35,7 +39,9 @@ export function Topbar({ title = "Dashboard" }: { title?: string }) {
 
         {/* Mobile logo */}
         <div className="lg:hidden">
-          <Logo size={48} />
+          <Link href="/dashboard" aria-label="Go to dashboard">
+            <Logo size={48} />
+          </Link>
         </div>
 
         {/* Desktop title */}
@@ -45,26 +51,9 @@ export function Topbar({ title = "Dashboard" }: { title?: string }) {
       </div>
 
       <div className="flex items-center gap-1">
-        <Button
-          variant="ghost"
-          size="icon"
-          className="text-muted-foreground hover:text-foreground h-8 w-8"
-          aria-label="Search"
-        >
-          <Search className="w-[15px] h-[15px]" />
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="text-muted-foreground hover:text-foreground relative h-8 w-8"
-          aria-label="Notifications"
-        >
-          <Bell className="w-[15px] h-[15px]" />
-          <span className="absolute top-1.5 right-1.5 w-1.5 h-1.5 rounded-full bg-primary" />
-        </Button>
-        <div className="w-7 h-7 rounded-full bg-secondary flex items-center justify-center ml-1.5">
-          <span className="text-[10px] font-semibold text-secondary-foreground">JD</span>
-        </div>
+        <TopbarSearch />
+        <TopbarNotifications />
+        <TopbarUserMenu />
       </div>
     </header>
   )

@@ -10,7 +10,15 @@ from sklearn.linear_model import Ridge
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
-FEATURE_COLUMNS = ["momentum", "reversal", "volatility", "beta", "drawdown"]
+FEATURE_COLUMNS = [
+  "momentum_12_1",
+  "momentum_6_1",
+  "reversal_1m",
+  "vol_20d",
+  "vol_60d",
+  "beta_60d",
+  "drawdown_6m",
+]
 
 
 @dataclass(frozen=True)
@@ -20,6 +28,7 @@ class MLArtifacts:
   feature_rows: list[dict[str, Any]]
   prediction_rows: list[dict[str, Any]]
   metadata: dict[str, Any]
+  position_rows: list[dict[str, Any]]
 
 
 def _compute_metrics(returns: pd.Series, turnover: float) -> dict[str, float]:
@@ -59,7 +68,7 @@ def _compute_metrics(returns: pd.Series, turnover: float) -> dict[str, float]:
   }
 
 
-def _rolling_beta(asset_ret: pd.Series, benchmark_ret: pd.Series, window: int = 12) -> pd.Series:
+def _rolling_beta(asset_ret: pd.Series, benchmark_ret: pd.Series, window: int = 60) -> pd.Series:
   cov = asset_ret.rolling(window=window).cov(benchmark_ret)
   var = benchmark_ret.rolling(window=window).var()
   beta = cov / var.replace(0, np.nan)
@@ -67,18 +76,29 @@ def _rolling_beta(asset_ret: pd.Series, benchmark_ret: pd.Series, window: int = 
 
 
 def compute_monthly_features(prices: pd.DataFrame, benchmark_ticker: str) -> pd.DataFrame:
+  prices = prices.sort_index().ffill().dropna(how="all")
+  daily_ret = prices.pct_change()
   monthly_px = prices.resample("ME").last().ffill().dropna(how="all")
   monthly_ret = monthly_px.pct_change()
 
-  momentum = monthly_px.shift(1) / monthly_px.shift(12) - 1.0
-  reversal = -monthly_ret.shift(1)
-  volatility = monthly_ret.rolling(6).std(ddof=0) * np.sqrt(12.0)
-  drawdown = monthly_px / monthly_px.rolling(12).max() - 1.0
+  momentum_12_1 = monthly_px.shift(1) / monthly_px.shift(12) - 1.0
+  momentum_6_1 = monthly_px.shift(1) / monthly_px.shift(6) - 1.0
+  reversal_1m = -monthly_ret.shift(1)
 
-  benchmark_ret = monthly_ret[benchmark_ticker]
-  beta = pd.DataFrame(index=monthly_px.index, columns=monthly_px.columns, dtype=float)
-  for ticker in monthly_px.columns:
-    beta[ticker] = _rolling_beta(monthly_ret[ticker], benchmark_ret)
+  vol_20d_daily = daily_ret.rolling(20).std(ddof=0)
+  vol_60d_daily = daily_ret.rolling(60).std(ddof=0)
+
+  benchmark_daily_ret = daily_ret[benchmark_ticker]
+  beta_60d_daily = pd.DataFrame(index=daily_ret.index, columns=daily_ret.columns, dtype=float)
+  for ticker in daily_ret.columns:
+    beta_60d_daily[ticker] = _rolling_beta(daily_ret[ticker], benchmark_daily_ret, window=60)
+
+  drawdown_6m_daily = prices / prices.rolling(126).max() - 1.0
+
+  vol_20d = vol_20d_daily.resample("ME").last()
+  vol_60d = vol_60d_daily.resample("ME").last()
+  beta_60d = beta_60d_daily.resample("ME").last()
+  drawdown_6m = drawdown_6m_daily.resample("ME").last()
 
   next_ret = monthly_ret.shift(-1)
   rows: list[dict[str, Any]] = []
@@ -88,11 +108,13 @@ def compute_monthly_features(prices: pd.DataFrame, benchmark_ticker: str) -> pd.
         {
           "date": dt.strftime("%Y-%m-%d"),
           "ticker": ticker,
-          "momentum": float(momentum.at[dt, ticker]) if pd.notna(momentum.at[dt, ticker]) else np.nan,
-          "reversal": float(reversal.at[dt, ticker]) if pd.notna(reversal.at[dt, ticker]) else np.nan,
-          "volatility": float(volatility.at[dt, ticker]) if pd.notna(volatility.at[dt, ticker]) else np.nan,
-          "beta": float(beta.at[dt, ticker]) if pd.notna(beta.at[dt, ticker]) else np.nan,
-          "drawdown": float(drawdown.at[dt, ticker]) if pd.notna(drawdown.at[dt, ticker]) else np.nan,
+          "momentum_12_1": float(momentum_12_1.at[dt, ticker]) if pd.notna(momentum_12_1.at[dt, ticker]) else np.nan,
+          "momentum_6_1": float(momentum_6_1.at[dt, ticker]) if pd.notna(momentum_6_1.at[dt, ticker]) else np.nan,
+          "reversal_1m": float(reversal_1m.at[dt, ticker]) if pd.notna(reversal_1m.at[dt, ticker]) else np.nan,
+          "vol_20d": float(vol_20d.at[dt, ticker]) if pd.notna(vol_20d.at[dt, ticker]) else np.nan,
+          "vol_60d": float(vol_60d.at[dt, ticker]) if pd.notna(vol_60d.at[dt, ticker]) else np.nan,
+          "beta_60d": float(beta_60d.at[dt, ticker]) if pd.notna(beta_60d.at[dt, ticker]) else np.nan,
+          "drawdown_6m": float(drawdown_6m.at[dt, ticker]) if pd.notna(drawdown_6m.at[dt, ticker]) else np.nan,
           "target_return": float(next_ret.at[dt, ticker]) if pd.notna(next_ret.at[dt, ticker]) else np.nan,
           "benchmark_return": float(next_ret.at[dt, benchmark_ticker]) if pd.notna(next_ret.at[dt, benchmark_ticker]) else np.nan,
         }
@@ -117,7 +139,8 @@ def _build_model(strategy: str):
         min_child_samples=20,
         random_state=0,
       )
-    except Exception:
+    except Exception as exc:
+      print(f"[engine][ml] lightgbm unavailable; using ridge fallback: {exc}")
       return make_pipeline(StandardScaler(), Ridge(alpha=0.7, random_state=0))
 
   raise ValueError(f"Unsupported ML strategy: {strategy}")
@@ -160,6 +183,7 @@ def run_walk_forward(
   cost_bps_cfg = float(cost_bps if cost_bps is not None else float(os.getenv("ML_COST_BPS", "10")))
   cost_rate = cost_bps_cfg / 10_000.0
 
+  print(f"[engine][ml] run={run_id} strategy={strategy} stage=features start")
   feature_frame = compute_monthly_features(prices, benchmark_ticker=benchmark_ticker)
   feature_frame["date"] = pd.to_datetime(feature_frame["date"], utc=False)
   feature_frame["target_date"] = feature_frame["date"] + pd.offsets.MonthEnd(1)
@@ -179,18 +203,32 @@ def run_walk_forward(
   if not all_tickers:
     raise RuntimeError("No non-benchmark tickers available for ML portfolio")
 
+  warnings: list[str] = []
+  if len(all_tickers) < 12:
+    warnings.append(
+      f"Small universe: {len(all_tickers)} symbols. ML signal quality may be limited."
+    )
+
   top_n = max(1, min(top_n_cfg, len(all_tickers)))
   rebalance_dates = sorted(in_window_rows["date"].unique())
 
+  print(
+    f"[engine][ml] run={run_id} strategy={strategy} stage=features done "
+    f"rows={len(model_rows)} rebalances={len(rebalance_dates)} universe={len(all_tickers)}"
+  )
+
   prediction_rows: list[dict[str, Any]] = []
+  position_rows: list[dict[str, Any]] = []
   monthly_portfolio: list[float] = []
   monthly_benchmark: list[float] = []
   equity_dates: list[pd.Timestamp] = []
   turnovers: list[float] = []
   prev_weights = pd.Series(0.0, index=all_tickers)
   train_rows_count = 0
+  trained_month_count = 0
   model = None
 
+  print(f"[engine][ml] run={run_id} strategy={strategy} stage=train_backtest start")
   for as_of_date in rebalance_dates:
     train_slice = model_rows[(model_rows["date"] < as_of_date) & (model_rows["ticker"].isin(all_tickers))]
     if train_slice["date"].nunique() < min_train_months:
@@ -204,14 +242,16 @@ def run_walk_forward(
     model = _build_model(strategy)
     model.fit(train_slice[FEATURE_COLUMNS], train_slice["target_return"])
     train_rows_count = len(train_slice)
+    trained_month_count += 1
 
     test_slice["predicted_return"] = model.predict(test_slice[FEATURE_COLUMNS])
     test_slice = test_slice.sort_values("predicted_return", ascending=False).reset_index(drop=True)
     test_slice["rank"] = np.arange(1, len(test_slice) + 1)
     test_slice["selected"] = test_slice["rank"] <= top_n
-    selected = test_slice[test_slice["selected"]].copy()
-    selected_weight = 1.0 / len(selected) if len(selected) > 0 else 0.0
+    selected_count = int(test_slice["selected"].sum())
+    selected_weight = 1.0 / selected_count if selected_count > 0 else 0.0
     test_slice["weight"] = np.where(test_slice["selected"], selected_weight, 0.0)
+    selected = test_slice[test_slice["selected"]].copy()
 
     new_weights = pd.Series(0.0, index=all_tickers)
     if len(selected) > 0:
@@ -247,8 +287,24 @@ def run_walk_forward(
         }
       )
 
+    if len(selected) > 0:
+      for _, row in selected.iterrows():
+        position_rows.append(
+          {
+            "run_id": run_id,
+            "date": pd.Timestamp(as_of_date).strftime("%Y-%m-%d"),
+            "symbol": str(row["ticker"]),
+            "weight": float(row["weight"]),
+          }
+        )
+
   if not monthly_portfolio:
     raise RuntimeError("ML walk-forward produced no rebalances")
+
+  print(
+    f"[engine][ml] run={run_id} strategy={strategy} stage=train_backtest done "
+    f"trained_months={trained_month_count} predictions={len(prediction_rows)}"
+  )
 
   portfolio_ser = pd.Series(monthly_portfolio, index=equity_dates)
   benchmark_ser = pd.Series(monthly_benchmark, index=equity_dates)
@@ -269,11 +325,18 @@ def run_walk_forward(
     {
       "ticker": row["ticker"],
       "date": pd.Timestamp(row["date"]).strftime("%Y-%m-%d"),
-      "momentum": float(row["momentum"]),
-      "reversal": float(row["reversal"]),
-      "volatility": float(row["volatility"]),
-      "beta": float(row["beta"]),
-      "drawdown": float(row["drawdown"]),
+      "momentum": float(row["momentum_12_1"]),
+      "reversal": float(row["reversal_1m"]),
+      "volatility": float(row["vol_60d"]),
+      "beta": float(row["beta_60d"]),
+      "drawdown": float(row["drawdown_6m"]),
+      "momentum_12_1": float(row["momentum_12_1"]),
+      "momentum_6_1": float(row["momentum_6_1"]),
+      "reversal_1m": float(row["reversal_1m"]),
+      "vol_20d": float(row["vol_20d"]),
+      "vol_60d": float(row["vol_60d"]),
+      "beta_60d": float(row["beta_60d"]),
+      "drawdown_6m": float(row["drawdown_6m"]),
     }
     for _, row in features_clean.dropna(subset=FEATURE_COLUMNS).iterrows()
   ]
@@ -281,6 +344,7 @@ def run_walk_forward(
   if model is None:
     raise RuntimeError("Model was not trained")
 
+  print(f"[engine][ml] run={run_id} strategy={strategy} stage=report build")
   metadata = {
     "run_id": run_id,
     "model_name": strategy,
@@ -297,6 +361,7 @@ def run_walk_forward(
       "min_train_months": min_train_months,
       "top_n": top_n,
       "cost_bps": cost_bps_cfg,
+      "warnings": warnings,
     },
   }
 
@@ -306,4 +371,5 @@ def run_walk_forward(
     feature_rows=feature_rows,
     prediction_rows=prediction_rows,
     metadata=metadata,
+    position_rows=position_rows,
   )

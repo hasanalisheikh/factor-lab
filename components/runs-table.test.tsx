@@ -1,7 +1,7 @@
 import { render, screen } from "@testing-library/react"
 import { describe, expect, it } from "vitest"
 import { RunsTable } from "@/components/runs-table"
-import type { RunWithMetrics } from "@/lib/supabase/queries"
+import type { RunWithMetrics } from "@/lib/supabase/types"
 
 const mockRuns: RunWithMetrics[] = [
   {
