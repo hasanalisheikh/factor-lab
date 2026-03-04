@@ -1,0 +1,28 @@
+name: Run Worker
+
+on:
+  repository_dispatch:
+    types: [run-worker]
+
+jobs:
+  worker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install engine
+        run: pip install -e services/engine
+
+      - name: Run worker
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          RUN_ONCE: "1"
+        run: python -m factorlab_engine.worker
+        working-directory: services/engine

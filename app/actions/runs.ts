@@ -10,12 +10,20 @@ function triggerWorker(): void {
   const url = process.env.WORKER_TRIGGER_URL
   if (!url) return
   const secret = process.env.WORKER_TRIGGER_SECRET
-  const headers: Record<string, string> = { "Content-Length": "0" }
-  if (secret) headers["Authorization"] = `Bearer ${secret}`
-  fetch(`${url}/trigger`, {
+
+  const isGitHub = url.includes("api.github.com")
+  fetch(isGitHub ? url : `${url}/trigger`, {
     method: "POST",
-    headers,
-    signal: AbortSignal.timeout(4000),
+    headers: {
+      "Authorization": `Bearer ${secret}`,
+      "Content-Type": "application/json",
+      ...(isGitHub ? {
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+      } : {}),
+    },
+    body: isGitHub ? JSON.stringify({ event_type: "run-worker" }) : undefined,
+    signal: AbortSignal.timeout(8000),
   }).catch(() => {/* fire-and-forget — worker will still poll as fallback */})
 }
 
