@@ -137,10 +137,33 @@
   html {
     font-size: 17px;
     overflow-x: hidden;
+    scroll-behavior: smooth;
   }
   body {
     @apply bg-background text-foreground;
     overflow-x: hidden;
   }
+
+  /* Smooth transitions on all interactive elements */
+  a, button, [role="button"], [role="tab"] {
+    transition-property: color, background-color, border-color, opacity, box-shadow;
+    transition-duration: 150ms;
+    transition-timing-function: ease;
+  }
+
+  /* Tab panel entrance */
+  [role="tabpanel"] {
+    animation: tab-fade-in 180ms ease-out;
+  }
+  @keyframes tab-fade-in {
+    from { opacity: 0; transform: translateY(4px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  /* Thin styled scrollbar */
+  ::-webkit-scrollbar { width: 5px; height: 5px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: oklch(0.28 0.008 260); border-radius: 99px; }
+  ::-webkit-scrollbar-thumb:hover { background: oklch(0.35 0.01 260); }
 }
 

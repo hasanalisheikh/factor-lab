@@ -1,5 +1,6 @@
 import "server-only"
 import { createClient } from "./server"
+import { createAdminClient } from "./admin"
 import {
   getRunBenchmark,
   inferPossibleOverlapFromUniverse,
@@ -353,22 +354,27 @@ export async function getStrategyComparisonRuns(): Promise<RunWithMetrics[]> {
     const supabase = await createClient()
     const strategies = ["equal_weight", "momentum_12_1", "low_vol", "trend_filter", "ml_ridge", "ml_lightgbm"]
 
-    const results = await Promise.all(
-      strategies.map(async (strategyId) => {
-        const { data, error } = await supabase
-          .from("runs")
-          .select("*, run_metrics(*)")
-          .eq("strategy_id", strategyId)
-          .eq("status", "completed")
-          .order("created_at", { ascending: false })
-          .limit(1)
-          .maybeSingle()
-        if (error || !data) return null
-        return data as RunWithMetrics
-      })
-    )
+    // Single query: fetch recent completed runs across all strategies, then pick latest per strategy in JS.
+    // limit(30) gives ~5 per strategy on average which is more than enough.
+    const { data, error } = await supabase
+      .from("runs")
+      .select("*, run_metrics(*)")
+      .in("strategy_id", strategies)
+      .eq("status", "completed")
+      .order("created_at", { ascending: false })
+      .limit(30)
 
-    return results.filter((row): row is RunWithMetrics => row != null)
+    if (error || !data) return empty
+
+    const seen = new Set<string>()
+    const results: RunWithMetrics[] = []
+    for (const row of data as RunWithMetrics[]) {
+      if (!seen.has(row.strategy_id)) {
+        seen.add(row.strategy_id)
+        results.push(row)
+      }
+    }
+    return results
   } catch (err) {
     console.error("getStrategyComparisonRuns exception:", err)
     return empty
@@ -455,7 +461,7 @@ export async function getDataHealthSummary(): Promise<DataHealthSummary> {
   }
 
   try {
-    const supabase = await createClient()
+    const supabase = createAdminClient()
 
     const [
       tickersRes,
@@ -696,7 +702,7 @@ export async function getBenchmarkOverlapStateForRun(
       .eq("run_id", run.id)
       .order("date", { ascending: false })
       .order("symbol", { ascending: true })
-      .limit(3000)
+      .limit(50)
 
     if (error) {
       return { confirmed: false, possible: fallbackPossible }
