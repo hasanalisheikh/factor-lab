@@ -7,9 +7,10 @@ import { STRATEGY_LABELS, type StrategyId, type RunStatus } from "@/lib/types"
 interface RecentRunsProps {
   runs: RunWithMetrics[]
   total: number
+  selectedRunId?: string | null
 }
 
-export function RecentRuns({ runs, total }: RecentRunsProps) {
+export function RecentRuns({ runs, total, selectedRunId }: RecentRunsProps) {
   const getMetrics = (value: RunMetricsRow[] | RunMetricsRow | null): RunMetricsRow | null =>
     Array.isArray(value) ? value[0] ?? null : value ?? null
 
@@ -33,8 +34,8 @@ export function RecentRuns({ runs, total }: RecentRunsProps) {
             return (
               <Link
                 key={run.id}
-                href={`/runs/${run.id}`}
-                className="flex items-center justify-between py-2.5 px-2 -mx-2 rounded-lg hover:bg-accent/40 transition-colors group"
+                href={`/dashboard?run=${run.id}`}
+                className={`flex items-center justify-between py-2.5 px-2 -mx-2 rounded-lg hover:bg-accent/40 transition-colors group ${run.id === selectedRunId ? "bg-accent/40" : ""}`}
               >
                 <div className="flex flex-col gap-0.5 min-w-0">
                   <span className="text-[13px] font-medium text-card-foreground group-hover:text-primary transition-colors truncate">

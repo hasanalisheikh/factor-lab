@@ -6,6 +6,7 @@ import {
   getRuns,
   getRunsCount,
   getMostRecentCompletedRun,
+  getRunById,
   getEquityCurve,
   getBenchmarkOverlapStateForRun,
   type RunMetricsRow,
@@ -19,12 +20,22 @@ function getMetrics(value: RunMetricsRow[] | RunMetricsRow | null): RunMetricsRo
   return value ?? null
 }
 
-export default async function DashboardPage() {
-  const [allRuns, totalRuns, featuredRun] = await Promise.all([
+export default async function DashboardPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ run?: string }>
+}) {
+  const { run: runParam } = await searchParams
+  const [allRuns, totalRuns, defaultRun] = await Promise.all([
     getRuns({ limit: 20 }),
     getRunsCount(),
     getMostRecentCompletedRun(),
   ])
+
+  // If a specific run is selected via ?run=<id>, use it; otherwise fall back to most recent.
+  const featuredRun = runParam
+    ? ((await getRunById(runParam)) ?? defaultRun)
+    : defaultRun
 
   let equityCurve: Awaited<ReturnType<typeof getEquityCurve>> = []
   let benchmark = "SPY"
@@ -56,8 +67,10 @@ export default async function DashboardPage() {
         storedTurnover={storedTurnover}
         benchmark={benchmark}
         benchmarkOverlapConfirmed={benchmarkOverlapConfirmed}
+        featuredRunId={featuredRun?.id ?? null}
+        featuredRunName={featuredRun?.name ?? null}
       >
-        <RecentRuns runs={recentRuns} total={totalRuns} />
+        <RecentRuns runs={recentRuns} total={totalRuns} selectedRunId={featuredRun?.id ?? null} />
       </DashboardOverview>
       <RunsTable runs={allRuns} />
     </AppShell>

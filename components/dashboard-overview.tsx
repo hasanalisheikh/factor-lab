@@ -1,6 +1,7 @@
 "use client"
 
 import { useState, useMemo, type ReactNode } from "react"
+import Link from "next/link"
 import { MetricCards } from "@/components/metric-cards"
 import { EquityChart } from "@/components/equity-chart"
 import { computeMetrics } from "@/lib/metrics"
@@ -26,15 +27,9 @@ interface DashboardOverviewProps {
   equityCurve: EquityPoint[]
   benchmark: string
   benchmarkOverlapConfirmed: boolean
-  /**
-   * Annualized turnover fraction from run_metrics (e.g. 0.42 = 42%).
-   * Null when not available; displayed as a static metric with no delta.
-   */
   storedTurnover: number | null
-  /**
-   * Slot for the sidebar panel (e.g. <RecentRuns>).
-   * Rendered in the left column of the equity-chart grid so the layout is preserved.
-   */
+  featuredRunId: string | null
+  featuredRunName: string | null
   children?: ReactNode
 }
 
@@ -43,6 +38,8 @@ export function DashboardOverview({
   benchmark,
   benchmarkOverlapConfirmed,
   storedTurnover,
+  featuredRunId,
+  featuredRunName,
   children,
 }: DashboardOverviewProps) {
   const [selectedTf, setSelectedTf] = useState("1Y")
@@ -136,12 +133,25 @@ export function DashboardOverview({
 
       <div className="grid grid-cols-1 lg:grid-cols-[340px_minmax(0,1fr)] gap-4">
         {children}
-        <EquityChart
-          data={equityCurve}
-          benchmarkTicker={benchmark}
-          timeframe={selectedTf}
-          onTimeframeChange={setSelectedTf}
-        />
+        <div className="flex flex-col gap-2">
+          {featuredRunName && featuredRunId && (
+            <div className="flex items-center gap-1.5 text-[12px] text-muted-foreground">
+              <span>Showing</span>
+              <Link
+                href={`/runs/${featuredRunId}`}
+                className="font-medium text-foreground hover:text-primary transition-colors truncate max-w-[260px]"
+              >
+                {featuredRunName}
+              </Link>
+            </div>
+          )}
+          <EquityChart
+            data={equityCurve}
+            benchmarkTicker={benchmark}
+            timeframe={selectedTf}
+            onTimeframeChange={setSelectedTf}
+          />
+        </div>
       </div>
     </>
   )

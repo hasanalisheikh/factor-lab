@@ -38,7 +38,7 @@ export function JobStatusPanel({ job, runStatus }: JobStatusPanelProps) {
             </p>
             <p className="text-[12px] text-muted-foreground mt-0.5">
               {isQueued
-                ? "Waiting for a worker to pick up this job."
+                ? "Your run is being processed, please wait shortly!"
                 : isFailed
                 ? job?.error_message || "The worker failed before completion."
                 : `Stage: ${stageLabel} — ${progress}% complete`}
