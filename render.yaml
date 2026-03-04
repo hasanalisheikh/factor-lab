@@ -1,12 +1,15 @@
 services:
-  - type: worker
+  - type: web
     name: factorlab-engine-worker
     env: python
     plan: starter
     buildCommand: pip install -e services/engine
     startCommand: factorlab-engine-worker
+    healthCheckPath: /health
     envVars:
       - key: NEXT_PUBLIC_SUPABASE_URL
         sync: false
       - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: WORKER_TRIGGER_SECRET
         sync: false

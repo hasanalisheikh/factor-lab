@@ -1,23 +1,22 @@
 "use server"
 
 import { redirect } from "next/navigation"
-import { spawn } from "child_process"
-import path from "path"
 import { z } from "zod"
 import { createAdminClient } from "@/lib/supabase/admin"
 import { createClient } from "@/lib/supabase/server"
 import { BENCHMARK_OPTIONS } from "@/lib/benchmark"
 
-function spawnWorker() {
-  const engineDir = path.join(process.cwd(), "services", "engine")
-  const python = path.join(engineDir, ".venv", "bin", "python")
-  const child = spawn(python, ["-m", "factorlab_engine.worker"], {
-    cwd: engineDir,
-    env: { ...process.env, RUN_ONCE: "1" },
-    detached: true,
-    stdio: "ignore",
-  })
-  child.unref()
+function triggerWorker(): void {
+  const url = process.env.WORKER_TRIGGER_URL
+  if (!url) return
+  const secret = process.env.WORKER_TRIGGER_SECRET
+  const headers: Record<string, string> = { "Content-Length": "0" }
+  if (secret) headers["Authorization"] = `Bearer ${secret}`
+  fetch(`${url}/trigger`, {
+    method: "POST",
+    headers,
+    signal: AbortSignal.timeout(4000),
+  }).catch(() => {/* fire-and-forget — worker will still poll as fallback */})
 }
 
 const schema = z
@@ -183,7 +182,7 @@ export async function createRun(
     // Run was created — don't fail, just log
   }
 
-  spawnWorker()
+  triggerWorker()
 
   redirect(`/runs/${run.id}`)
 }

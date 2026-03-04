@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import os
+import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any
 
 import numpy as np
@@ -740,10 +742,58 @@ def _process_job(io: SupabaseIO, job: Job) -> None:
     print(f"[engine] failed job={job.id} in {duration}s: {exc}")
 
 
+# ---------------------------------------------------------------------------
+# HTTP trigger server — lets Vercel/any caller wake the worker immediately
+# ---------------------------------------------------------------------------
+_wakeup = threading.Event()
+
+
+class _TriggerHandler(BaseHTTPRequestHandler):
+  _secret: str = os.getenv("WORKER_TRIGGER_SECRET", "")
+
+  def do_GET(self) -> None:
+    if self.path == "/health":
+      self._respond(200, b"ok")
+    else:
+      self._respond(404, b"not found")
+
+  def do_POST(self) -> None:
+    if self.path != "/trigger":
+      self._respond(404, b"not found")
+      return
+    if self._secret:
+      auth = self.headers.get("Authorization", "")
+      if auth != f"Bearer {self._secret}":
+        self._respond(401, b"unauthorized")
+        return
+    _wakeup.set()
+    self._respond(200, b"ok")
+
+  def _respond(self, code: int, body: bytes) -> None:
+    self.send_response(code)
+    self.send_header("Content-Length", str(len(body)))
+    self.end_headers()
+    self.wfile.write(body)
+
+  def log_message(self, *_args: object) -> None:
+    pass  # suppress access logs
+
+
+def _start_trigger_server(port: int) -> None:
+  server = HTTPServer(("0.0.0.0", port), _TriggerHandler)
+  thread = threading.Thread(target=server.serve_forever, daemon=True)
+  thread.start()
+  print(f"[engine] trigger server on :{port}")
+
+
 def main() -> None:
   once = os.getenv("RUN_ONCE", "").lower() in ("1", "true", "yes")
   poll_seconds = int(os.getenv("POLL_INTERVAL_SECONDS", "5"))
   batch_size = int(os.getenv("JOB_BATCH_SIZE", "3"))
+  port = int(os.getenv("PORT", "8000"))
+
+  if not once:
+    _start_trigger_server(port)
 
   io = SupabaseIO()
   print("[engine] worker started")
@@ -753,9 +803,11 @@ def main() -> None:
       if once:
         print("[engine] no more queued jobs — exiting")
         break
-      time.sleep(poll_seconds)
+      _wakeup.wait(timeout=poll_seconds)
+      _wakeup.clear()
       continue
 
+    _wakeup.clear()
     for job in jobs:
       _process_job(io, job)
 
