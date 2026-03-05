@@ -4,6 +4,7 @@ import { AppShell } from "@/components/layout/app-shell"
 import { Button } from "@/components/ui/button"
 import { RunsTable } from "@/components/runs-table"
 import { RunsSearchBar } from "@/components/runs-search-bar"
+import { ActiveRunsPoller } from "@/components/active-runs-poller"
 import { getRuns, getRunsCount } from "@/lib/supabase/queries"
 
 export const revalidate = 0
@@ -25,8 +26,11 @@ export default async function RunsPage({ searchParams }: PageProps) {
     getRunsCount(filters),
   ])
 
+  const hasActiveRuns = runs.some((r) => r.status === "queued" || r.status === "running")
+
   return (
     <AppShell title="Runs">
+      <ActiveRunsPoller hasActiveRuns={hasActiveRuns} />
       <div className="mx-auto w-full max-w-[1200px] flex flex-col gap-4">
         <div className="flex items-center justify-between gap-3">
           <RunsSearchBar defaultQuery={q} />

@@ -5,7 +5,7 @@ import Link from "next/link"
 import { MetricCards } from "@/components/metric-cards"
 import { EquityChart } from "@/components/equity-chart"
 import { computeMetrics } from "@/lib/metrics"
-import { getAlignedTimeframeEquityCurve } from "@/lib/equity-curve"
+import { getAlignedTimeframeEquityCurve, getDefaultTimeframe } from "@/lib/equity-curve"
 import {
   formatSignedPct,
   formatPct,
@@ -42,7 +42,7 @@ export function DashboardOverview({
   featuredRunName,
   children,
 }: DashboardOverviewProps) {
-  const [selectedTf, setSelectedTf] = useState("1Y")
+  const [selectedTf, setSelectedTf] = useState(() => getDefaultTimeframe(equityCurve))
 
   const sliced = useMemo(() => {
     return getAlignedTimeframeEquityCurve(equityCurve, selectedTf)

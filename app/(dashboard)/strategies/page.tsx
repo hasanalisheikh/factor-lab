@@ -31,10 +31,10 @@ const strategies = [
     tag: "Factor",
     tagVariant: "outline" as const,
     summary:
-      "Rank assets by 12-month return excluding the most recent month, then hold the top half.",
-    rule: "At each rebalance, score each asset by its 12-1 momentum and select the top 50% with a positive score.",
-    selection: "Top half of the universe ranked by momentum score; only assets with a positive score qualify.",
-    weightScheme: "Equal weight among selected assets (1/k where k ≤ N/2).",
+      "Rank assets by 12-month return excluding the most recent month, then hold the top N (run.top_n) with a positive score.",
+    rule: "At each rebalance, score each asset by its 12-1 momentum and select the top N (run.top_n, clamped to universe size) with a positive score.",
+    selection: "Top N assets (N = run.top_n, clamped to universe size) ranked by momentum score; only assets with a positive score qualify.",
+    weightScheme: "Equal weight among selected assets (1/N).",
     turnover:
       "Moderate. Changes monthly as rankings shift.",
     signal:
@@ -100,7 +100,7 @@ const strategies = [
       ],
       target: "Next month total return.",
       model:
-        "LGBMRegressor(n_estimators=300, learning_rate=0.05, num_leaves=31, min_child_samples=20). Falls back to Ridge(α=0.7) if LightGBM is not installed.",
+        "LGBMRegressor(n_estimators=300, learning_rate=0.05, num_leaves=31, min_child_samples=20). Fails with a clear error if LightGBM is not installed — no silent fallback occurs. Install with: pip install 'lightgbm>=4.5.0'.",
       warmup: "Requires ≥ 24 months of training history before the first prediction. Price data fetched with 5-year lookback before run.start_date.",
       walkForward:
         "Same expanding-window walk-forward as ML Ridge. No look-ahead bias.",
@@ -139,13 +139,13 @@ const strategies = [
       "A regime-switching overlay: hold momentum-selected assets when the benchmark is in an uptrend, and rotate to bonds (TLT) when the benchmark falls below its 200-day moving average.",
     rule: "At each monthly rebalance: if benchmark close > 200-day SMA → risk-on (hold Momentum 12-1 selection from universe); if benchmark close ≤ 200-day SMA → risk-off (100% TLT). Falls back to BIL (cash proxy) if TLT data is unavailable.",
     selection:
-      "Risk-on: top 50% of universe by Momentum 12-1 score with a positive score (equal-weight universe when no asset qualifies). Risk-off: 100% TLT (BIL fallback). Requires ≥ 200 daily benchmark data points to compute the 200-day SMA.",
+      "Risk-on: top N assets (N = run.top_n, clamped to universe size) by Momentum 12-1 score with a positive score (equal-weight universe when no asset qualifies). Risk-off: 100% TLT (BIL fallback). Requires ≥ 200 daily benchmark data points to compute the 200-day SMA.",
     weightScheme:
       "Equal weight among risk-on selected assets. 100% single-asset weight when risk-off.",
     turnover:
       "Variable and regime-dependent. Transitions between risk-on and risk-off generate near-full-portfolio turnover; sustained regimes produce normal momentum turnover.",
     signal:
-      "Trend signal: benchmark_close > SMA(benchmark_close, 200)\n\nRisk-on  → Momentum 12-1 selection (top 50%, positive score only).\nRisk-off → 100% TLT (or BIL if TLT unavailable).\n\nMethodology note: Risk-on when benchmark > 200D SMA; risk-off allocates to TLT.",
+      "Trend signal: benchmark_close > SMA(benchmark_close, 200)\n\nRisk-on  → Momentum 12-1 selection (top N = run.top_n, positive score only).\nRisk-off → 100% TLT (or BIL if TLT unavailable).\n\nMethodology note: Risk-on when benchmark > 200D SMA; risk-off allocates to TLT.",
     mlDetails: null,
     expectations:
       "Designed to reduce drawdowns during sustained bear markets by rotating into safety. May underperform in whipsaw markets where the 200D SMA triggers false switches. Tends to lag recovery entries after swift reversals, and will underperform buy-and-hold in a straight-up bull market.",

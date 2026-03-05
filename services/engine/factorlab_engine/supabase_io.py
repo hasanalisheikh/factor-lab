@@ -12,9 +12,11 @@ from supabase import Client, create_client
 @dataclass(frozen=True)
 class Job:
   id: str
-  run_id: str
+  run_id: str | None  # None for data_ingest jobs
   name: str
   stage: str | None = None
+  job_type: str = "backtest"
+  payload: dict | None = None
 
 
 class SupabaseIO:
@@ -30,9 +32,8 @@ class SupabaseIO:
   def fetch_queued_jobs(self, limit: int = 3) -> list[Job]:
     result = (
       self.client.table("jobs")
-      .select("id,run_id,name,stage")
+      .select("id,run_id,name,stage,job_type,payload")
       .eq("status", "queued")
-      .not_.is_("run_id", "null")
       .order("created_at")
       .limit(limit)
       .execute()
@@ -40,11 +41,21 @@ class SupabaseIO:
     rows = result.data or []
     jobs: list[Job] = []
     for row in rows:
+      job_type = row.get("job_type", "backtest")
       run_id = row.get("run_id")
-      if run_id:
-        jobs.append(
-          Job(id=row["id"], run_id=run_id, name=row["name"], stage=row.get("stage"))
+      # Backtest jobs must have a run_id; skip orphaned rows
+      if job_type == "backtest" and not run_id:
+        continue
+      jobs.append(
+        Job(
+          id=row["id"],
+          run_id=run_id,
+          name=row["name"],
+          stage=row.get("stage"),
+          job_type=job_type,
+          payload=row.get("payload"),
         )
+      )
     return jobs
 
   def claim_job(self, job: Job) -> bool:
@@ -67,13 +78,15 @@ class SupabaseIO:
     if not (claimed.data or []):
       return False
 
-    (
-      self.client.table("runs")
-      .update({"status": "running"})
-      .eq("id", job.run_id)
-      .eq("status", "queued")
-      .execute()
-    )
+    # Only update run status for backtest jobs that have a run_id
+    if job.run_id:
+      (
+        self.client.table("runs")
+        .update({"status": "running"})
+        .eq("id", job.run_id)
+        .eq("status", "queued")
+        .execute()
+      )
     return True
 
   def fetch_run(self, run_id: str) -> dict[str, Any] | None:
@@ -140,6 +153,7 @@ class SupabaseIO:
     model_metadata: dict[str, Any] | None = None,
     position_rows: list[dict[str, Any]] | None = None,
   ) -> None:
+    assert job.run_id is not None, "save_success requires a run_id"
     rows = list(equity_rows)
     self._replace_equity_curve(job.run_id, rows)
     self._upsert_metrics(job.run_id, metrics)
@@ -189,12 +203,52 @@ class SupabaseIO:
       .eq("id", job.id)
       .execute()
     )
+    if job.run_id:
+      (
+        self.client.table("runs")
+        .update({"status": "failed"})
+        .eq("id", job.run_id)
+        .execute()
+      )
+
+  def save_data_ingest_success(
+    self,
+    job: Job,
+    duration_seconds: int,
+    tickers_updated: int,
+    rows_upserted: int,
+    start_date: str,
+    end_date: str,
+  ) -> None:
+    """Mark a data_ingest job as completed and write a data_ingestion_log entry."""
     (
-      self.client.table("runs")
-      .update({"status": "failed"})
-      .eq("id", job.run_id)
+      self.client.table("jobs")
+      .update(
+        {
+          "status": "completed",
+          "stage": "report",
+          "progress": 100,
+          "duration": max(duration_seconds, 0),
+          "error_message": None,
+        }
+      )
+      .eq("id", job.id)
       .execute()
     )
+    payload = job.payload or {}
+    ticker = payload.get("ticker", "unknown")
+    try:
+      self.client.table("data_ingestion_log").insert(
+        {
+          "status": "success",
+          "tickers_updated": tickers_updated,
+          "rows_upserted": rows_upserted,
+          "note": f"on-demand ingest {ticker} ({start_date} to {end_date})",
+          "source": "yfinance",
+        }
+      ).execute()
+    except Exception as exc:
+      print(f"[supabase_io] warning: could not write to data_ingestion_log: {exc}")
 
   def _replace_equity_curve(
     self, run_id: str, rows: list[dict[str, Any]], chunk_size: int = 500

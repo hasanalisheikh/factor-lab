@@ -2,6 +2,7 @@ import { AppShell } from "@/components/layout/app-shell"
 import { DashboardOverview } from "@/components/dashboard-overview"
 import { RecentRuns } from "@/components/recent-runs"
 import { RunsTable } from "@/components/runs-table"
+import { ActiveRunsPoller } from "@/components/active-runs-poller"
 import {
   getRuns,
   getRunsCount,
@@ -54,9 +55,13 @@ export default async function DashboardPage({
   const storedTurnover = featuredMetrics?.turnover ?? null
 
   const recentRuns = allRuns.slice(0, 6)
+  const hasActiveRuns = allRuns.some(
+    (r) => r.status === "queued" || r.status === "running"
+  )
 
   return (
     <AppShell title="Dashboard">
+      <ActiveRunsPoller hasActiveRuns={hasActiveRuns} />
       {/*
         DashboardOverview is a client component that owns the timeframe toggle.
         It computes KPIs from the same sliced equity curve shown in the chart,

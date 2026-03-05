@@ -14,6 +14,8 @@ import { cn } from "@/lib/utils"
 import {
   dashboardTimeframes as timeframes,
   getAlignedTimeframeEquityCurve,
+  getDefaultTimeframe,
+  downsampleEquityCurve,
 } from "@/lib/equity-curve"
 
 interface EquityPoint {
@@ -37,7 +39,7 @@ export function EquityChart({
   timeframe,
   onTimeframeChange,
 }: EquityChartProps) {
-  const [internalTf, setInternalTf] = useState("1Y")
+  const [internalTf, setInternalTf] = useState(() => getDefaultTimeframe(data))
   const chartConfig = useMemo(
     () =>
       ({
@@ -57,8 +59,24 @@ export function EquityChart({
   }
 
   const chartData = useMemo(() => {
-    return getAlignedTimeframeEquityCurve(data, selectedTf)
+    const aligned = getAlignedTimeframeEquityCurve(data, selectedTf)
+    return downsampleEquityCurve(aligned)
   }, [selectedTf, data])
+
+  // Use "MMM 'YY" when the visible span exceeds one year, "MMM DD" otherwise.
+  const xTickFormatter = useMemo(() => {
+    if (chartData.length < 2) return (v: string) => v
+    const spanDays =
+      (new Date(`${chartData[chartData.length - 1].date}T00:00:00Z`).getTime() -
+        new Date(`${chartData[0].date}T00:00:00Z`).getTime()) /
+      86400000
+    if (spanDays > 365) {
+      return (v: string) =>
+        new Date(v).toLocaleDateString("en-US", { month: "short", year: "2-digit" })
+    }
+    return (v: string) =>
+      new Date(v).toLocaleDateString("en-US", { month: "short", day: "numeric" })
+  }, [chartData])
 
   return (
     <Card className="bg-card border-border min-w-0 overflow-hidden">
@@ -123,10 +141,7 @@ export function EquityChart({
                 tickLine={false}
                 axisLine={false}
                 tickMargin={8}
-                tickFormatter={(value) => {
-                  const d = new Date(value)
-                  return d.toLocaleDateString("en-US", { month: "short", day: "numeric" })
-                }}
+                tickFormatter={xTickFormatter}
                 interval="preserveStartEnd"
                 className="text-[10px]"
                 stroke="var(--color-muted-foreground)"

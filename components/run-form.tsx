@@ -34,11 +34,26 @@ function toInputDate(d: Date | undefined) {
   return d ? format(d, "yyyy-MM-dd") : ""
 }
 
-type Props = {
-  defaults: UserSettings | null
+// Parse a YYYY-MM-DD string as a local-timezone Date (avoids UTC-offset bugs).
+function parseLocalDate(str: string): Date {
+  const [y, m, d] = str.split("-").map(Number)
+  return new Date(y, m - 1, d)
 }
 
-export function RunForm({ defaults }: Props) {
+type DataCoverage = {
+  minDateStr: string
+  maxDateStr: string
+}
+
+type Props = {
+  defaults: UserSettings | null
+  dataCoverage?: DataCoverage | null
+}
+
+export function RunForm({ defaults, dataCoverage }: Props) {
+  const coverageMin = dataCoverage ? parseLocalDate(dataCoverage.minDateStr) : null
+  const coverageMax = dataCoverage ? parseLocalDate(dataCoverage.maxDateStr) : null
+
   const [strategy, setStrategy] = useState<string>("")
   const [universe, setUniverse] = useState<string>(defaults?.default_universe ?? "ETF8")
   const [state, formAction, isPending] = useActionState<CreateRunState, FormData>(
@@ -46,11 +61,19 @@ export function RunForm({ defaults }: Props) {
     null
   )
   const [startDate, setStartDate] = useState<Date | undefined>(() => {
+    const yearsBack = defaults?.default_date_range_years ?? 5
+    if (coverageMax) {
+      const candidate = new Date(coverageMax)
+      candidate.setFullYear(candidate.getFullYear() - yearsBack)
+      return coverageMin && candidate < coverageMin ? new Date(coverageMin) : candidate
+    }
     const d = new Date()
-    d.setFullYear(d.getFullYear() - (defaults?.default_date_range_years ?? 5))
+    d.setFullYear(d.getFullYear() - yearsBack)
     return d
   })
-  const [endDate, setEndDate] = useState<Date | undefined>(() => new Date())
+  const [endDate, setEndDate] = useState<Date | undefined>(
+    () => coverageMax ?? new Date()
+  )
   const [startOpen, setStartOpen] = useState(false)
   const [endOpen, setEndOpen] = useState(false)
 
@@ -196,15 +219,29 @@ export function RunForm({ defaults }: Props) {
                         {startDate ? format(startDate, "MMM d, yyyy") : "Start date"}
                       </Button>
                     </PopoverTrigger>
-                    <PopoverContent className="w-auto p-0" align="start">
+                    <PopoverContent className="w-auto p-0" align="start" side="top" avoidCollisions={false}>
                       <Calendar
                         mode="single"
-                        captionLayout="dropdown"
-                        startMonth={new Date(1990, 0)}
-                        endMonth={new Date()}
+                        captionLayout="dropdown-years"
+                        showOutsideDays={false}
+                        startMonth={coverageMin ?? new Date(2015, 0)}
+                        endMonth={coverageMax ?? new Date()}
                         selected={startDate}
-                        onSelect={(d) => { setStartDate(d); setStartOpen(false) }}
-                        disabled={(d) => d > new Date()}
+                        onSelect={(d) => {
+                          if (!d) return
+                          if (dataCoverage) {
+                            const s = format(d, "yyyy-MM-dd")
+                            if (s < dataCoverage.minDateStr || s > dataCoverage.maxDateStr) return
+                          }
+                          setStartDate(d)
+                          setStartOpen(false)
+                        }}
+                        disabled={(d) => {
+                          const s = format(d, "yyyy-MM-dd")
+                          return dataCoverage
+                            ? s < dataCoverage.minDateStr || s > dataCoverage.maxDateStr
+                            : d > new Date()
+                        }}
                         autoFocus
                       />
                     </PopoverContent>
@@ -224,21 +261,40 @@ export function RunForm({ defaults }: Props) {
                         {endDate ? format(endDate, "MMM d, yyyy") : "End date"}
                       </Button>
                     </PopoverTrigger>
-                    <PopoverContent className="w-auto p-0" align="start">
+                    <PopoverContent className="w-auto p-0" align="start" side="top" avoidCollisions={false}>
                       <Calendar
                         mode="single"
-                        captionLayout="dropdown"
-                        startMonth={new Date(1990, 0)}
-                        endMonth={new Date()}
+                        captionLayout="dropdown-years"
+                        showOutsideDays={false}
+                        startMonth={coverageMin ?? new Date(2015, 0)}
+                        endMonth={coverageMax ?? new Date()}
                         selected={endDate}
-                        onSelect={(d) => { setEndDate(d); setEndOpen(false) }}
-                        disabled={(d) => d > new Date()}
+                        onSelect={(d) => {
+                          if (!d) return
+                          if (dataCoverage) {
+                            const s = format(d, "yyyy-MM-dd")
+                            if (s < dataCoverage.minDateStr || s > dataCoverage.maxDateStr) return
+                          }
+                          setEndDate(d)
+                          setEndOpen(false)
+                        }}
+                        disabled={(d) => {
+                          const s = format(d, "yyyy-MM-dd")
+                          return dataCoverage
+                            ? s < dataCoverage.minDateStr || s > dataCoverage.maxDateStr
+                            : d > new Date()
+                        }}
                         autoFocus
                       />
                     </PopoverContent>
                   </Popover>
                 </div>
               </div>
+              {dataCoverage && (
+                <p className="text-[11px] text-muted-foreground">
+                  Available data: {dataCoverage.minDateStr} → {dataCoverage.maxDateStr}
+                </p>
+              )}
             </div>
 
             {/* Initial capital */}

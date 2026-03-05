@@ -22,6 +22,10 @@ SP100_TICKERS = [
   "UPS", "USB", "V", "VZ", "WFC", "WMT", "XOM",
 ]
 
+# Common benchmarks always ingested regardless of --tickers, so the /data page
+# benchmark coverage section always shows real data.
+BENCHMARK_TICKERS = ["SPY", "QQQ", "IWM"]
+
 
 def _normalize_close_frame(raw: pd.DataFrame, tickers: list[str]) -> pd.DataFrame:
   if raw.empty:
@@ -94,6 +98,29 @@ def _upsert_data_log(
   io.client.table("data_last_updated").upsert(payload, on_conflict="source").execute()
 
 
+def _insert_ingestion_log(
+  io: SupabaseIO,
+  tickers_updated: int,
+  rows_upserted: int,
+  start_date: str,
+  end_date: str,
+  status: str = "success",
+  note: str | None = None,
+) -> None:
+  payload: dict[str, Any] = {
+    "status": status,
+    "tickers_updated": tickers_updated,
+    "rows_upserted": rows_upserted,
+    "note": note or f"yfinance pull {start_date} to {end_date}",
+    "source": "yfinance",
+  }
+  try:
+    io.client.table("data_ingestion_log").insert(payload).execute()
+  except Exception as exc:
+    # Non-fatal: table may not exist if migration hasn't been applied yet
+    print(f"[ingest] warning: could not write to data_ingestion_log: {exc}")
+
+
 def parse_args() -> argparse.Namespace:
   parser = argparse.ArgumentParser(description="Ingest adjusted close prices into Supabase")
   parser.add_argument(
@@ -120,6 +147,9 @@ def main() -> None:
   if not tickers:
     raise RuntimeError("No tickers provided for ingestion")
 
+  # Always include benchmark tickers so /data benchmark coverage is populated
+  tickers = list(dict.fromkeys(tickers + BENCHMARK_TICKERS))
+
   print(
     f"[ingest] downloading {len(tickers)} tickers from {args.start_date} to {args.end_date}"
   )
@@ -130,12 +160,21 @@ def main() -> None:
   rows = _to_price_rows(close)
   io = SupabaseIO()
   rows_upserted = _upsert_prices(io, rows)
+  start_date = close.index.min().strftime("%Y-%m-%d")
+  end_date = close.index.max().strftime("%Y-%m-%d")
   _upsert_data_log(
     io=io,
     tickers_ingested=len(close.columns),
     rows_upserted=rows_upserted,
-    start_date=close.index.min().strftime("%Y-%m-%d"),
-    end_date=close.index.max().strftime("%Y-%m-%d"),
+    start_date=start_date,
+    end_date=end_date,
+  )
+  _insert_ingestion_log(
+    io=io,
+    tickers_updated=len(close.columns),
+    rows_upserted=rows_upserted,
+    start_date=start_date,
+    end_date=end_date,
   )
   print(
     f"[ingest] upserted {rows_upserted} rows for {len(close.columns)} tickers "
@@ -145,4 +184,3 @@ def main() -> None:
 
 if __name__ == "__main__":
   main()
-

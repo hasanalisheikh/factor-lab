@@ -32,6 +32,25 @@ function fmtMoney(value: number): string {
   return `$${Math.round(value).toLocaleString("en-US")}`
 }
 
+/** Compact money for SVG axis labels: $100K, $1.2M, etc. */
+function fmtMoneyCompact(value: number): string {
+  if (Math.abs(value) >= 1_000_000) return `$${(value / 1_000_000).toFixed(1)}M`
+  if (Math.abs(value) >= 1_000) return `$${Math.round(value / 1_000)}K`
+  return `$${Math.round(value)}`
+}
+
+/**
+ * Format a cost drag fraction as a percentage.
+ * Avoids misleading "0.00%" for small but non-zero values.
+ */
+function fmtCostDrag(value: number): string {
+  if (value === 0) return "0.00%"
+  const pct = value * 100
+  if (pct < 0.005) return "<0.01%"
+  if (pct < 0.01) return `${pct.toFixed(3)}%`
+  return `${pct.toFixed(2)}%`
+}
+
 function escapeHtml(value: string): string {
   return value
     .replaceAll("&", "&amp;")
@@ -41,7 +60,17 @@ function escapeHtml(value: string): string {
     .replaceAll("'", "&#39;")
 }
 
-function makePolyline(points: number[], width: number, height: number, pad = 16): string {
+/**
+ * Map a series of values to SVG polyline points using each series' own min/max scale.
+ * padLeft defaults to pad (symmetric), allowing a wider left margin for y-axis labels.
+ */
+function makePolyline(
+  points: number[],
+  width: number,
+  height: number,
+  pad = 16,
+  padLeft = pad,
+): string {
   if (points.length === 0) return ""
   const min = Math.min(...points)
   const max = Math.max(...points)
@@ -49,7 +78,32 @@ function makePolyline(points: number[], width: number, height: number, pad = 16)
   const xSpan = Math.max(points.length - 1, 1)
   return points
     .map((v, i) => {
-      const x = pad + (i / xSpan) * (width - pad * 2)
+      const x = padLeft + (i / xSpan) * (width - padLeft - pad)
+      const y = height - pad - ((v - min) / ySpan) * (height - pad * 2)
+      return `${x.toFixed(2)},${y.toFixed(2)}`
+    })
+    .join(" ")
+}
+
+/**
+ * Like makePolyline but uses a caller-supplied shared [min, max] scale.
+ * Both portfolio and benchmark lines must use the same min/max to be comparable.
+ */
+function makePolylineShared(
+  points: number[],
+  min: number,
+  max: number,
+  width: number,
+  height: number,
+  pad = 16,
+  padLeft = pad,
+): string {
+  if (points.length === 0) return ""
+  const ySpan = max - min || 1
+  const xSpan = Math.max(points.length - 1, 1)
+  return points
+    .map((v, i) => {
+      const x = padLeft + (i / xSpan) * (width - padLeft - pad)
       const y = height - pad - ((v - min) / ySpan) * (height - pad * 2)
       return `${x.toFixed(2)},${y.toFixed(2)}`
     })
@@ -95,6 +149,11 @@ function buildReportHtml(params: {
   benchmarkOverlapDetected: boolean
   metrics: RunMetricsRow
   equityCurve: EquityCurveRow[]
+  universe: string
+  universeSymbols: string[] | null
+  costsBps: number
+  topN: number
+  runParams: Record<string, unknown>
 }): string {
   const {
     runName,
@@ -106,23 +165,103 @@ function buildReportHtml(params: {
     benchmarkOverlapDetected,
     metrics,
     equityCurve,
+    universe,
+    universeSymbols,
+    costsBps,
+    topN,
+    runParams,
   } = params
+
   const strategyLabel = STRATEGY_LABELS[strategyId] ?? strategyId
   const { series: chartSeries, trimmedPoints } = trimWarmup(equityCurve)
   const drawdown = computeDrawdownSeries(chartSeries)
   const portfolioSeries = chartSeries.map((pt) => pt.portfolio)
   const benchmarkSeries = chartSeries.map((pt) => pt.benchmark)
+
+  // ── Chart dimensions ───────────────────────────────────────────────────────
   const eqWidth = 1040
   const eqHeight = 340
   const ddWidth = 1040
   const ddHeight = 260
+  const pad = 16
 
-  const portfolioLine = makePolyline(portfolioSeries, eqWidth, eqHeight)
-  const benchmarkLine = makePolyline(benchmarkSeries, eqWidth, eqHeight)
-  const drawdownLine = makePolyline(drawdown, ddWidth, ddHeight)
-  const drawdownMax = Math.min(...drawdown, 0)
+  // Equity chart: shared scale so both lines are directly comparable on one y-axis.
+  const eqPadLeft = 66
+  const allEquityPoints = [...portfolioSeries, ...benchmarkSeries]
+  const eqMin = allEquityPoints.length > 0 ? Math.min(...allEquityPoints) : 0
+  const eqMax = allEquityPoints.length > 0 ? Math.max(...allEquityPoints) : 1
+  const portfolioLine = makePolylineShared(portfolioSeries, eqMin, eqMax, eqWidth, eqHeight, pad, eqPadLeft)
+  const benchmarkLine = makePolylineShared(benchmarkSeries, eqMin, eqMax, eqWidth, eqHeight, pad, eqPadLeft)
+
+  // Drawdown chart: wider left margin for y-axis labels.
+  const ddPadLeft = 46
+  const drawdownLine = makePolyline(drawdown, ddWidth, ddHeight, pad, ddPadLeft)
+  const drawdownMax = Math.min(...drawdown, 0) // ≤ 0
+
   const first = chartSeries[0]
   const last = chartSeries[chartSeries.length - 1]
+
+  // ── X-axis date context ────────────────────────────────────────────────────
+  const chartDates = chartSeries.map((pt) => pt.date)
+  const xDateStart = chartDates[0] ?? ""
+  const xDateMid = chartDates[Math.floor(chartDates.length / 2)] ?? ""
+  const xDateEnd = chartDates[chartDates.length - 1] ?? ""
+
+  const eqXAxis = `<div style="display:flex;justify-content:space-between;font-size:10px;color:#475569;padding:2px 16px 0 ${eqPadLeft}px;font-family:inherit;">`
+    + `<span>${escapeHtml(xDateStart)}</span>`
+    + `<span>${escapeHtml(xDateMid)}</span>`
+    + `<span>${escapeHtml(xDateEnd)}</span>`
+    + `</div>`
+
+  const ddXAxis = `<div style="display:flex;justify-content:space-between;font-size:10px;color:#475569;padding:2px 16px 0 ${ddPadLeft}px;font-family:inherit;">`
+    + `<span>${escapeHtml(xDateStart)}</span>`
+    + `<span>${escapeHtml(xDateMid)}</span>`
+    + `<span>${escapeHtml(xDateEnd)}</span>`
+    + `</div>`
+
+  // ── Equity chart y-axis SVG labels (shared scale) ─────────────────────────
+  // top of data area y=pad → eqMax; bottom y=height-pad → eqMin
+  const eqYMid = (eqMin + eqMax) / 2
+  const eqYAxisLabels = [
+    `<text x="${eqPadLeft - 4}" y="${pad + 4}" text-anchor="end" font-size="9" fill="#94a3b8">${escapeHtml(fmtMoneyCompact(eqMax))}</text>`,
+    `<text x="${eqPadLeft - 4}" y="${(eqHeight / 2).toFixed(0)}" text-anchor="end" dominant-baseline="middle" font-size="9" fill="#94a3b8">${escapeHtml(fmtMoneyCompact(eqYMid))}</text>`,
+    `<text x="${eqPadLeft - 4}" y="${eqHeight - pad - 4}" text-anchor="end" dominant-baseline="auto" font-size="9" fill="#94a3b8">${escapeHtml(fmtMoneyCompact(eqMin))}</text>`,
+  ].join("\n        ")
+
+  // ── Drawdown chart y-axis SVG labels ──────────────────────────────────────
+  // top y=pad → 0%; bottom y=height-pad → drawdownMax (most negative → shown as positive magnitude)
+  const ddWorstMag = Math.abs(drawdownMax)
+  const ddMidMag = ddWorstMag / 2
+  const ddYAxisLabels = [
+    `<text x="${ddPadLeft - 4}" y="${pad + 4}" text-anchor="end" font-size="9" fill="#94a3b8">0%</text>`,
+    `<text x="${ddPadLeft - 4}" y="${(ddHeight / 2).toFixed(0)}" text-anchor="end" dominant-baseline="middle" font-size="9" fill="#94a3b8">${escapeHtml(fmtPercent(ddMidMag))}</text>`,
+    `<text x="${ddPadLeft - 4}" y="${ddHeight - pad - 4}" text-anchor="end" dominant-baseline="auto" font-size="9" fill="#94a3b8">${escapeHtml(fmtPercent(ddWorstMag))}</text>`,
+  ].join("\n        ")
+
+  // ── Cost drag calculations ─────────────────────────────────────────────────
+  // turnover is a fraction (e.g. 0.08 = 8% one-way per rebalance)
+  // cost_rate = costs_bps / 10_000 (e.g. 10 bps → 0.001)
+  const turnoverFrac = metrics.turnover
+  const costRate = costsBps / 10_000
+  const perRebalanceCostDrag = turnoverFrac * costRate
+  const annualizedCostDrag = perRebalanceCostDrag * 12 // monthly → ×12
+
+  // ── Run-params extraction (best-effort; older runs may lack these fields) ──
+  const initialCapital = typeof runParams.initial_capital === "number" ? runParams.initial_capital : null
+  const applyCosts = typeof runParams.apply_costs === "boolean" ? runParams.apply_costs : null
+  const slippageBps = typeof runParams.slippage_bps === "number" ? runParams.slippage_bps : null
+  // Intended cost rate before the apply_costs flag was applied
+  const intendedCostsBps = typeof runParams.costs_bps === "number" ? runParams.costs_bps : costsBps
+
+  const costsDisplay = applyCosts === false
+    ? `${intendedCostsBps} bps configured, costs disabled (effective: 0 bps)`
+    : `${costsBps} bps${applyCosts === true ? " (applied)" : ""}`
+
+  // ── Universe metadata ──────────────────────────────────────────────────────
+  const universeCount = universeSymbols?.length ?? null
+  const universeLabel = universeCount !== null
+    ? `${universe} (${universeCount} symbols at execution)`
+    : universe
 
   return `<!doctype html>
 <html lang="en">
@@ -168,6 +307,7 @@ function buildReportHtml(params: {
     }
     .kpi .label { font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
     .kpi .value { font-size: 20px; margin-top: 4px; color: var(--text); }
+    .kpi-defs { font-size: 11px; color: var(--muted); margin-top: 10px; line-height: 1.65; border-left: 3px solid var(--border); padding-left: 10px; }
     .panel {
       border: 1px solid var(--border);
       border-radius: 10px;
@@ -194,6 +334,14 @@ function buildReportHtml(params: {
       <p><strong>Strategy:</strong> ${escapeHtml(strategyLabel)} <span style="color:var(--muted)">(${escapeHtml(strategyId)})</span></p>
       <p><strong>Benchmark:</strong> ${escapeHtml(benchmarkTicker)}</p>
       <p><strong>Window:</strong> ${escapeHtml(startDate)} to ${escapeHtml(endDate)}</p>
+      <p><strong>Universe:</strong> ${escapeHtml(universeLabel)}</p>
+      <p><strong>Rebalance frequency:</strong> Monthly</p>
+      <p><strong>Top N:</strong> ${topN}</p>
+      <p><strong>Transaction costs:</strong> ${escapeHtml(costsDisplay)}</p>
+      ${typeof slippageBps === "number" && slippageBps > 0 ? `<p><strong>Slippage:</strong> ${slippageBps} bps (configured)</p>` : ""}
+      ${initialCapital !== null ? `<p><strong>Initial capital:</strong> ${fmtMoney(initialCapital)}</p>` : ""}
+      <p><strong>Equity curve data points:</strong> ${chartSeries.length}${trimmedPoints > 0 ? ` (${trimmedPoints} warmup point(s) excluded before first active position)` : ""}</p>
+      ${benchmarkOverlapDetected ? `<p><strong>Benchmark overlap:</strong> portfolio holds ${escapeHtml(benchmarkTicker)} at some rebalances.</p>` : ""}
       <p><strong>Generated:</strong> ${escapeHtml(generatedAt)}</p>
     </div>
 
@@ -201,12 +349,18 @@ function buildReportHtml(params: {
     <div class="grid">
       <div class="kpi"><div class="label">CAGR</div><div class="value">${fmtPercent(metrics.cagr)}</div></div>
       <div class="kpi"><div class="label">Sharpe</div><div class="value">${fmtRatio(metrics.sharpe)}</div></div>
-      <div class="kpi"><div class="label">Max Drawdown</div><div class="value">${fmtPercent(metrics.max_drawdown)}</div></div>
+      <div class="kpi"><div class="label">Max Drawdown</div><div class="value">${fmtPercent(Math.abs(metrics.max_drawdown))}</div></div>
       <div class="kpi"><div class="label">Volatility</div><div class="value">${fmtPercent(metrics.volatility)}</div></div>
       <div class="kpi"><div class="label">Win Rate</div><div class="value">${fmtPercent(metrics.win_rate)}</div></div>
       <div class="kpi"><div class="label">Profit Factor</div><div class="value">${fmtRatio(metrics.profit_factor)}</div></div>
       <div class="kpi"><div class="label">Turnover</div><div class="value">${fmtPercent(metrics.turnover)}</div></div>
       <div class="kpi"><div class="label">Calmar</div><div class="value">${fmtRatio(metrics.calmar)}</div></div>
+    </div>
+    <div class="kpi-defs">
+      <strong>Max Drawdown</strong>: peak-to-trough decline shown as positive magnitude (e.g. 25.8% means a 25.8% drop from peak).<br />
+      <strong>Win rate</strong>: % of trading days with positive portfolio return (daily granularity).<br />
+      <strong>Profit factor</strong>: sum(positive daily returns) ÷ |sum(negative daily returns)| — daily granularity.<br />
+      <strong>Turnover</strong>: average one-way turnover per rebalance period (fraction of portfolio replaced).
     </div>
 
     <h2>Equity Curve vs ${escapeHtml(benchmarkTicker)}</h2>
@@ -217,31 +371,36 @@ function buildReportHtml(params: {
       </div>
       <svg viewBox="0 0 ${eqWidth} ${eqHeight}" width="${eqWidth}" height="${eqHeight}" role="img" aria-label="Equity curve chart">
         <rect x="0" y="0" width="${eqWidth}" height="${eqHeight}" fill="#ffffff" />
+        ${eqYAxisLabels}
         <polyline fill="none" stroke="var(--benchmark)" stroke-width="2" points="${benchmarkLine}" />
         <polyline fill="none" stroke="var(--portfolio)" stroke-width="3" points="${portfolioLine}" />
       </svg>
-      <p><strong>Start NAV:</strong> ${fmtMoney(first?.portfolio ?? 0)} | <strong>End NAV:</strong> ${fmtMoney(last?.portfolio ?? 0)}</p>
+      ${eqXAxis}
+      <p style="margin-top:6px;"><strong>Start NAV:</strong> ${fmtMoney(first?.portfolio ?? 0)} | <strong>End NAV:</strong> ${fmtMoney(last?.portfolio ?? 0)}</p>
       <p><strong>Benchmark End:</strong> ${fmtMoney(last?.benchmark ?? 0)}</p>
-      ${benchmarkOverlapDetected ? `<p><strong>Benchmark overlap:</strong> portfolio holds ${escapeHtml(benchmarkTicker)} at some rebalances.</p>` : ""}
-      ${trimmedPoints > 0 ? `<p><strong>Warmup Trim:</strong> Omitted ${trimmedPoints} initial trading days before first active portfolio change.</p>` : ""}
+      ${trimmedPoints > 0 ? `<p><strong>Warmup:</strong> Excluded first ${trimmedPoints} trading day(s) before first rebalance/active position.</p>` : ""}
     </div>
 
     <h2>Drawdown</h2>
     <div class="panel">
       <svg viewBox="0 0 ${ddWidth} ${ddHeight}" width="${ddWidth}" height="${ddHeight}" role="img" aria-label="Drawdown chart">
         <rect x="0" y="0" width="${ddWidth}" height="${ddHeight}" fill="#ffffff" />
+        ${ddYAxisLabels}
         <polyline fill="none" stroke="var(--drawdown)" stroke-width="2.5" points="${drawdownLine}" />
       </svg>
-      <p><strong>Worst Drawdown:</strong> ${fmtPercent(drawdownMax)}</p>
+      ${ddXAxis}
+      <p style="margin-top:6px;"><strong>Worst Drawdown:</strong> ${fmtPercent(Math.abs(drawdownMax))} (positive magnitude; peak-to-trough decline)</p>
     </div>
 
     <h2>Turnover and Cost Assumptions</h2>
     <div class="panel">
       <ul>
-        <li>Turnover shown is average one-way turnover per rebalance period.</li>
-        <li>Default transaction cost assumption for interpretation: 10 bps per 100% one-way turnover.</li>
-        <li>Illustrative annualized cost drag: ${(metrics.turnover * 0.001 * 100).toFixed(2)}% (turnover x 10 bps).</li>
-        <li>No explicit market impact or slippage model is applied in this MVP report.</li>
+        <li>Turnover shown is average one-way turnover per rebalance period (fraction of portfolio replaced).</li>
+        <li>Transaction cost rate: ${costsBps} bps per 100% one-way turnover (cost_rate = ${(costRate * 100).toFixed(4)}%).</li>
+        <li>Per-rebalance cost drag: ${fmtCostDrag(perRebalanceCostDrag)} (= ${fmtPercent(turnoverFrac, 2)} turnover × ${costsBps} bps).</li>
+        <li>Annualized cost drag (monthly rebalancing, 12 periods/year): ${fmtCostDrag(annualizedCostDrag)}.</li>
+        ${costsBps === 0 ? "<li>Note: no transaction costs were applied in this run (effective costs_bps = 0).</li>" : ""}
+        <li>Slippage${slippageBps !== null && slippageBps > 0 ? `: ${slippageBps} bps configured` : " not modeled"}. No explicit market impact model applied.</li>
       </ul>
     </div>
 
@@ -351,6 +510,14 @@ export async function ensureRunReport(runId: string): Promise<void> {
     throw new Error("Missing equity curve data")
   }
 
+  // Safely extract run_params fields (best-effort; older runs may lack them)
+  const runParamsObj =
+    typeof runRow.run_params === "object" &&
+    runRow.run_params !== null &&
+    !Array.isArray(runRow.run_params)
+      ? (runRow.run_params as Record<string, unknown>)
+      : {}
+
   const html = buildReportHtml({
     runName: runRow.name,
     strategyId: runRow.strategy_id,
@@ -361,6 +528,11 @@ export async function ensureRunReport(runId: string): Promise<void> {
     benchmarkOverlapDetected,
     metrics: metrics as RunMetricsRow,
     equityCurve: equity as EquityCurveRow[],
+    universe: runRow.universe ?? "",
+    universeSymbols: runRow.universe_symbols,
+    costsBps: runRow.costs_bps ?? 0,
+    topN: runRow.top_n ?? 0,
+    runParams: runParamsObj,
   })
 
   const storagePath = `${runId}/tearsheet.html`

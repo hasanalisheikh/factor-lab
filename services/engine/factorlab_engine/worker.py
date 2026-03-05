@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import threading
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any
 
@@ -319,13 +319,18 @@ def _equal_weight(prices: pd.DataFrame) -> tuple[pd.Series, float, pd.Series, li
   return portfolio_rets, annualized_turnover, monthly_turnover, rebalance_positions
 
 
-def _momentum_12_1(prices: pd.DataFrame) -> tuple[pd.Series, float, pd.Series, list[dict[str, Any]]]:
+def _momentum_12_1(
+  prices: pd.DataFrame,
+  top_n: int | None = None,
+) -> tuple[pd.Series, float, pd.Series, list[dict[str, Any]]]:
   asset_rets = prices.pct_change().fillna(0.0)
   scores = prices.shift(21) / prices.shift(252) - 1.0
 
   weights = pd.DataFrame(0.0, index=prices.index, columns=prices.columns)
   current_w = pd.Series(0.0, index=prices.columns)
-  top_n = max(1, prices.shape[1] // 2)
+  n_assets = prices.shape[1]
+  # Use provided top_n if given; default to top-half of universe (legacy behaviour).
+  effective_top_n = max(1, min(int(top_n), n_assets) if top_n is not None else n_assets // 2)
   rebalance_turnover = pd.Series(0.0, index=prices.index)
   prev_rebalance_weights = pd.Series(0.0, index=prices.columns)
   rebalance_positions: list[dict[str, Any]] = []
@@ -333,7 +338,7 @@ def _momentum_12_1(prices: pd.DataFrame) -> tuple[pd.Series, float, pd.Series, l
   for i, dt in enumerate(prices.index):
     if i == 0 or dt.month != prices.index[i - 1].month:
       s = scores.loc[dt].dropna()
-      s = s[s > 0].sort_values(ascending=False).head(top_n)
+      s = s[s > 0].sort_values(ascending=False).head(effective_top_n)
       current_w = pd.Series(0.0, index=prices.columns)
       if not s.empty:
         current_w.loc[s.index] = 1.0 / len(s)
@@ -411,6 +416,7 @@ def _trend_filter(
   universe_tickers: list[str],
   benchmark_ticker: str,
   defensive_ticker: str,
+  top_n: int | None = None,
 ) -> tuple[pd.Series, float, pd.Series, list[dict[str, Any]]]:
   """Trend Filter: risk-on (Momentum 12-1) when benchmark > SMA-200; risk-off (TLT) otherwise."""
   if benchmark_ticker not in prices.columns:
@@ -439,7 +445,9 @@ def _trend_filter(
   universe_prices = prices[universe_cols]
   # Momentum 12-1 scores for risk-on selection (replicates _momentum_12_1 logic)
   scores = universe_prices.shift(21) / universe_prices.shift(252) - 1.0
-  top_n_risk_on = max(1, len(universe_cols) // 2)
+  # Use provided top_n if given; default to top-half of universe (legacy behaviour).
+  n_universe = len(universe_cols)
+  top_n_risk_on = max(1, min(int(top_n), n_universe) if top_n is not None else n_universe // 2)
 
   asset_rets = prices.pct_change().fillna(0.0)
   weights = pd.DataFrame(0.0, index=prices.index, columns=prices.columns)
@@ -608,13 +616,13 @@ def _build_baseline_result(io: SupabaseIO, run: dict[str, Any]) -> BacktestResul
   if strat == "equal_weight":
     daily_rets, turnover, rebalance_turnover, rebalance_positions = _equal_weight(prices)
   elif strat == "momentum_12_1":
-    daily_rets, turnover, rebalance_turnover, rebalance_positions = _momentum_12_1(prices)
+    daily_rets, turnover, rebalance_turnover, rebalance_positions = _momentum_12_1(prices, top_n)
   elif strat == "low_vol":
     daily_rets, turnover, rebalance_turnover, rebalance_positions = _low_vol(prices, top_n)
   elif strat == "trend_filter":
     assert defensive_ticker is not None
     daily_rets, turnover, rebalance_turnover, rebalance_positions = _trend_filter(
-      prices, universe_tickers, bench_col, defensive_ticker
+      prices, universe_tickers, bench_col, defensive_ticker, top_n
     )
   else:
     raise ValueError(f"Unsupported baseline strategy: {strat}")
@@ -681,15 +689,145 @@ def _run_backtest(io: SupabaseIO, run: dict[str, Any]) -> BacktestResult:
   raise ValueError(f"Unsupported strategy: {strategy}")
 
 
+def _process_data_ingest_job(io: SupabaseIO, job: Job) -> None:
+  """Download and upsert historical prices for a single benchmark ticker."""
+  started = datetime.utcnow()
+  payload = job.payload or {}
+  ticker = str(payload.get("ticker", "")).strip().upper()
+  if not ticker:
+    io.save_failure(job, 0, "data_ingest job is missing ticker in payload")
+    return
+
+  default_start = "1993-01-01"
+  start_date = str(payload.get("start_date", default_start))
+  end_date = str(payload.get("end_date", datetime.utcnow().strftime("%Y-%m-%d")))
+
+  # Incremental: only download rows that aren't already stored.
+  try:
+    latest_result = (
+      io.client.table("prices")
+      .select("date")
+      .eq("ticker", ticker)
+      .order("date", desc=True)
+      .limit(1)
+      .execute()
+    )
+    existing_latest: str | None = (
+      latest_result.data[0]["date"] if latest_result.data else None
+    )
+  except Exception:
+    existing_latest = None
+
+  if existing_latest:
+    next_day = (
+      pd.Timestamp(existing_latest) + pd.Timedelta(days=1)
+    ).strftime("%Y-%m-%d")
+    if next_day > end_date:
+      # Already up to date — nothing to download.
+      duration = int((datetime.utcnow() - started).total_seconds())
+      io.save_data_ingest_success(
+        job=job,
+        duration_seconds=duration,
+        tickers_updated=1,
+        rows_upserted=0,
+        start_date=existing_latest,
+        end_date=existing_latest,
+      )
+      print(f"[engine] data_ingest skipped job={job.id} {ticker} already current ({existing_latest})")
+      return
+    start_date = next_day
+
+  print(f"[engine] data_ingest job={job.id} ticker={ticker} {start_date}→{end_date}")
+  try:
+    io.update_job_progress(job.id, stage="ingest", progress=20)
+
+    # Download without the 40-row guard used by backtests — incremental updates
+    # may legitimately produce only a handful of new rows.
+    raw = yf.download(
+      tickers=[ticker],
+      start=start_date,
+      end=(pd.to_datetime(end_date) + pd.Timedelta(days=1)).strftime("%Y-%m-%d"),
+      auto_adjust=True,
+      progress=False,
+      threads=False,
+    )
+    if raw.empty:
+      # No new trading days in range (e.g. weekend/holiday at end of window).
+      duration = int((datetime.utcnow() - started).total_seconds())
+      actual = existing_latest or start_date
+      io.save_data_ingest_success(
+        job=job,
+        duration_seconds=duration,
+        tickers_updated=1,
+        rows_upserted=0,
+        start_date=actual,
+        end_date=actual,
+      )
+      print(f"[engine] data_ingest completed job={job.id} no new rows")
+      return
+
+    # Normalise to a Series of close prices.
+    if isinstance(raw.columns, pd.MultiIndex):
+      level0 = raw.columns.get_level_values(0)
+      key = "Close" if "Close" in level0 else "Adj Close"
+      close_raw = raw[key]
+      close_series = close_raw.iloc[:, 0] if isinstance(close_raw, pd.DataFrame) else close_raw
+    else:
+      close_series = raw.iloc[:, 0]
+    close_series = close_series.sort_index().ffill().dropna()
+
+    io.update_job_progress(job.id, stage="backtest", progress=60)
+
+    # Build upsert rows
+    price_rows: list[dict[str, Any]] = []
+    for dt, val in close_series.items():
+      if pd.isna(val):
+        continue
+      price_rows.append({
+        "ticker": ticker,
+        "date": pd.Timestamp(dt).strftime("%Y-%m-%d"),
+        "adj_close": float(val),
+      })
+
+    # Upsert in larger chunks to reduce Supabase round-trips
+    chunk_size = 5000
+    for i in range(0, len(price_rows), chunk_size):
+      chunk = price_rows[i : i + chunk_size]
+      io.client.table("prices").upsert(chunk, on_conflict="ticker,date").execute()
+
+    io.update_job_progress(job.id, stage="backtest", progress=90)
+
+    duration = int((datetime.utcnow() - started).total_seconds())
+    actual_start = price_rows[0]["date"] if price_rows else start_date
+    actual_end = price_rows[-1]["date"] if price_rows else end_date
+    io.save_data_ingest_success(
+      job=job,
+      duration_seconds=duration,
+      tickers_updated=1,
+      rows_upserted=len(price_rows),
+      start_date=actual_start,
+      end_date=actual_end,
+    )
+    print(f"[engine] data_ingest completed job={job.id} {len(price_rows)} rows in {duration}s")
+  except Exception as exc:
+    duration = int((datetime.utcnow() - started).total_seconds())
+    io.save_failure(job, duration, str(exc))
+    print(f"[engine] data_ingest failed job={job.id} in {duration}s: {exc}")
+
+
 def _process_job(io: SupabaseIO, job: Job) -> None:
   if not io.claim_job(job):
+    return
+
+  if job.job_type == "data_ingest":
+    _process_data_ingest_job(io, job)
     return
 
   started = datetime.utcnow()
   print(f"[engine] running job={job.id} run={job.run_id}")
   try:
     io.update_job_progress(job.id, stage="ingest", progress=10)
-    run = io.fetch_run(job.run_id)
+    run = io.fetch_run(job.run_id)  # type: ignore[arg-type]
     if run is None:
       raise RuntimeError(f"Run not found for run_id={job.run_id}")
     resolve_and_snapshot_universe_symbols(io, run)

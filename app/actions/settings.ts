@@ -11,7 +11,7 @@ const RECOMMENDED_DEFAULTS = {
   default_top_n: 10,
   default_initial_capital: 100000,
   default_rebalance_frequency: "Monthly" as const,
-  default_date_range_years: 5,
+  default_date_range_years: 10,
   apply_costs_default: true,
   slippage_bps_default: 0,
 }

@@ -130,18 +130,25 @@ def _build_model(strategy: str):
 
   if strategy == "ml_lightgbm":
     try:
-      from lightgbm import LGBMRegressor
-
-      return LGBMRegressor(
-        n_estimators=300,
-        learning_rate=0.05,
-        num_leaves=31,
-        min_child_samples=20,
-        random_state=0,
-      )
-    except Exception as exc:
-      print(f"[engine][ml] lightgbm unavailable; using ridge fallback: {exc}")
-      return make_pipeline(StandardScaler(), Ridge(alpha=0.7, random_state=0))
+      from lightgbm import LGBMRegressor  # noqa: PLC0415
+    except (ImportError, OSError) as exc:
+      # OSError is raised on macOS when libomp.dylib (OpenMP) is missing;
+      # ImportError when the package itself is absent.  Neither is a silent
+      # fallback — we always propagate a clear RuntimeError.
+      raise RuntimeError(
+        "ml_lightgbm requires LightGBM and its native OpenMP library to be "
+        "installed. No silent fallback will occur. "
+        "Install with: pip install 'lightgbm>=4.5.0' and on macOS run: "
+        "brew install libomp. "
+        f"Original error: {exc}"
+      ) from exc
+    return LGBMRegressor(
+      n_estimators=300,
+      learning_rate=0.05,
+      num_leaves=31,
+      min_child_samples=20,
+      random_state=0,
+    )
 
   raise ValueError(f"Unsupported ML strategy: {strategy}")
 

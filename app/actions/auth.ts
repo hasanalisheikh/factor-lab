@@ -100,13 +100,19 @@ export async function signUpAction(
   const guestUserId =
     currentUser?.user_metadata?.is_guest === true ? currentUser.id : null
 
+  // Build the callback URL for email verification.
+  // NEXT_PUBLIC_SITE_URL should be set to https://factor-lab.vercel.app in production.
+  // Falls back to the request origin (works for local dev automatically).
+  const origin =
+    process.env.NEXT_PUBLIC_SITE_URL ??
+    (await headers()).get("origin") ??
+    "http://localhost:3000"
+  const emailRedirectTo = `${origin}/auth/callback`
+
   const { error } = await supabase.auth.signUp({
     email: parsed.data.email,
     password: parsed.data.password,
-    options: {
-      // Skip email confirmation for now — enable in Supabase dashboard for production
-      emailRedirectTo: undefined,
-    },
+    options: { emailRedirectTo },
   })
 
   if (error) {

@@ -12,7 +12,7 @@ import { Label } from "@/components/ui/label"
 import { Spinner } from "@/components/ui/spinner"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 
-export function LoginForm() {
+export function LoginForm({ authError }: { authError?: string }) {
   const [signInState, signInAction_, isSignInPending] = useActionState<AuthState, FormData>(
     signInAction,
     null
@@ -93,6 +93,13 @@ export function LoginForm() {
             </p>
           </div>
         </div>
+
+        {authError && (
+          <Alert variant="destructive" className="border-destructive/40 bg-destructive/10">
+            <AlertCircle className="size-4" />
+            <AlertDescription>{authError}</AlertDescription>
+          </Alert>
+        )}
 
         <Tabs
           value={activeTab}

@@ -5,6 +5,7 @@ import { z } from "zod"
 import { createAdminClient } from "@/lib/supabase/admin"
 import { createClient } from "@/lib/supabase/server"
 import { BENCHMARK_OPTIONS } from "@/lib/benchmark"
+import { getDataCoverage } from "@/lib/supabase/queries"
 
 function triggerWorker(): void {
   const url = process.env.WORKER_TRIGGER_URL
@@ -125,6 +126,16 @@ export async function createRun(
   const { data: { user } } = await serverClient.auth.getUser()
   if (!user) {
     return { error: "Authentication required. Please sign in." }
+  }
+
+  // Validate dates against available data coverage
+  const coverage = await getDataCoverage()
+  if (coverage.minDate && coverage.maxDate) {
+    if (start_date < coverage.minDate || end_date > coverage.maxDate) {
+      return {
+        error: `Date range outside available data coverage (${coverage.minDate} → ${coverage.maxDate}).`,
+      }
+    }
   }
 
   const supabase = createAdminClient()

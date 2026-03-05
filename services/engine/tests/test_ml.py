@@ -6,6 +6,21 @@ import pytest
 
 from factorlab_engine.ml import FEATURE_COLUMNS, compute_monthly_features, run_walk_forward
 
+
+def _lgbm_available() -> bool:
+  """Return True if LightGBM and its native library can be loaded."""
+  try:
+    import lightgbm  # noqa: F401
+    return True
+  except (ImportError, OSError):
+    return False
+
+
+_requires_lgbm = pytest.mark.skipif(
+  not _lgbm_available(),
+  reason="LightGBM native library not available (install libomp via `brew install libomp`)",
+)
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _make_prices(n_months: int = 60, n_assets: int = 5, seed: int = 42) -> pd.DataFrame:
@@ -130,6 +145,7 @@ def test_positions_match_selected_predictions():
     assert np.isclose(positions[key], float(row["weight"]), atol=1e-12)
 
 
+@_requires_lgbm
 def test_metrics_sanity():
   prices = _make_prices(n_months=60, n_assets=4)
   result = run_walk_forward(
@@ -159,6 +175,33 @@ def test_walk_forward_raises_with_insufficient_window():
       prices=prices,
       start_date="2015-01-01",
       end_date="2015-06-30",
+      benchmark_ticker="SPY",
+      top_n=2,
+      cost_bps=10.0,
+    )
+
+
+def test_ml_lightgbm_fails_loudly_without_lightgbm(monkeypatch: pytest.MonkeyPatch):
+  """ml_lightgbm must raise RuntimeError (not silently fall back to Ridge)
+  when the lightgbm package is unavailable."""
+  import builtins
+  real_import = builtins.__import__
+
+  def _block_lightgbm(name: str, *args, **kwargs):
+    if name == "lightgbm":
+      raise ImportError("lightgbm intentionally blocked by test")
+    return real_import(name, *args, **kwargs)
+
+  monkeypatch.setattr(builtins, "__import__", _block_lightgbm)
+
+  prices = _make_prices(n_months=60, n_assets=4)
+  with pytest.raises(RuntimeError, match="ml_lightgbm requires LightGBM"):
+    run_walk_forward(
+      run_id="test-no-lgbm",
+      strategy="ml_lightgbm",
+      prices=prices,
+      start_date="2018-01-01",
+      end_date="2019-12-31",
       benchmark_ticker="SPY",
       top_n=2,
       cost_bps=10.0,

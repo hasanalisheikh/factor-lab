@@ -153,6 +153,8 @@ export type Database = {
           started_at: string | null
           duration: number | null
           created_at: string
+          job_type: string
+          payload: Json | null
         }
         Insert: {
           id?: string
@@ -165,6 +167,8 @@ export type Database = {
           started_at?: string | null
           duration?: number | null
           created_at?: string
+          job_type?: string
+          payload?: Json | null
         }
         Update: Partial<Database['public']['Tables']['jobs']['Insert']>
         Relationships: []

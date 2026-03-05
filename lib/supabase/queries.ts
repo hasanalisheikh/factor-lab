@@ -44,8 +44,50 @@ export type DataHealthSummary = {
   tickersCount: number
   dateStart: string | null
   dateEnd: string | null
-  missingDaysCount: number
+  businessDaysInWindow: number
+  expectedTickerDays: number
+  actualTickerDays: number
+  missingTickerDays: number
+  completenessPercent: number | null
   lastUpdatedAt: string | null
+}
+
+export type TickerMissingness = {
+  ticker: string
+  actualDays: number
+  missingDays: number
+  coveragePercent: number
+}
+
+export type BenchmarkCoverage = {
+  ticker: string
+  actualDays: number
+  expectedDays: number
+  missingDays: number
+  coveragePercent: number
+  /** Latest date this ticker has data for (YYYY-MM-DD), null if not ingested */
+  latestDate: string | null
+  status: "ok" | "partial" | "missing" | "not_ingested"
+  /** Dev-only: tickers found via ILIKE when actualDays=0, to detect symbol mismatches */
+  debugSimilarTickers?: string[]
+}
+
+export type DataIngestJobStatus = {
+  id: string
+  status: string
+  stage: string | null
+  progress: number
+  error_message: string | null
+}
+
+export type IngestionLogEntry = {
+  id: string
+  ingested_at: string
+  status: string
+  tickers_updated: number
+  rows_upserted: number
+  note: string | null
+  source: string
 }
 
 type RunBenchmarkContext = Pick<
@@ -89,7 +131,7 @@ export async function getRuns(options: GetRunsOptions = {}): Promise<RunWithMetr
         start_date,
         end_date,
         created_at,
-        run_metrics(cagr, sharpe, max_drawdown, turnover)
+        run_metrics(run_id, cagr, sharpe, max_drawdown, turnover)
       `)
       .order("created_at", { ascending: false })
 
@@ -122,7 +164,7 @@ export async function getRuns(options: GetRunsOptions = {}): Promise<RunWithMetr
           start_date,
           end_date,
           created_at,
-          run_metrics(cagr, sharpe, max_drawdown, turnover)
+          run_metrics(run_id, cagr, sharpe, max_drawdown, turnover)
         `)
         .order("created_at", { ascending: false })
 
@@ -438,17 +480,33 @@ export async function getCompareRunBundles(limit = 30): Promise<CompareRunBundle
   }
 }
 
-function countBusinessDaysInclusive(start: Date, end: Date): number {
-  let count = 0
-  const current = new Date(start)
-  while (current <= end) {
-    const day = current.getUTCDay()
-    if (day !== 0 && day !== 6) {
-      count += 1
+export type DataCoverage = {
+  minDate: string | null
+  maxDate: string | null
+}
+
+export async function getDataCoverage(): Promise<DataCoverage> {
+  try {
+    const supabase = createAdminClient()
+    type AggRow = { ticker_count: number; min_date: string | null; max_date: string | null; actual_rows: number }
+    const { data, error } = await supabase.rpc("get_data_health_agg") as unknown as {
+      data: AggRow | null
+      error: { message: string } | null
     }
-    current.setUTCDate(current.getUTCDate() + 1)
+    if (!error && data) {
+      return { minDate: data.min_date, maxDate: data.max_date }
+    }
+    const [minRes, maxRes] = await Promise.all([
+      supabase.from("prices").select("date").order("date", { ascending: true }).limit(1),
+      supabase.from("prices").select("date").order("date", { ascending: false }).limit(1),
+    ])
+    return {
+      minDate: minRes.data?.[0]?.date ?? null,
+      maxDate: maxRes.data?.[0]?.date ?? null,
+    }
+  } catch {
+    return { minDate: null, maxDate: null }
   }
-  return count
 }
 
 export async function getDataHealthSummary(): Promise<DataHealthSummary> {
@@ -456,72 +514,277 @@ export async function getDataHealthSummary(): Promise<DataHealthSummary> {
     tickersCount: 0,
     dateStart: null,
     dateEnd: null,
-    missingDaysCount: 0,
+    businessDaysInWindow: 0,
+    expectedTickerDays: 0,
+    actualTickerDays: 0,
+    missingTickerDays: 0,
+    completenessPercent: null,
     lastUpdatedAt: null,
   }
 
   try {
     const supabase = createAdminClient()
 
-    const [
-      tickersRes,
-      minDateRes,
-      maxDateRes,
-      rowsCountRes,
-      lastUpdatedRes,
-    ] = await Promise.all([
-      supabase.from("prices").select("ticker"),
-      supabase.from("prices").select("date").order("date", { ascending: true }).limit(1),
-      supabase.from("prices").select("date").order("date", { ascending: false }).limit(1),
-      supabase.from("prices").select("*", { count: "exact", head: true }),
-      supabase
-        .from("data_last_updated")
-        .select("last_updated_at")
-        .eq("source", "yfinance_sp100")
-        .maybeSingle(),
-    ])
+    // Try the efficient RPC aggregate first (requires migration 20260305_data_enhancements.sql).
+    // Fall back to individual queries if the function isn't deployed yet.
+    // Note: both promises are started before either is awaited, so they run in parallel.
+    // Cast the RPC promise — the function isn't in the generated schema types yet
+    // (requires migration 20260305_data_enhancements.sql to be applied first).
+    type AggRow = { ticker_count: number; min_date: string | null; max_date: string | null; actual_rows: number }
+    const aggResPromise = supabase.rpc("get_data_health_agg") as unknown as Promise<{
+      data: AggRow | null
+      error: { message: string } | null
+    }>
+    const lastUpdatedResPromise = supabase
+      .from("data_last_updated")
+      .select("last_updated_at, tickers_ingested")
+      .eq("source", "yfinance_sp100")
+      .maybeSingle()
+    const aggRes = await aggResPromise
+    const lastUpdatedRes = await lastUpdatedResPromise
 
-    if (
-      tickersRes.error ||
-      minDateRes.error ||
-      maxDateRes.error ||
-      rowsCountRes.error
-    ) {
-      console.error("getDataHealthSummary error:", {
-        tickers: tickersRes.error?.message,
-        minDate: minDateRes.error?.message,
-        maxDate: maxDateRes.error?.message,
-        rowsCount: rowsCountRes.error?.message,
-      })
-      return empty
+    let tickersCount: number
+    let dateStart: string | null
+    let dateEnd: string | null
+    let actualTickerDays: number
+
+    if (!aggRes.error && aggRes.data) {
+      const agg = aggRes.data as {
+        ticker_count: number
+        min_date: string | null
+        max_date: string | null
+        actual_rows: number
+      }
+      tickersCount = agg.ticker_count ?? 0
+      dateStart = agg.min_date ?? null
+      dateEnd = agg.max_date ?? null
+      actualTickerDays = agg.actual_rows ?? 0
+    } else {
+      // Fallback: use data_last_updated.tickers_ingested for count,
+      // and separate lightweight queries for dates and row count.
+      const [minDateRes, maxDateRes, rowsCountRes] = await Promise.all([
+        supabase.from("prices").select("date").order("date", { ascending: true }).limit(1),
+        supabase.from("prices").select("date").order("date", { ascending: false }).limit(1),
+        supabase.from("prices").select("*", { count: "exact", head: true }),
+      ])
+      tickersCount = lastUpdatedRes.data?.tickers_ingested ?? 0
+      dateStart = minDateRes.data?.[0]?.date ?? null
+      dateEnd = maxDateRes.data?.[0]?.date ?? null
+      actualTickerDays = rowsCountRes.count ?? 0
     }
 
-    const tickers = new Set((tickersRes.data ?? []).map((row) => row.ticker))
-    const tickersCount = tickers.size
-    const dateStart = minDateRes.data?.[0]?.date ?? null
-    const dateEnd = maxDateRes.data?.[0]?.date ?? null
-    const actualRows = rowsCountRes.count ?? 0
+    let businessDaysInWindow = 0
+    let expectedTickerDays = 0
+    let missingTickerDays = 0
+    let completenessPercent: number | null = null
 
-    let missingDaysCount = 0
     if (tickersCount > 0 && dateStart && dateEnd) {
-      const businessDays = countBusinessDaysInclusive(
-        new Date(`${dateStart}T00:00:00Z`),
-        new Date(`${dateEnd}T00:00:00Z`)
-      )
-      const expectedRows = businessDays * tickersCount
-      missingDaysCount = Math.max(expectedRows - actualRows, 0)
+      // Count Mon–Fri business days across the full coverage window
+      const start = new Date(`${dateStart}T00:00:00Z`)
+      const end = new Date(`${dateEnd}T00:00:00Z`)
+      const current = new Date(start)
+      while (current <= end) {
+        const day = current.getUTCDay()
+        if (day !== 0 && day !== 6) businessDaysInWindow++
+        current.setUTCDate(current.getUTCDate() + 1)
+      }
+      expectedTickerDays = businessDaysInWindow * tickersCount
+      missingTickerDays = Math.max(expectedTickerDays - actualTickerDays, 0)
+      completenessPercent =
+        expectedTickerDays > 0
+          ? Math.min((actualTickerDays / expectedTickerDays) * 100, 100)
+          : null
     }
 
     return {
       tickersCount,
       dateStart,
       dateEnd,
-      missingDaysCount,
+      businessDaysInWindow,
+      expectedTickerDays,
+      actualTickerDays,
+      missingTickerDays,
+      completenessPercent,
       lastUpdatedAt: lastUpdatedRes.data?.last_updated_at ?? null,
     }
   } catch (err) {
     console.error("getDataHealthSummary exception:", err)
     return empty
+  }
+}
+
+export async function getTopMissingTickers(
+  limit: number,
+  businessDaysInWindow: number
+): Promise<TickerMissingness[]> {
+  if (businessDaysInWindow === 0) return []
+
+  try {
+    const supabase = createAdminClient()
+    const { data, error } = await supabase.rpc("get_ticker_day_counts")
+
+    if (error) {
+      // Silently skip if the RPC function doesn't exist yet (migration pending)
+      if (!error.message.includes("Could not find the function")) {
+        console.error("getTopMissingTickers error:", error.message)
+      }
+      return []
+    }
+
+    const rows = (data ?? []) as { ticker: string; actual_days: number }[]
+    return rows
+      .map(({ ticker, actual_days }) => {
+        const actualDays = Number(actual_days)
+        const missingDays = Math.max(businessDaysInWindow - actualDays, 0)
+        const coveragePercent = Math.min((actualDays / businessDaysInWindow) * 100, 100)
+        return { ticker, actualDays, missingDays, coveragePercent }
+      })
+      .filter((r) => r.missingDays > 0)
+      .sort((a, b) => b.missingDays - a.missingDays)
+      .slice(0, limit)
+  } catch (err) {
+    console.error("getTopMissingTickers exception:", err)
+    return []
+  }
+}
+
+export async function getBenchmarkCoverage(
+  ticker: string,
+  dateStart: string | null,
+  dateEnd: string | null,
+  businessDaysInWindow: number
+): Promise<BenchmarkCoverage | null> {
+  if (!dateStart || !dateEnd || businessDaysInWindow === 0) return null
+
+  // Normalize: yfinance stores tickers as uppercase, user input may differ
+  const normalizedTicker = ticker.trim().toUpperCase()
+
+  try {
+    const supabase = createAdminClient()
+    const { count, error } = await supabase
+      .from("prices")
+      .select("*", { count: "exact", head: true })
+      .eq("ticker", normalizedTicker)
+      .gte("date", dateStart)
+      .lte("date", dateEnd)
+
+    if (error) {
+      console.error("getBenchmarkCoverage error:", error.message)
+      return null
+    }
+
+    const actualDays = count ?? 0
+
+    // When 0 rows found: run a diagnostic to detect symbol mismatches or missing ingestion
+    let debugSimilarTickers: string[] | undefined
+    let latestDate: string | null = null
+    if (actualDays === 0) {
+      const prefix = normalizedTicker.slice(0, 3)
+      const { data: similarRows } = await supabase
+        .from("prices")
+        .select("ticker")
+        .ilike("ticker", `%${prefix}%`)
+        .limit(30)
+      const similar = [...new Set((similarRows ?? []).map((r) => r.ticker as string))].slice(0, 10)
+      console.warn(
+        `[getBenchmarkCoverage] 0 rows for "${normalizedTicker}" in prices [${dateStart}–${dateEnd}]. ` +
+          `Similar tickers found: ${similar.join(", ") || "(none)"}. ` +
+          `If empty, "${normalizedTicker}" is not in the prices table — ingest it or check the benchmark setting.`
+      )
+      if (process.env.NODE_ENV !== "production") {
+        debugSimilarTickers = similar
+      }
+    } else {
+      // Fetch the latest date for this specific ticker (may differ from global dateEnd)
+      const { data: latestRow } = await supabase
+        .from("prices")
+        .select("date")
+        .eq("ticker", normalizedTicker)
+        .order("date", { ascending: false })
+        .limit(1)
+        .maybeSingle()
+      latestDate = latestRow?.date ?? null
+    }
+
+    const expectedDays = businessDaysInWindow
+    const missingDays = Math.max(expectedDays - actualDays, 0)
+    const coveragePercent =
+      expectedDays > 0 ? Math.min((actualDays / expectedDays) * 100, 100) : 0
+
+    const status: BenchmarkCoverage["status"] =
+      actualDays === 0
+        ? "not_ingested"
+        : coveragePercent < 50
+          ? "missing"
+          : coveragePercent < 99
+            ? "partial"
+            : "ok"
+
+    return { ticker: normalizedTicker, actualDays, expectedDays, missingDays, coveragePercent, latestDate, status, debugSimilarTickers }
+  } catch (err) {
+    console.error("getBenchmarkCoverage exception:", err)
+    return null
+  }
+}
+
+export async function getLatestDataIngestJob(ticker: string): Promise<DataIngestJobStatus | null> {
+  const normalizedTicker = ticker.trim().toUpperCase()
+  try {
+    const supabase = createAdminClient()
+    // Fetch the 20 most-recent data_ingest jobs and filter by ticker client-side
+    // (JSONB @> filtering may not be available in all environments)
+    const { data, error } = await supabase
+      .from("jobs")
+      .select("id, status, stage, progress, error_message, payload, job_type")
+      .eq("job_type", "data_ingest")
+      .order("created_at", { ascending: false })
+      .limit(20)
+
+    if (error) {
+      // Column likely doesn't exist yet — migration not applied, silently skip
+      if (error.message.includes("job_type") || error.message.includes("does not exist")) return null
+      console.error("getLatestDataIngestJob error:", error.message)
+      return null
+    }
+
+    const match = (data ?? []).find((j) => {
+      const p = j.payload as { ticker?: string } | null
+      return p?.ticker?.toUpperCase() === normalizedTicker
+    })
+    if (!match) return null
+
+    return {
+      id: match.id,
+      status: match.status,
+      stage: match.stage,
+      progress: match.progress,
+      error_message: match.error_message,
+    }
+  } catch (err) {
+    console.error("getLatestDataIngestJob exception:", err)
+    return null
+  }
+}
+
+export async function getRecentIngestionHistory(limit = 5): Promise<IngestionLogEntry[]> {
+  try {
+    const supabase = createAdminClient()
+    const { data, error } = await supabase
+      .from("data_ingestion_log")
+      .select("*")
+      .order("ingested_at", { ascending: false })
+      .limit(limit)
+
+    if (error) {
+      // Table may not exist yet if migration hasn't been applied
+      console.warn("getRecentIngestionHistory:", error.message)
+      return []
+    }
+
+    return (data ?? []) as IngestionLogEntry[]
+  } catch (err) {
+    console.error("getRecentIngestionHistory exception:", err)
+    return []
   }
 }
 
