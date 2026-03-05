@@ -16,8 +16,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from factorlab_engine.worker import _build_baseline_result
 from factorlab_engine.ml import run_walk_forward
+from factorlab_engine.worker import _build_baseline_result
 
 # ---------------------------------------------------------------------------
 # LightGBM availability check
