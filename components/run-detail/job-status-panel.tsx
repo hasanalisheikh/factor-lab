@@ -1,7 +1,32 @@
+"use client"
+
+import { useState } from "react"
 import { Clock, Loader2 } from "lucide-react"
 import { Card, CardContent } from "@/components/ui/card"
 import type { JobRow } from "@/lib/supabase/types"
 import type { RunStatus } from "@/lib/types"
+
+const ERROR_TRUNCATE_CHARS = 200
+
+function FailedErrorMessage({ message }: { message: string }) {
+  const [expanded, setExpanded] = useState(false)
+  const isLong = message.length > ERROR_TRUNCATE_CHARS
+  const displayed = !isLong || expanded ? message : message.slice(0, ERROR_TRUNCATE_CHARS) + "…"
+
+  return (
+    <span>
+      <span className="font-mono break-all">{displayed}</span>
+      {isLong && (
+        <button
+          onClick={() => setExpanded((v) => !v)}
+          className="ml-1.5 text-[11px] text-primary underline underline-offset-2 hover:no-underline"
+        >
+          {expanded ? "collapse" : "expand"}
+        </button>
+      )}
+    </span>
+  )
+}
 
 interface JobStatusPanelProps {
   job: JobRow | null
@@ -17,6 +42,7 @@ export function JobStatusPanel({ job, runStatus }: JobStatusPanelProps) {
   const progress = job?.progress ?? 0
   const stage = job?.stage ?? "ingest"
   const stageLabel = stage.charAt(0).toUpperCase() + stage.slice(1)
+  const errorText = job?.error_message || null
 
   return (
     <Card className="bg-card border-border">
@@ -39,9 +65,11 @@ export function JobStatusPanel({ job, runStatus }: JobStatusPanelProps) {
             <p className="text-[12px] text-muted-foreground mt-0.5">
               {isQueued
                 ? "Your run is being processed, please wait shortly!"
-                : isFailed
-                ? job?.error_message || "The worker failed before completion."
-                : `Stage: ${stageLabel} — ${progress}% complete`}
+                : isRunning
+                ? `Stage: ${stageLabel} — ${progress}% complete`
+                : isFailed && errorText
+                ? <FailedErrorMessage message={errorText} />
+                : "The worker failed before completion."}
             </p>
 
             {isRunning && (

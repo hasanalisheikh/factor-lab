@@ -1,11 +1,17 @@
 from __future__ import annotations
 
+import concurrent.futures
+import hashlib
+import json
 import os
+import platform
+import signal
 import threading
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
 import pandas as pd
@@ -13,6 +19,13 @@ import yfinance as yf
 
 from .ml import run_walk_forward
 from .supabase_io import Job, SupabaseIO
+
+# ---------------------------------------------------------------------------
+# Job-level wall-clock timeout (prevents stuck/runaway jobs)
+# ---------------------------------------------------------------------------
+_JOB_TIMEOUT_SECONDS: int = int(os.getenv("JOB_TIMEOUT_SECONDS", "600"))  # 10 min
+
+ProgressCallback = Callable[[str, int], None]
 
 DEFAULT_ETF8_UNIVERSE = ["SPY", "QQQ", "IWM", "EFA", "EEM", "TLT", "GLD", "VNQ"]
 
@@ -29,6 +42,12 @@ _LOW_VOL_WINDOW: int = 60          # 60 trading-day realized vol window
 _TREND_SMA_WINDOW: int = 200       # 200-day benchmark SMA for trend signal
 _TREND_DEFENSIVE: str = "TLT"      # Primary risk-off asset
 _TREND_DEFENSIVE_FALLBACK: str = "BIL"  # Cash-proxy fallback
+
+# Data-ingest safeguards
+_INGEST_HTTP_TIMEOUT_SECONDS: int = 25
+_INGEST_ATTEMPT_TIMEOUT_SECONDS: int = 45
+_INGEST_MAX_RETRIES: int = 3
+_INGEST_BACKOFF_SECONDS: tuple[int, ...] = (1, 2, 4)
 
 # Static preset baskets used for run-level reproducibility. These can be updated
 # later without changing the resolution precedence contract.
@@ -566,7 +585,99 @@ def _equity_rows(
   return rows
 
 
-def _build_baseline_result(io: SupabaseIO, run: dict[str, Any]) -> BacktestResult:
+def _rows_digest(rows: list[dict[str, Any]] | None, *, keys: list[str]) -> str | None:
+  if not rows:
+    return None
+  normalized: list[dict[str, Any]] = []
+  for row in rows:
+    normalized.append({k: row.get(k) for k in keys})
+  payload = json.dumps(normalized, sort_keys=True, separators=(",", ":"), default=str)
+  return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _validate_backtest_result(result: BacktestResult, run_id: str) -> None:
+  """Raise RuntimeError if any required output is missing.
+
+  Prevents a run from being marked 'completed' when the DB would be left in a
+  partially-written state (e.g. missing metrics, empty equity curve, no positions).
+  """
+  missing: list[str] = []
+
+  if not result.equity_rows:
+    missing.append("equity_curve (no rows produced)")
+  else:
+    has_benchmark = any(row.get("benchmark") is not None for row in result.equity_rows)
+    if not has_benchmark:
+      missing.append("equity_curve.benchmark (all benchmark values are null)")
+
+  if not result.position_rows:
+    missing.append("positions (no rebalance rows produced)")
+
+  required_keys = {"cagr", "sharpe", "max_drawdown", "turnover", "volatility", "win_rate", "profit_factor", "calmar"}
+  if not result.metrics:
+    missing.append("metrics (empty)")
+  else:
+    absent = required_keys - set(result.metrics.keys())
+    if absent:
+      missing.append(f"metrics missing keys: {sorted(absent)}")
+
+  if missing:
+    raise RuntimeError(
+      f"[run={run_id}] Backtest finished but required outputs are missing: "
+      + ", ".join(missing)
+      + ". Run marked failed to prevent silent data loss."
+    )
+
+
+def _build_run_metadata(run: dict[str, Any], result: BacktestResult) -> dict[str, Any]:
+  strategy = str(run.get("strategy_id", ""))
+  model_metadata = result.model_metadata or {}
+  model_params = model_metadata.get("model_params", {})
+  if not isinstance(model_params, dict):
+    model_params = {}
+  requested_model_impl: str | None = None
+  if strategy == "ml_ridge":
+    requested_model_impl = "ridge"
+  elif strategy == "ml_lightgbm":
+    requested_model_impl = "lightgbm"
+
+  model_impl = str(model_params.get("model_impl") or requested_model_impl or "n/a")
+  train_start = model_metadata.get("train_start")
+  train_end = model_metadata.get("train_end")
+  feature_set = model_params.get("feature_set")
+
+  return {
+    "strategy_requested": strategy,
+    "model_impl": model_impl,
+    "model_name": str(model_metadata.get("model_name") or strategy),
+    "model_version": model_params.get("model_version"),
+    "feature_set": feature_set,
+    "training_window": {
+      "start": train_start,
+      "end": train_end,
+      "min_train_months": (
+        model_params.get("training_window", {}).get("min_train_months")
+        if isinstance(model_params.get("training_window"), dict)
+        else None
+      ),
+    },
+    "positions_digest": _rows_digest(
+      result.position_rows,
+      keys=["date", "symbol", "weight"],
+    ),
+    "equity_digest": _rows_digest(
+      result.equity_rows,
+      keys=["date", "portfolio", "benchmark"],
+    ),
+  }
+
+
+def _build_baseline_result(
+  io: SupabaseIO,
+  run: dict[str, Any],
+  *,
+  on_progress: ProgressCallback | None = None,
+) -> BacktestResult:
   universe_tickers = resolve_universe_symbols(run)
   tickers = list(universe_tickers)
   benchmark_ticker_raw = _resolve_run_benchmark_ticker(run)
@@ -584,6 +695,8 @@ def _build_baseline_result(io: SupabaseIO, run: dict[str, Any]) -> BacktestResul
     if defensive_ticker not in tickers:
       tickers = [*tickers, defensive_ticker]
 
+  if on_progress:
+    on_progress("load_data", 20)
   prices = io.fetch_prices_frame(tickers, run["start_date"], run["end_date"])
   if prices.empty or prices.shape[0] < 40:
     prices = _download_prices(run["start_date"], run["end_date"], tickers)
@@ -612,6 +725,8 @@ def _build_baseline_result(io: SupabaseIO, run: dict[str, Any]) -> BacktestResul
   _ensure_min_history(prices, context=f"run {run['id']} strategy {strat}")
   bench_col = _select_available_benchmark_ticker(benchmark_ticker_raw, prices.columns)
 
+  if on_progress:
+    on_progress("compute_signals", 40)
   rebalance_positions: list[dict[str, Any]] = []
   if strat == "equal_weight":
     daily_rets, turnover, rebalance_turnover, rebalance_positions = _equal_weight(prices)
@@ -627,12 +742,17 @@ def _build_baseline_result(io: SupabaseIO, run: dict[str, Any]) -> BacktestResul
   else:
     raise ValueError(f"Unsupported baseline strategy: {strat}")
 
+  if on_progress:
+    on_progress("rebalance", 60)
   daily_rets = _apply_rebalance_costs(daily_rets, rebalance_turnover, costs_bps)
   benchmark_rets = prices[bench_col].pct_change().fillna(0.0)
 
   portfolio = 100_000.0 * (1.0 + daily_rets).cumprod()
   benchmark = 100_000.0 * (1.0 + benchmark_rets.reindex(portfolio.index).fillna(0.0)).cumprod()
   rows = _equity_rows(portfolio.index, portfolio, benchmark)
+
+  if on_progress:
+    on_progress("metrics", 78)
   metrics = _compute_metrics(daily_rets, turnover)
 
   # Attach run_id to each position row
@@ -642,7 +762,12 @@ def _build_baseline_result(io: SupabaseIO, run: dict[str, Any]) -> BacktestResul
   return BacktestResult(equity_rows=rows, metrics=metrics, position_rows=position_rows)
 
 
-def _build_ml_result(io: SupabaseIO, run: dict[str, Any]) -> BacktestResult:
+def _build_ml_result(
+  io: SupabaseIO,
+  run: dict[str, Any],
+  *,
+  on_progress: ProgressCallback | None = None,
+) -> BacktestResult:
   tickers = resolve_universe_symbols(run)
   requested_benchmark = _resolve_run_benchmark_ticker(run)
   if requested_benchmark not in tickers:
@@ -653,12 +778,44 @@ def _build_ml_result(io: SupabaseIO, run: dict[str, Any]) -> BacktestResult:
     pd.to_datetime(run["start_date"]) - pd.DateOffset(years=warmup_years)
   ).strftime("%Y-%m-%d")
 
+  if on_progress:
+    on_progress("load_data", 15)
   prices = io.fetch_prices_frame(tickers, warmup_start, run["end_date"])
-  if prices.empty or prices.shape[0] < 260:
+  available_columns = set(str(c) for c in prices.columns)
+  missing_tickers = [t for t in tickers if t not in available_columns]
+  has_benchmark = requested_benchmark in available_columns
+  has_non_benchmark = any(t != requested_benchmark and t in available_columns for t in tickers)
+  needs_download = (
+    prices.empty
+    or prices.shape[0] < 260
+    or not has_benchmark
+    or not has_non_benchmark
+    or bool(missing_tickers)
+  )
+  if needs_download:
     prices = _download_prices(warmup_start, run["end_date"], tickers)
+
+  # Hard guard: ML requires at least one investable (non-benchmark) symbol.
+  investable = [t for t in tickers if t != requested_benchmark and t in set(str(c) for c in prices.columns)]
+  if not investable:
+    raise ValueError(
+      "ML run aborted: no non-benchmark universe symbols are available in price data. "
+      "Ingest the selected universe or choose a different universe."
+    )
   _ensure_min_history(prices, context=f"run {run['id']} strategy {run['strategy_id']}")
 
+  if on_progress:
+    on_progress("features", 30)
   benchmark_ticker = _select_available_benchmark_ticker(requested_benchmark, prices.columns)
+
+  top_n_raw = int(run.get("top_n") or 10)
+  top_n_for_ml = max(1, min(top_n_raw, len(investable)))
+  if top_n_for_ml < top_n_raw:
+    print(
+      f"[engine][ml] run={run['id']} top_n clamped {top_n_raw}→{top_n_for_ml} "
+      f"(universe has {len(investable)} investable symbols)"
+    )
+
   ml = run_walk_forward(
     run_id=run["id"],
     strategy=run["strategy_id"],
@@ -666,9 +823,26 @@ def _build_ml_result(io: SupabaseIO, run: dict[str, Any]) -> BacktestResult:
     start_date=run["start_date"],
     end_date=run["end_date"],
     benchmark_ticker=benchmark_ticker,
-    top_n=int(run.get("top_n") or 10),
+    top_n=top_n_for_ml,
     cost_bps=float(run.get("costs_bps") or 10.0),
   )
+  if on_progress:
+    on_progress("train", 75)
+  model_params = (ml.metadata or {}).get("model_params", {})
+  if not isinstance(model_params, dict):
+    model_params = {}
+  expected_impl = "ridge" if run["strategy_id"] == "ml_ridge" else "lightgbm"
+  actual_impl = str(model_params.get("model_impl") or "")
+  if actual_impl != expected_impl:
+    raise RuntimeError(
+      f"ML strategy dispatch mismatch: requested={run['strategy_id']} "
+      f"expected_impl={expected_impl} actual_impl={actual_impl or 'n/a'}"
+    )
+  if len(ml.prediction_rows) == 0:
+    raise RuntimeError(
+      f"ML strategy {run['strategy_id']} produced no predictions. "
+      "Run aborted to avoid silent fallback or degenerate output."
+    )
   return BacktestResult(
     equity_rows=ml.equity_rows,
     metrics=ml.metrics,
@@ -679,14 +853,57 @@ def _build_ml_result(io: SupabaseIO, run: dict[str, Any]) -> BacktestResult:
   )
 
 
-def _run_backtest(io: SupabaseIO, run: dict[str, Any]) -> BacktestResult:
+def _run_backtest(
+  io: SupabaseIO,
+  run: dict[str, Any],
+  on_progress: ProgressCallback | None = None,
+) -> BacktestResult:
   strategy = run["strategy_id"]
   if strategy in {"equal_weight", "momentum_12_1", "low_vol", "trend_filter"}:
-    return _build_baseline_result(io, run)
+    return _build_baseline_result(io, run, on_progress=on_progress)
   if strategy in {"ml_ridge", "ml_lightgbm"}:
-    return _build_ml_result(io, run)
+    return _build_ml_result(io, run, on_progress=on_progress)
 
   raise ValueError(f"Unsupported strategy: {strategy}")
+
+
+def _download_data_ingest_prices(
+  ticker: str,
+  start_date: str,
+  end_date: str,
+) -> pd.DataFrame:
+  return yf.download(
+    tickers=[ticker],
+    start=start_date,
+    end=(pd.to_datetime(end_date) + pd.Timedelta(days=1)).strftime("%Y-%m-%d"),
+    auto_adjust=True,
+    progress=False,
+    threads=False,
+    timeout=_INGEST_HTTP_TIMEOUT_SECONDS,
+  )
+
+
+def _download_data_ingest_with_retry(
+  ticker: str,
+  start_date: str,
+  end_date: str,
+) -> pd.DataFrame:
+  last_exc: Exception | None = None
+  for attempt in range(1, _INGEST_MAX_RETRIES + 1):
+    try:
+      with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(_download_data_ingest_prices, ticker, start_date, end_date)
+        return future.result(timeout=_INGEST_ATTEMPT_TIMEOUT_SECONDS)
+    except Exception as exc:
+      last_exc = exc
+      if attempt >= _INGEST_MAX_RETRIES:
+        break
+      backoff = _INGEST_BACKOFF_SECONDS[min(attempt - 1, len(_INGEST_BACKOFF_SECONDS) - 1)]
+      time.sleep(backoff)
+
+  raise RuntimeError(
+    f"download failed after {_INGEST_MAX_RETRIES} attempts: {last_exc}"
+  ) from last_exc
 
 
 def _process_data_ingest_job(io: SupabaseIO, job: Job) -> None:
@@ -695,7 +912,12 @@ def _process_data_ingest_job(io: SupabaseIO, job: Job) -> None:
   payload = job.payload or {}
   ticker = str(payload.get("ticker", "")).strip().upper()
   if not ticker:
-    io.save_failure(job, 0, "data_ingest job is missing ticker in payload")
+    io.save_failure(
+      job,
+      0,
+      "[stage=download] data_ingest job is missing ticker in payload",
+      stage="download",
+    )
     return
 
   default_start = "1993-01-01"
@@ -738,23 +960,18 @@ def _process_data_ingest_job(io: SupabaseIO, job: Job) -> None:
     start_date = next_day
 
   print(f"[engine] data_ingest job={job.id} ticker={ticker} {start_date}→{end_date}")
+  stage = "download"
   try:
-    io.update_job_progress(job.id, stage="ingest", progress=20)
+    io.update_job_progress(job.id, stage=stage, progress=15)
 
     # Download without the 40-row guard used by backtests — incremental updates
     # may legitimately produce only a handful of new rows.
-    raw = yf.download(
-      tickers=[ticker],
-      start=start_date,
-      end=(pd.to_datetime(end_date) + pd.Timedelta(days=1)).strftime("%Y-%m-%d"),
-      auto_adjust=True,
-      progress=False,
-      threads=False,
-    )
+    raw = _download_data_ingest_with_retry(ticker, start_date, end_date)
     if raw.empty:
       # No new trading days in range (e.g. weekend/holiday at end of window).
       duration = int((datetime.utcnow() - started).total_seconds())
       actual = existing_latest or start_date
+      io.update_job_progress(job.id, stage="finalize", progress=95)
       io.save_data_ingest_success(
         job=job,
         duration_seconds=duration,
@@ -767,6 +984,8 @@ def _process_data_ingest_job(io: SupabaseIO, job: Job) -> None:
       return
 
     # Normalise to a Series of close prices.
+    stage = "transform"
+    io.update_job_progress(job.id, stage=stage, progress=45)
     if isinstance(raw.columns, pd.MultiIndex):
       level0 = raw.columns.get_level_values(0)
       key = "Close" if "Close" in level0 else "Adj Close"
@@ -776,9 +995,9 @@ def _process_data_ingest_job(io: SupabaseIO, job: Job) -> None:
       close_series = raw.iloc[:, 0]
     close_series = close_series.sort_index().ffill().dropna()
 
-    io.update_job_progress(job.id, stage="backtest", progress=60)
-
     # Build upsert rows
+    stage = "upsert_prices"
+    io.update_job_progress(job.id, stage=stage, progress=70)
     price_rows: list[dict[str, Any]] = []
     for dt, val in close_series.items():
       if pd.isna(val):
@@ -795,7 +1014,8 @@ def _process_data_ingest_job(io: SupabaseIO, job: Job) -> None:
       chunk = price_rows[i : i + chunk_size]
       io.client.table("prices").upsert(chunk, on_conflict="ticker,date").execute()
 
-    io.update_job_progress(job.id, stage="backtest", progress=90)
+    stage = "finalize"
+    io.update_job_progress(job.id, stage=stage, progress=95)
 
     duration = int((datetime.utcnow() - started).total_seconds())
     actual_start = price_rows[0]["date"] if price_rows else start_date
@@ -811,8 +1031,29 @@ def _process_data_ingest_job(io: SupabaseIO, job: Job) -> None:
     print(f"[engine] data_ingest completed job={job.id} {len(price_rows)} rows in {duration}s")
   except Exception as exc:
     duration = int((datetime.utcnow() - started).total_seconds())
-    io.save_failure(job, duration, str(exc))
+    io.save_failure(job, duration, f"[stage={stage}] {exc}", stage=stage)
     print(f"[engine] data_ingest failed job={job.id} in {duration}s: {exc}")
+
+
+def _install_job_timeout(seconds: int) -> None:
+  """Install a SIGALRM-based wall-clock timeout for the current process (POSIX only)."""
+  if platform.system() == "Windows":
+    return
+  def _handler(signum: int, frame: object) -> None:
+    raise RuntimeError(
+      f"Job exceeded maximum runtime of {seconds}s ({seconds // 60} min). "
+      "The backtest or model training took too long and was aborted. "
+      "Try a shorter date range or a lighter-weight strategy."
+    )
+  signal.signal(signal.SIGALRM, _handler)
+  signal.alarm(seconds)
+
+
+def _cancel_job_timeout() -> None:
+  """Cancel any pending SIGALRM timeout."""
+  if platform.system() == "Windows":
+    return
+  signal.alarm(0)
 
 
 def _process_job(io: SupabaseIO, job: Job) -> None:
@@ -824,7 +1065,8 @@ def _process_job(io: SupabaseIO, job: Job) -> None:
     return
 
   started = datetime.utcnow()
-  print(f"[engine] running job={job.id} run={job.run_id}")
+  print(f"[engine] running job={job.id} run={job.run_id} timeout={_JOB_TIMEOUT_SECONDS}s")
+  _install_job_timeout(_JOB_TIMEOUT_SECONDS)
   try:
     io.update_job_progress(job.id, stage="ingest", progress=10)
     run = io.fetch_run(job.run_id)  # type: ignore[arg-type]
@@ -847,15 +1089,19 @@ def _process_job(io: SupabaseIO, job: Job) -> None:
         "Please choose an earlier start date."
       )
 
-    strategy = run["strategy_id"]
-    if strategy in {"ml_ridge", "ml_lightgbm"}:
-      io.update_job_progress(job.id, stage="features", progress=30)
-      io.update_job_progress(job.id, stage="train", progress=55)
-      io.update_job_progress(job.id, stage="backtest", progress=80)
-    else:
-      io.update_job_progress(job.id, stage="backtest", progress=70)
+    # Progress callback: updates job stage/progress via DB during computation.
+    def progress_cb(stage: str, pct: int) -> None:
+      io.update_job_progress(job.id, stage=stage, progress=pct)
 
-    result = _run_backtest(io, run)
+    result = _run_backtest(io, run, progress_cb)
+
+    assert job.run_id is not None
+
+    # Validate all required outputs are present before marking as completed.
+    _validate_backtest_result(result, job.run_id)
+
+    io.update_job_progress(job.id, stage="persist", progress=90)
+    io.update_run_metadata(job.run_id, _build_run_metadata(run, result))
 
     io.update_job_progress(job.id, stage="report", progress=95)
     duration = int((datetime.utcnow() - started).total_seconds())
@@ -872,11 +1118,18 @@ def _process_job(io: SupabaseIO, job: Job) -> None:
       model_metadata=result.model_metadata,
       position_rows=result.position_rows,
     )
+    _cancel_job_timeout()
     print(f"[engine] completed job={job.id} in {duration}s")
   except Exception as exc:
+    _cancel_job_timeout()
     duration = int((datetime.utcnow() - started).total_seconds())
-    io.save_failure(job, duration, str(exc))
-    print(f"[engine] failed job={job.id} in {duration}s: {exc}")
+    err_str = str(exc)
+    # Print first — so the error is always visible in logs even if the DB write fails.
+    print(f"[engine] failed job={job.id} in {duration}s: {err_str}")
+    try:
+      io.save_failure(job, duration, err_str)
+    except Exception as save_exc:
+      print(f"[engine] CRITICAL: could not persist failure for job={job.id}: {save_exc}")
 
 
 # ---------------------------------------------------------------------------
