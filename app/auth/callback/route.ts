@@ -10,9 +10,10 @@ export async function GET(request: NextRequest) {
   // `next` lets the caller specify a post-auth redirect (defaults to /dashboard)
   const next = searchParams.get("next") ?? "/dashboard"
 
-  // Surface Supabase auth errors (e.g. expired link) as a friendly login page message
+  // Surface Supabase auth errors (e.g. expired link) via the verify tab
   if (error) {
     const loginUrl = new URL("/login", origin)
+    loginUrl.searchParams.set("tab", "verify")
     loginUrl.searchParams.set(
       "error",
       errorDescription ?? "Verification link expired. Please request a new one."
@@ -22,6 +23,7 @@ export async function GET(request: NextRequest) {
 
   if (!code) {
     const loginUrl = new URL("/login", origin)
+    loginUrl.searchParams.set("tab", "verify")
     loginUrl.searchParams.set("error", "Verification link expired. Please request a new one.")
     return NextResponse.redirect(loginUrl)
   }
@@ -46,10 +48,8 @@ export async function GET(request: NextRequest) {
 
   if (exchangeError) {
     const loginUrl = new URL("/login", origin)
-    loginUrl.searchParams.set(
-      "error",
-      "Verification link expired. Please request a new one."
-    )
+    loginUrl.searchParams.set("tab", "verify")
+    loginUrl.searchParams.set("error", "Verification link expired. Please request a new one.")
     return NextResponse.redirect(loginUrl)
   }
 

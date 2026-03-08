@@ -72,8 +72,6 @@ export default async function DashboardPage({
         storedTurnover={storedTurnover}
         benchmark={benchmark}
         benchmarkOverlapConfirmed={benchmarkOverlapConfirmed}
-        featuredRunId={featuredRun?.id ?? null}
-        featuredRunName={featuredRun?.name ?? null}
       >
         <RecentRuns runs={recentRuns} total={totalRuns} selectedRunId={featuredRun?.id ?? null} />
       </DashboardOverview>

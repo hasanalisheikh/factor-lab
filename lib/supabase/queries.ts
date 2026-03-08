@@ -2,6 +2,7 @@ import "server-only"
 import { createClient } from "./server"
 import { createAdminClient } from "./admin"
 import {
+  BENCHMARK_OPTIONS,
   getRunBenchmark,
   inferPossibleOverlapFromUniverse,
   isBenchmarkHeldAtLatestRebalance,
@@ -21,7 +22,11 @@ import type {
   UserSettings,
   RunWithMetrics,
   CompareRunBundle,
+  TickerMissingness,
+  BenchmarkCoverage,
+  DataIngestJobStatus,
 } from "./types"
+import { COVERAGE_WINDOW_START } from "./types"
 
 // Re-export for server-side consumers that import types from this module
 export type {
@@ -38,7 +43,11 @@ export type {
   UserSettings,
   RunWithMetrics,
   CompareRunBundle,
+  TickerMissingness,
+  BenchmarkCoverage,
+  DataIngestJobStatus,
 }
+export { COVERAGE_WINDOW_START }
 
 export type DataHealthSummary = {
   tickersCount: number
@@ -52,33 +61,6 @@ export type DataHealthSummary = {
   lastUpdatedAt: string | null
 }
 
-export type TickerMissingness = {
-  ticker: string
-  actualDays: number
-  missingDays: number
-  coveragePercent: number
-}
-
-export type BenchmarkCoverage = {
-  ticker: string
-  actualDays: number
-  expectedDays: number
-  missingDays: number
-  coveragePercent: number
-  /** Latest date this ticker has data for (YYYY-MM-DD), null if not ingested */
-  latestDate: string | null
-  status: "ok" | "partial" | "missing" | "not_ingested"
-  /** Dev-only: tickers found via ILIKE when actualDays=0, to detect symbol mismatches */
-  debugSimilarTickers?: string[]
-}
-
-export type DataIngestJobStatus = {
-  id: string
-  status: string
-  stage: string | null
-  progress: number
-  error_message: string | null
-}
 
 export type IngestionLogEntry = {
   id: string
@@ -253,18 +235,29 @@ export async function getRunById(id: string): Promise<RunWithMetrics | null> {
 export async function getEquityCurve(runId: string): Promise<EquityCurveRow[]> {
   try {
     const supabase = await createClient()
-    const { data, error } = await supabase
-      .from("equity_curve")
-      .select("*")
-      .eq("run_id", runId)
-      .order("date", { ascending: true })
+    // PostgREST hard-caps responses at 1000 rows. A 5-year daily run has ~1255
+    // rows, so we must paginate to avoid silently truncating the series.
+    const PAGE = 1000
+    const all: EquityCurveRow[] = []
+    let offset = 0
+    while (true) {
+      const { data, error } = await supabase
+        .from("equity_curve")
+        .select("*")
+        .eq("run_id", runId)
+        .order("date", { ascending: true })
+        .range(offset, offset + PAGE - 1)
 
-    if (error) {
-      console.error("getEquityCurve error:", error.message)
-      return []
+      if (error) {
+        console.error("getEquityCurve error:", error.message)
+        return []
+      }
+      const page = (data ?? []) as EquityCurveRow[]
+      all.push(...page)
+      if (page.length < PAGE) break
+      offset += PAGE
     }
-
-    return (data ?? []) as EquityCurveRow[]
+    return all
   } catch (err) {
     console.error("getEquityCurve exception:", err)
     return []
@@ -678,6 +671,7 @@ export async function getBenchmarkCoverage(
     // When 0 rows found: run a diagnostic to detect symbol mismatches or missing ingestion
     let debugSimilarTickers: string[] | undefined
     let latestDate: string | null = null
+    let earliestDate: string | null = null
     if (actualDays === 0) {
       const prefix = normalizedTicker.slice(0, 3)
       const { data: similarRows } = await supabase
@@ -695,15 +689,25 @@ export async function getBenchmarkCoverage(
         debugSimilarTickers = similar
       }
     } else {
-      // Fetch the latest date for this specific ticker (may differ from global dateEnd)
-      const { data: latestRow } = await supabase
-        .from("prices")
-        .select("date")
-        .eq("ticker", normalizedTicker)
-        .order("date", { ascending: false })
-        .limit(1)
-        .maybeSingle()
-      latestDate = latestRow?.date ?? null
+      // Fetch the earliest and latest dates for this ticker (may differ from global window)
+      const [latestRow, earliestRow] = await Promise.all([
+        supabase
+          .from("prices")
+          .select("date")
+          .eq("ticker", normalizedTicker)
+          .order("date", { ascending: false })
+          .limit(1)
+          .maybeSingle(),
+        supabase
+          .from("prices")
+          .select("date")
+          .eq("ticker", normalizedTicker)
+          .order("date", { ascending: true })
+          .limit(1)
+          .maybeSingle(),
+      ])
+      latestDate = latestRow.data?.date ?? null
+      earliestDate = earliestRow.data?.date ?? null
     }
 
     const expectedDays = businessDaysInWindow
@@ -720,7 +724,21 @@ export async function getBenchmarkCoverage(
             ? "partial"
             : "ok"
 
-    return { ticker: normalizedTicker, actualDays, expectedDays, missingDays, coveragePercent, latestDate, status, debugSimilarTickers }
+    const needsHistoricalBackfill =
+      earliestDate !== null && earliestDate > COVERAGE_WINDOW_START
+
+    return {
+      ticker: normalizedTicker,
+      actualDays,
+      expectedDays,
+      missingDays,
+      coveragePercent,
+      latestDate,
+      earliestDate,
+      needsHistoricalBackfill,
+      status,
+      debugSimilarTickers,
+    }
   } catch (err) {
     console.error("getBenchmarkCoverage exception:", err)
     return null
@@ -735,7 +753,7 @@ export async function getLatestDataIngestJob(ticker: string): Promise<DataIngest
     // (JSONB @> filtering may not be available in all environments)
     const { data, error } = await supabase
       .from("jobs")
-      .select("id, status, stage, progress, error_message, payload, job_type")
+      .select("id, status, stage, progress, error_message, created_at, started_at, payload, job_type")
       .eq("job_type", "data_ingest")
       .order("created_at", { ascending: false })
       .limit(20)
@@ -759,11 +777,134 @@ export async function getLatestDataIngestJob(ticker: string): Promise<DataIngest
       stage: match.stage,
       progress: match.progress,
       error_message: match.error_message,
+      created_at: match.created_at ?? null,
+      started_at: match.started_at ?? null,
     }
   } catch (err) {
     console.error("getLatestDataIngestJob exception:", err)
     return null
   }
+}
+
+/** Fetch coverage for all 8 BENCHMARK_OPTIONS in a single query. */
+export async function getAllBenchmarkCoverage(
+  dateStart: string | null,
+  dateEnd: string | null,
+  businessDaysInWindow: number
+): Promise<BenchmarkCoverage[]> {
+  const tickers = [...BENCHMARK_OPTIONS]
+  try {
+    const supabase = createAdminClient()
+
+    // Single query: aggregate per ticker within the coverage window
+    const { data, error } = await supabase
+      .from("prices")
+      .select("ticker, date")
+      .in("ticker", tickers)
+      .gte("date", dateStart ?? "1900-01-01")
+      .lte("date", dateEnd ?? "9999-12-31")
+
+    if (error) {
+      console.error("getAllBenchmarkCoverage error:", error.message)
+      return []
+    }
+
+    // Build a map: ticker → { actualDays, earliestDate, latestDate }
+    const agg = new Map<string, { actualDays: number; earliest: string; latest: string }>()
+    for (const row of data ?? []) {
+      const t = row.ticker as string
+      const d = row.date as string
+      const existing = agg.get(t)
+      if (!existing) {
+        agg.set(t, { actualDays: 1, earliest: d, latest: d })
+      } else {
+        existing.actualDays += 1
+        if (d < existing.earliest) existing.earliest = d
+        if (d > existing.latest) existing.latest = d
+      }
+    }
+
+    return tickers.map((ticker) => {
+      const stats = agg.get(ticker)
+      const actualDays = stats?.actualDays ?? 0
+      const earliestDate = stats?.earliest ?? null
+      const latestDate = stats?.latest ?? null
+      const expectedDays = businessDaysInWindow
+      const missingDays = Math.max(expectedDays - actualDays, 0)
+      const coveragePercent =
+        expectedDays > 0 ? Math.min((actualDays / expectedDays) * 100, 100) : 0
+      const status: BenchmarkCoverage["status"] =
+        actualDays === 0
+          ? "not_ingested"
+          : coveragePercent < 50
+            ? "missing"
+            : coveragePercent < 99
+              ? "partial"
+              : "ok"
+      const needsHistoricalBackfill =
+        earliestDate !== null && earliestDate > COVERAGE_WINDOW_START
+      return {
+        ticker,
+        actualDays,
+        expectedDays,
+        missingDays,
+        coveragePercent,
+        latestDate,
+        earliestDate,
+        needsHistoricalBackfill,
+        status,
+      }
+    })
+  } catch (err) {
+    console.error("getAllBenchmarkCoverage exception:", err)
+    return []
+  }
+}
+
+/** Fetch the latest data_ingest job for each ticker in a single query. */
+export async function getLatestDataIngestJobs(
+  tickers: readonly string[]
+): Promise<Record<string, DataIngestJobStatus | null>> {
+  const normalized = tickers.map((t) => t.toUpperCase())
+  const result: Record<string, DataIngestJobStatus | null> = {}
+  for (const t of normalized) result[t] = null
+
+  try {
+    const supabase = createAdminClient()
+    const { data, error } = await supabase
+      .from("jobs")
+      .select("id, status, stage, progress, error_message, created_at, started_at, payload, job_type")
+      .eq("job_type", "data_ingest")
+      .order("created_at", { ascending: false })
+      .limit(50)
+
+    if (error) {
+      if (error.message.includes("job_type") || error.message.includes("does not exist")) return result
+      console.error("getLatestDataIngestJobs error:", error.message)
+      return result
+    }
+
+    // Walk newest-first; record the first (most recent) job per ticker
+    for (const j of data ?? []) {
+      const p = j.payload as { ticker?: string } | null
+      const t = p?.ticker?.toUpperCase()
+      if (!t || !normalized.includes(t)) continue
+      if (result[t] !== null) continue // already recorded a newer job
+      result[t] = {
+        id: j.id,
+        status: j.status,
+        stage: j.stage,
+        progress: j.progress,
+        error_message: j.error_message,
+        created_at: j.created_at ?? null,
+        started_at: j.started_at ?? null,
+      }
+    }
+  } catch (err) {
+    console.error("getLatestDataIngestJobs exception:", err)
+  }
+
+  return result
 }
 
 export async function getRecentIngestionHistory(limit = 5): Promise<IngestionLogEntry[]> {

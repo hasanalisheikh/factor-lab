@@ -7,108 +7,95 @@ import {
   CheckCircle2,
   Loader2,
   XCircle,
-  ExternalLink,
 } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import type { BenchmarkCoverage, DataIngestJobStatus } from "@/lib/supabase/queries"
-import { getFreshnessStatus } from "@/lib/utils/dates"
+import type { BenchmarkCoverage, DataIngestJobStatus } from "@/lib/supabase/types"
+import { COVERAGE_WINDOW_START } from "@/lib/supabase/types"
 
 // ---------------------------------------------------------------------------
-// Freshness badge helper (mirrors the one in data/page.tsx server component)
+// Types
 // ---------------------------------------------------------------------------
 
-function FreshnessBadge({ date }: { date: string | null }) {
-  if (!date) return null
-  const status = getFreshnessStatus(date)
-  const cls =
-    status === "fresh"
-      ? "text-emerald-400 bg-emerald-950/40 border border-emerald-800/50"
-      : status === "stale"
-        ? "text-amber-400 bg-amber-950/40 border border-amber-800/50"
-        : "text-red-400 bg-red-950/40 border border-red-800/50"
-  const label = status === "fresh" ? "Fresh" : status === "stale" ? "Stale" : "Outdated"
-  return (
-    <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded-full ${cls}`}>
-      {label}
-    </span>
-  )
+export type BenchmarkRowData = {
+  ticker: string
+  coverage: BenchmarkCoverage | null
+  initialJob: DataIngestJobStatus | null
 }
 
-// ---------------------------------------------------------------------------
-// Props
-// ---------------------------------------------------------------------------
-
 type Props = {
-  benchmarkTicker: string
-  initialBenchmarkCov: BenchmarkCoverage | null
-  initialIngestJob: DataIngestJobStatus | null
+  benchmarks: BenchmarkRowData[]
   isDev?: boolean
 }
 
 // ---------------------------------------------------------------------------
-// Component
+// Per-ticker row component
 // ---------------------------------------------------------------------------
 
-export function BenchmarkCoverageCard({
-  benchmarkTicker,
-  initialBenchmarkCov,
-  initialIngestJob,
-  isDev = false,
-}: Props) {
+function BenchmarkRow({
+  ticker,
+  coverage,
+  initialJob,
+}: {
+  ticker: string
+  coverage: BenchmarkCoverage | null
+  initialJob: DataIngestJobStatus | null
+}) {
   const router = useRouter()
-  const [ingestJob, setIngestJob] = useState<DataIngestJobStatus | null>(initialIngestJob)
+  const [job, setJob] = useState<DataIngestJobStatus | null>(initialJob)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [submitError, setSubmitError] = useState<string | null>(null)
 
-  // Sync job state from server re-renders triggered by router.refresh()
+  // Sync from server re-renders
   useEffect(() => {
-    setIngestJob(initialIngestJob)
+    setJob(initialJob)
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialIngestJob?.id, initialIngestJob?.status])
+  }, [initialJob?.id, initialJob?.status, initialJob?.progress])
 
-  const isActive = ingestJob?.status === "queued" || ingestJob?.status === "running"
+  const isActive = job?.status === "queued" || job?.status === "running"
 
-  // Poll every 3 s while the job is active
+  // Poll every 3 s while active
   useEffect(() => {
-    if (!isActive || !ingestJob?.id) return
+    if (!isActive || !job?.id) return
     const poll = async () => {
       try {
-        const res = await fetch(`/api/data/ingest-benchmark?jobId=${ingestJob.id}`)
+        const res = await fetch(`/api/data/ingest-benchmark?jobId=${job.id}`)
         if (!res.ok) return
         const data = (await res.json()) as DataIngestJobStatus
-        setIngestJob(data)
-        if (data.status === "completed") {
+        setJob(data)
+        if (data.status === "completed" || data.status === "failed") {
           router.refresh()
         }
-      } catch {
-        // ignore transient poll errors
-      }
+      } catch { /* ignore transient errors */ }
     }
     const id = setInterval(poll, 3000)
     return () => clearInterval(id)
-  }, [isActive, ingestJob?.id, router])
+  }, [isActive, job?.id, router])
 
-  const handleIngest = async () => {
+  const handleAction = async (forceStart?: string) => {
     setIsSubmitting(true)
     setSubmitError(null)
     try {
+      const body: Record<string, string> = { ticker }
+      if (forceStart) body.force_start_date = forceStart
       const res = await fetch("/api/data/ingest-benchmark", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ticker: benchmarkTicker }),
+        body: JSON.stringify(body),
       })
       const data = await res.json()
       if (!res.ok) {
         setSubmitError(data.error ?? "Failed to start ingestion.")
         return
       }
-      setIngestJob({
+      setJob({
         id: data.jobId,
         status: "queued",
-        stage: "ingest",
+        stage: "download",
         progress: 0,
         error_message: null,
+        created_at: new Date().toISOString(),
+        started_at: null,
       })
     } catch {
       setSubmitError("Failed to connect. Please try again.")
@@ -117,21 +104,132 @@ export function BenchmarkCoverageCard({
     }
   }
 
-  // ---------------------------------------------------------------------------
-  // Determine which of the 4 states to show
-  //   isActive  → Ingesting
-  //   !isActive && benchmarkCov.status !== "not_ingested" → Ingested
-  //   !isActive && most-recent job failed → Failed
-  //   otherwise → Not Ingested
-  // ---------------------------------------------------------------------------
+  // Derive display values
+  const status = coverage?.status ?? "not_ingested"
+  const needsBackfill = coverage?.needsHistoricalBackfill ?? false
+  const coveragePct = coverage?.coveragePercent ?? 0
 
-  const benchmarkCov = initialBenchmarkCov
-  const isIngested =
-    !isActive &&
-    benchmarkCov !== null &&
-    benchmarkCov.status !== "not_ingested"
-  const isFailed = !isActive && ingestJob?.status === "failed"
-  const isNotIngested = !isActive && !isFailed && !isIngested
+  const pctColor =
+    status === "ok"
+      ? "text-emerald-400"
+      : status === "not_ingested"
+        ? "text-muted-foreground"
+        : needsBackfill || status === "missing"
+          ? "text-red-400"
+          : "text-amber-400"
+
+  const statusLabel =
+    status === "ok"
+      ? "Healthy"
+      : status === "not_ingested"
+        ? "Not ingested"
+        : needsBackfill || status === "missing"
+          ? "Needs backfill"
+          : "Partial"
+
+  const statusColor =
+    status === "ok"
+      ? "text-emerald-400"
+      : status === "not_ingested"
+        ? "text-muted-foreground"
+        : needsBackfill || status === "missing"
+          ? "text-red-400"
+          : "text-amber-400"
+
+  const showBackfillBtn = !isActive && (needsBackfill || status === "missing")
+  const showIngestBtn = !isActive && status === "not_ingested"
+  const isFailed = !isActive && job?.status === "failed"
+
+  return (
+    <div className="py-2 border-b border-border/50 last:border-0 last:pb-0 first:pt-0">
+      <div className="flex items-center gap-2 min-w-0">
+        {/* Ticker */}
+        <span className="font-mono text-xs text-foreground w-10 flex-shrink-0">{ticker}</span>
+
+        {/* Coverage % */}
+        <span className={`text-xs font-semibold w-12 text-right flex-shrink-0 ${pctColor}`}>
+          {status === "not_ingested" ? "—" : `${coveragePct.toFixed(1)}%`}
+        </span>
+
+        {/* Status badge */}
+        <span className={`text-[11px] flex-1 min-w-0 ${statusColor}`}>
+          {isActive ? (
+            <span className="flex items-center gap-1 text-blue-400">
+              <Loader2 className="w-3 h-3 animate-spin flex-shrink-0" />
+              <span className="truncate">
+                {job?.stage === "download" ? "Downloading…" : "Ingesting…"}
+                {job && job.progress > 0 ? ` ${job.progress}%` : ""}
+              </span>
+            </span>
+          ) : isFailed ? (
+            <span className="flex items-center gap-1 text-red-400">
+              <XCircle className="w-3 h-3 flex-shrink-0" />
+              Failed
+            </span>
+          ) : status === "ok" ? (
+            <span className="flex items-center gap-1">
+              <CheckCircle2 className="w-3 h-3 flex-shrink-0" />
+              {statusLabel}
+            </span>
+          ) : (
+            <span className="flex items-center gap-1">
+              {status !== "not_ingested" && <AlertTriangle className="w-3 h-3 flex-shrink-0" />}
+              {statusLabel}
+            </span>
+          )}
+        </span>
+
+        {/* Action button */}
+        {showBackfillBtn && (
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-6 px-2 text-[11px] flex-shrink-0 border-amber-800/50 text-amber-400 hover:text-amber-300"
+            onClick={() => handleAction(COVERAGE_WINDOW_START)}
+            disabled={isSubmitting}
+          >
+            {isSubmitting ? <Loader2 className="w-3 h-3 animate-spin" /> : "Backfill"}
+          </Button>
+        )}
+        {showIngestBtn && (
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-6 px-2 text-[11px] flex-shrink-0"
+            onClick={() => handleAction()}
+            disabled={isSubmitting}
+          >
+            {isSubmitting ? <Loader2 className="w-3 h-3 animate-spin" /> : "Ingest"}
+          </Button>
+        )}
+        {isFailed && (
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-6 px-2 text-[11px] flex-shrink-0 border-red-800/50 text-red-400 hover:text-red-300"
+            onClick={() => handleAction(needsBackfill ? COVERAGE_WINDOW_START : undefined)}
+            disabled={isSubmitting}
+          >
+            {isSubmitting ? <Loader2 className="w-3 h-3 animate-spin" /> : "Retry"}
+          </Button>
+        )}
+      </div>
+
+      {submitError && (
+        <p className="text-[11px] text-red-400 mt-1 pl-10">{submitError}</p>
+      )}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Card component
+// ---------------------------------------------------------------------------
+
+export function BenchmarkCoverageCard({ benchmarks, isDev: _isDev = false }: Props) {
+  const anyNeedsBackfill = benchmarks.some(
+    (b) => b.coverage?.needsHistoricalBackfill || b.coverage?.status === "missing"
+  )
 
   return (
     <Card className="bg-card border-border">
@@ -140,178 +238,39 @@ export function BenchmarkCoverageCard({
           Benchmark Coverage
         </CardTitle>
         <p className="text-xs text-muted-foreground">
-          Default benchmark:{" "}
-          <span className="font-mono text-foreground">{benchmarkTicker}</span>
+          Coverage from{" "}
+          <span className="font-mono text-foreground">{COVERAGE_WINDOW_START}</span> to today
+          across all supported benchmarks.
         </p>
       </CardHeader>
 
-      <CardContent>
-        {/* ── State A: Ingested ──────────────────────────────────────────── */}
-        {isIngested && benchmarkCov && (
-          <div className="space-y-2">
-            <div className="flex items-center justify-between text-xs">
-              <span className="text-muted-foreground">Coverage</span>
-              <span
-                className={`font-semibold ${
-                  benchmarkCov.status === "ok"
-                    ? "text-emerald-400"
-                    : benchmarkCov.status === "partial"
-                      ? "text-amber-400"
-                      : "text-red-400"
-                }`}
-              >
-                {benchmarkCov.coveragePercent.toFixed(1)}%
-              </span>
-            </div>
-            <div className="flex items-center justify-between text-xs">
-              <span className="text-muted-foreground">Missing days</span>
-              <span className="text-foreground">
-                {benchmarkCov.missingDays.toLocaleString()}
-              </span>
-            </div>
-            <div className="flex items-center justify-between text-xs">
-              <span className="text-muted-foreground">Status</span>
-              <span
-                className={`font-medium ${
-                  benchmarkCov.status === "ok"
-                    ? "text-emerald-400"
-                    : benchmarkCov.status === "partial"
-                      ? "text-amber-400"
-                      : "text-red-400"
-                }`}
-              >
-                {benchmarkCov.status === "ok"
-                  ? "OK"
-                  : benchmarkCov.status === "partial"
-                    ? "Partial"
-                    : "Missing"}
-              </span>
-            </div>
-            <div className="flex items-center justify-between text-xs">
-              <span className="text-muted-foreground">Freshness</span>
-              <FreshnessBadge date={benchmarkCov.latestDate} />
-            </div>
-            {benchmarkCov.status !== "ok" && (
-              <div className="mt-2 flex items-start gap-1.5 rounded-md bg-amber-950/30 border border-amber-800/40 px-2.5 py-2">
-                <AlertTriangle className="w-3.5 h-3.5 text-amber-400 flex-shrink-0 mt-0.5" />
-                <p className="text-[11px] text-amber-300/80 leading-snug">
-                  {benchmarkTicker} has incomplete coverage; comparisons may be less reliable.
-                </p>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* ── State B: Not Ingested ──────────────────────────────────────── */}
-        {isNotIngested && (
-          <div className="space-y-3">
-            <div className="flex items-center justify-between text-xs">
-              <span className="text-muted-foreground">Status</span>
-              <span className="font-medium text-muted-foreground">Not ingested</span>
-            </div>
-            <p className="text-[11px] text-muted-foreground leading-snug">
-              This page reports coverage for data stored in the prices table. Backtests can still
-              benchmark vs {benchmarkTicker} because the worker fetches prices at run time.
+      <CardContent className="space-y-0">
+        {anyNeedsBackfill && (
+          <div className="flex items-start gap-1.5 rounded-md bg-amber-950/30 border border-amber-800/40 px-2.5 py-2 mb-3">
+            <AlertTriangle className="w-3.5 h-3.5 text-amber-400 flex-shrink-0 mt-0.5" />
+            <p className="text-[11px] text-amber-300/80 leading-snug">
+              Some benchmarks need a historical backfill from{" "}
+              <span className="font-mono">{COVERAGE_WINDOW_START}</span>. Click{" "}
+              <strong>Backfill</strong> on any affected row to fix.
             </p>
-            {submitError && (
-              <p className="text-[11px] text-red-400">{submitError}</p>
-            )}
-            <Button
-              size="sm"
-              variant="outline"
-              className="w-full h-7 text-xs"
-              onClick={handleIngest}
-              disabled={isSubmitting}
-            >
-              {isSubmitting ? (
-                <>
-                  <Loader2 className="w-3 h-3 mr-1.5 animate-spin" />
-                  Starting…
-                </>
-              ) : (
-                <>
-                  <CheckCircle2 className="w-3 h-3 mr-1.5" />
-                  Ingest {benchmarkTicker}
-                </>
-              )}
-            </Button>
-            {isDev && benchmarkCov?.debugSimilarTickers && (
-              <div className="rounded-md bg-muted/40 border border-border px-2.5 py-2">
-                <p className="text-[10px] font-mono text-muted-foreground">
-                  <span className="text-foreground font-semibold">DEV</span>{" "}
-                  Similar tickers in prices:{" "}
-                  {benchmarkCov.debugSimilarTickers.length > 0
-                    ? benchmarkCov.debugSimilarTickers.join(", ")
-                    : "(none — ticker not ingested)"}
-                </p>
-              </div>
-            )}
           </div>
         )}
 
-        {/* ── State C: Ingesting ─────────────────────────────────────────── */}
-        {isActive && (
-          <div className="space-y-3">
-            <div className="flex items-center gap-2 text-xs">
-              <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-400 flex-shrink-0" />
-              <span className="text-foreground font-medium">
-                Ingesting {benchmarkTicker}…
-              </span>
-            </div>
-            {ingestJob && ingestJob.progress > 0 && (
-              <div className="w-full bg-muted rounded-full h-1.5">
-                <div
-                  className="bg-blue-500 h-1.5 rounded-full transition-all"
-                  style={{ width: `${ingestJob.progress}%` }}
-                />
-              </div>
-            )}
-            <p className="text-[11px] text-muted-foreground">
-              Downloading and storing price history. This may take a minute.
-            </p>
-            <a
-              href="/jobs"
-              className="inline-flex items-center gap-1 text-[11px] text-blue-400 hover:text-blue-300"
-            >
-              View all jobs
-              <ExternalLink className="w-2.5 h-2.5" />
-            </a>
-          </div>
-        )}
+        {/* Column headers */}
+        <div className="flex items-center gap-2 pb-1.5 border-b border-border/50">
+          <span className="text-[10px] text-muted-foreground w-10 flex-shrink-0">Ticker</span>
+          <span className="text-[10px] text-muted-foreground w-12 text-right flex-shrink-0">Cover.</span>
+          <span className="text-[10px] text-muted-foreground flex-1">Status</span>
+        </div>
 
-        {/* ── State D: Failed ────────────────────────────────────────────── */}
-        {isFailed && (
-          <div className="space-y-3">
-            <div className="flex items-center gap-2 text-xs">
-              <XCircle className="w-3.5 h-3.5 text-red-400 flex-shrink-0" />
-              <span className="text-red-400 font-medium">Ingestion failed</span>
-            </div>
-            {ingestJob?.error_message && (
-              <p className="text-[11px] text-muted-foreground leading-snug line-clamp-3">
-                {ingestJob.error_message}
-              </p>
-            )}
-            {submitError && (
-              <p className="text-[11px] text-red-400">{submitError}</p>
-            )}
-            <Button
-              size="sm"
-              variant="outline"
-              className="w-full h-7 text-xs border-red-800/50 text-red-400 hover:text-red-300"
-              onClick={handleIngest}
-              disabled={isSubmitting}
-            >
-              {isSubmitting ? (
-                <>
-                  <Loader2 className="w-3 h-3 mr-1.5 animate-spin" />
-                  Starting…
-                </>
-              ) : (
-                "Retry ingest"
-              )}
-            </Button>
-          </div>
-        )}
+        {benchmarks.map((b) => (
+          <BenchmarkRow
+            key={b.ticker}
+            ticker={b.ticker}
+            coverage={b.coverage}
+            initialJob={b.initialJob}
+          />
+        ))}
       </CardContent>
     </Card>
   )

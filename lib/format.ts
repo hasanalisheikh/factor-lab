@@ -38,3 +38,8 @@ export function formatSignedNum(x: number, decimals = 2): string {
 export function formatNum(x: number, decimals = 2): string {
   return x.toFixed(decimals)
 }
+
+/** Max drawdown — always negative: 0.318 → "-31.8%"  or  -0.318 → "-31.8%" */
+export function formatDrawdown(fraction: number, decimals = 1): string {
+  return `-${(Math.abs(fraction) * 100).toFixed(decimals)}%`
+}

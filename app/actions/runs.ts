@@ -5,7 +5,24 @@ import { z } from "zod"
 import { createAdminClient } from "@/lib/supabase/admin"
 import { createClient } from "@/lib/supabase/server"
 import { BENCHMARK_OPTIONS } from "@/lib/benchmark"
-import { getDataCoverage } from "@/lib/supabase/queries"
+import { getDataCoverage, COVERAGE_WINDOW_START } from "@/lib/supabase/queries"
+
+// Mirror of the static presets in worker.py — snapshotted at run creation so
+// the exact universe is recorded in the DB even if the worker dies before it
+// can do its own snapshot.
+const UNIVERSE_PRESETS: Record<string, string[]> = {
+  ETF8: ["SPY", "QQQ", "IWM", "EFA", "EEM", "TLT", "GLD", "VNQ"],
+  SP100: [
+    "AAPL", "MSFT", "AMZN", "GOOGL", "GOOG", "META", "NVDA", "BRK.B",
+    "JPM", "XOM", "UNH", "JNJ", "PG", "V", "MA", "HD", "COST", "ABBV",
+    "PEP", "MRK",
+  ],
+  NASDAQ100: [
+    "AAPL", "MSFT", "NVDA", "AMZN", "META", "GOOGL", "GOOG", "AVGO",
+    "COST", "TSLA", "NFLX", "AMD", "ADBE", "CSCO", "PEP", "INTC",
+    "QCOM", "AMGN", "TXN", "CMCSA",
+  ],
+}
 
 function triggerWorker(): void {
   const url = process.env.WORKER_TRIGGER_URL
@@ -112,7 +129,7 @@ export async function createRun(
     benchmark,
     universe,
     costs_bps,
-    top_n,
+    top_n: top_n_raw,
     initial_capital,
     apply_costs,
     slippage_bps,
@@ -120,6 +137,11 @@ export async function createRun(
 
   const applyCostsFlag = apply_costs === "on"
   const effectiveCostsBps = applyCostsFlag ? costs_bps : 0
+
+  // Clamp top_n to the universe size so the ML engine never tries to select
+  // more positions than there are investable assets in the chosen universe.
+  const universeSize = (UNIVERSE_PRESETS[universe] ?? []).length
+  const top_n = Math.min(top_n_raw, Math.max(1, universeSize))
 
   // Verify authentication and get the current user's ID
   const serverClient = await createClient()
@@ -140,6 +162,41 @@ export async function createRun(
 
   const supabase = createAdminClient()
 
+  // Auto-backfill the selected benchmark if it lacks historical data.
+  // We insert the data_ingest job BEFORE the backtest job so the worker
+  // processes it first (FIFO by created_at), giving the backtest full prices.
+  try {
+    const today = new Date().toISOString().slice(0, 10)
+    const { data: minDateRow } = await supabase
+      .from("prices")
+      .select("date")
+      .eq("ticker", benchmark)
+      .order("date", { ascending: true })
+      .limit(1)
+      .maybeSingle()
+
+    const earliestBenchmarkDate: string | null = minDateRow?.date ?? null
+    const needsBenchmarkBackfill =
+      !earliestBenchmarkDate || earliestBenchmarkDate > COVERAGE_WINDOW_START
+
+    if (needsBenchmarkBackfill) {
+      await supabase.from("jobs").insert({
+        name: `Ingest ${benchmark} (auto-backfill)`,
+        status: "queued",
+        stage: "download",
+        progress: 0,
+        job_type: "data_ingest",
+        payload: { ticker: benchmark, start_date: COVERAGE_WINDOW_START, end_date: today },
+      })
+    }
+  } catch {
+    // Non-blocking: run creation proceeds even if the coverage check fails
+  }
+
+  // Snapshot the universe symbols at creation time so the exact universe is
+  // persisted in the DB even if the worker dies before running its own snapshot.
+  const universeSymbols = UNIVERSE_PRESETS[universe] ?? null
+
   const basePayload = {
     name,
     strategy_id,
@@ -148,6 +205,7 @@ export async function createRun(
     end_date,
     benchmark_ticker: benchmark,
     universe,
+    universe_symbols: universeSymbols,
     costs_bps: effectiveCostsBps,
     top_n,
     user_id: user.id,
@@ -198,7 +256,10 @@ export async function createRun(
 
   if (jobError) {
     console.error("createRun job insert error:", jobError.message)
-    // Run was created — don't fail, just log
+    // Roll back: delete the run so the user doesn't see a stuck queued run
+    // with no job to process it.
+    await supabase.from("runs").delete().eq("id", run.id)
+    return { error: "Failed to queue run for processing. Please try again." }
   }
 
   triggerWorker()

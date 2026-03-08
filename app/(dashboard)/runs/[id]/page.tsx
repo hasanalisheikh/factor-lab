@@ -108,6 +108,7 @@ export default async function RunDetailPage({ params }: { params: Promise<{ id: 
     endDate: run.end_date ?? null,
     costsBps,
     topN: run.top_n ?? null,
+    rebalanceFreq: isMlRun ? "Daily" : "Monthly",
   }
 
   return (
@@ -150,7 +151,7 @@ export default async function RunDetailPage({ params }: { params: Promise<{ id: 
                 <span className="text-border">·</span>
                 <span>Costs: {costsBps} bps</span>
                 <span className="text-border">·</span>
-                <span>Monthly rebalance</span>
+                <span>{isMlRun ? "Daily" : "Monthly"} rebalance</span>
               </p>
             </div>
           </div>
@@ -246,7 +247,11 @@ export default async function RunDetailPage({ params }: { params: Promise<{ id: 
         </TabsContent>
         {isMlRun && (
           <TabsContent value="ml-insights" className="mt-4">
-            <MlInsightsTab metadata={modelMetadata} predictions={modelPredictions} />
+            <MlInsightsTab
+              metadata={modelMetadata}
+              predictions={modelPredictions}
+              runMetadata={run.run_metadata}
+            />
           </TabsContent>
         )}
       </Tabs>

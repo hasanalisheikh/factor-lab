@@ -224,7 +224,7 @@ export function CompareWorkbench({ bundles, strategyRuns = [] }: Props) {
                 tickLine={false}
                 axisLine={false}
                 tickMargin={8}
-                tickFormatter={(v) => new Date(v).toLocaleDateString("en-US", { month: "short", year: "2-digit" })}
+                tickFormatter={(v) => new Date(v + "T00:00:00Z").toLocaleDateString("en-US", { month: "short", year: "2-digit", timeZone: "UTC" })}
                 interval="preserveStartEnd"
                 className="text-[10px]"
               />

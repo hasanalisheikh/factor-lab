@@ -1,6 +1,7 @@
 "use client"
 
 import { useState, useMemo } from "react"
+import { formatDrawdown } from "@/lib/format"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import {
   ChartContainer,
@@ -16,6 +17,33 @@ import {
   alignEquityCurveByDate,
 } from "@/lib/equity-curve"
 import type { RunMetricsRow, EquityCurveRow } from "@/lib/supabase/types"
+
+function DisclaimerFooter() {
+  const [open, setOpen] = useState(false)
+  return (
+    <div className="mt-3 border-t border-border/40 pt-2.5 text-[11px] text-muted-foreground">
+      <span>
+        Research only — not financial advice. Results are simulated and may not reflect real trading.
+        Costs/slippage are simplified; taxes, corporate actions, liquidity, and market impact are not fully modeled.
+      </span>{" "}
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="underline underline-offset-2 hover:text-foreground/70 transition-colors"
+      >
+        {open ? "Hide details" : "Details"}
+      </button>
+      {open && (
+        <p className="mt-1.5">
+          Universe presets are static snapshots and do not account for assets delisted or replaced during the backtest
+          window, which may overstate long-window performance. The cost model applies a flat bps × turnover rate and
+          does not capture bid-ask spread, market impact, borrowing costs, or short-selling constraints. Price data is
+          sourced from Yahoo Finance; gaps are forward-filled and significant coverage gaps may affect results. All
+          outputs are historical simulations only — not a guarantee of future returns.
+        </p>
+      )}
+    </div>
+  )
+}
 
 const ddConfig = {
   drawdown: { label: "Drawdown", color: "var(--color-chart-4)" },
@@ -33,7 +61,7 @@ function computeDrawdown(equity: Array<{ date: string; portfolio: number }>) {
 const metricDefs: { key: keyof RunMetricsRow; label: string; format: (v: number) => string }[] = [
   { key: "cagr", label: "CAGR", format: (v) => `${v >= 0 ? "+" : ""}${(v * 100).toFixed(1)}%` },
   { key: "sharpe", label: "Sharpe", format: (v) => v.toFixed(2) },
-  { key: "max_drawdown", label: "Max DD", format: (v) => `${Math.abs(v * 100).toFixed(1)}%` },
+  { key: "max_drawdown", label: "Max Drawdown", format: (v) => formatDrawdown(v) },
   { key: "volatility", label: "Volatility", format: (v) => `${(v * 100).toFixed(1)}%` },
   { key: "win_rate", label: "Win Rate", format: (v) => `${(v * 100).toFixed(1)}%` },
   { key: "profit_factor", label: "Profit Factor", format: (v) => v.toFixed(2) },
@@ -50,6 +78,7 @@ export type RunConfig = {
   endDate: string | null
   costsBps: number
   topN: number | null
+  rebalanceFreq?: string
 }
 
 interface OverviewTabProps {
@@ -126,7 +155,7 @@ export function OverviewTab({ metrics, equityCurve, benchmarkTicker, runConfig }
                   tickLine={false}
                   axisLine={false}
                   tickMargin={8}
-                  tickFormatter={(v) => new Date(v).toLocaleDateString("en-US", { month: "short" })}
+                  tickFormatter={(v) => new Date(v + "T00:00:00Z").toLocaleDateString("en-US", { month: "short", year: "2-digit" })}
                   interval="preserveStartEnd"
                   className="text-[10px]"
                   stroke="var(--color-muted-foreground)"
@@ -175,7 +204,7 @@ export function OverviewTab({ metrics, equityCurve, benchmarkTicker, runConfig }
                     : "—",
                 },
                 { label: "Costs", value: `${runConfig.costsBps} bps per rebalance` },
-                { label: "Rebalance", value: "Monthly" },
+                { label: "Rebalance", value: runConfig.rebalanceFreq ?? "Monthly" },
                 { label: "Construction", value: "Equal weight" },
                 ...(runConfig.topN != null ? [{ label: "Top N", value: String(runConfig.topN) }] : []),
               ].map(({ label, value }) => (
@@ -187,10 +216,7 @@ export function OverviewTab({ metrics, equityCurve, benchmarkTicker, runConfig }
                 </div>
               ))}
             </div>
-            <p className="mt-3 text-[11px] text-muted-foreground border-t border-border/40 pt-2.5">
-              Research only — not financial advice. Survivorship bias not accounted for.
-              Cost model applies flat bps × turnover; market impact and bid-ask spread are not modeled.
-            </p>
+            <DisclaimerFooter />
           </CardContent>
         </Card>
       )}

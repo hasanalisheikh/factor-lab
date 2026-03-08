@@ -1,7 +1,7 @@
 "use client"
 
 import { useState } from "react"
-import type { TickerMissingness } from "@/lib/supabase/queries"
+import type { TickerMissingness } from "@/lib/supabase/types"
 
 const INITIAL_ROWS = 10
 

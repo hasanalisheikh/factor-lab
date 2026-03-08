@@ -22,6 +22,7 @@ export type Database = {
           costs_bps: number
           top_n: number
           run_params: Json
+          run_metadata: Json
           start_date: string
           end_date: string
           created_at: string
@@ -39,6 +40,7 @@ export type Database = {
           costs_bps?: number
           top_n?: number
           run_params?: Json
+          run_metadata?: Json
           start_date: string
           end_date: string
           created_at?: string
@@ -151,6 +153,7 @@ export type Database = {
           progress: number
           error_message: string | null
           started_at: string | null
+          finished_at: string | null
           duration: number | null
           created_at: string
           job_type: string
@@ -165,6 +168,7 @@ export type Database = {
           progress?: number
           error_message?: string | null
           started_at?: string | null
+          finished_at?: string | null
           duration?: number | null
           created_at?: string
           job_type?: string
@@ -361,3 +365,41 @@ export type UserSettings = Database["public"]["Tables"]["user_settings"]["Row"]
 // Composite types
 export type RunWithMetrics = RunRow & { run_metrics: RunMetricsRow[] | RunMetricsRow | null }
 export type CompareRunBundle = { run: RunRow; metrics: RunMetricsRow; equity: EquityCurveRow[] }
+
+// Query-result types — safe to import from client components
+export type TickerMissingness = {
+  ticker: string
+  actualDays: number
+  missingDays: number
+  coveragePercent: number
+}
+
+export type BenchmarkCoverage = {
+  ticker: string
+  actualDays: number
+  expectedDays: number
+  missingDays: number
+  coveragePercent: number
+  /** Latest date this ticker has data for (YYYY-MM-DD), null if not ingested */
+  latestDate: string | null
+  /** Earliest date this ticker has data for (YYYY-MM-DD), null if not ingested */
+  earliestDate: string | null
+  /** True when earliestDate > COVERAGE_WINDOW_START — ticker needs a historical backfill */
+  needsHistoricalBackfill: boolean
+  status: "ok" | "partial" | "missing" | "not_ingested"
+  /** Dev-only: tickers found via ILIKE when actualDays=0, to detect symbol mismatches */
+  debugSimilarTickers?: string[]
+}
+
+export type DataIngestJobStatus = {
+  id: string
+  status: string
+  stage: string | null
+  progress: number
+  error_message: string | null
+  created_at: string | null
+  started_at: string | null
+}
+
+/** Earliest date we expect all benchmark tickers to be fully ingested from */
+export const COVERAGE_WINDOW_START = "2015-01-02"

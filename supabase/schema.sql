@@ -19,6 +19,7 @@ CREATE TABLE runs (
   costs_bps    NUMERIC     NOT NULL DEFAULT 10 CHECK (costs_bps >= 0),
   top_n        INTEGER     NOT NULL DEFAULT 10 CHECK (top_n > 0),
   run_params   JSONB       NOT NULL DEFAULT '{}'::JSONB,
+  run_metadata JSONB       NOT NULL DEFAULT '{}'::JSONB,
   start_date   DATE        NOT NULL,
   end_date     DATE        NOT NULL,
   created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -73,6 +74,7 @@ CREATE TABLE jobs (
   progress    INTEGER     NOT NULL DEFAULT 0 CHECK (progress BETWEEN 0 AND 100),
   error_message TEXT,
   started_at  TIMESTAMPTZ,
+  finished_at TIMESTAMPTZ,
   duration    INTEGER,            -- wall-clock seconds
   created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );

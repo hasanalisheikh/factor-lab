@@ -21,6 +21,13 @@ import { cn } from "@/lib/utils"
 
 const STRATEGIES = Object.entries(STRATEGY_LABELS) as [StrategyId, string][]
 const UNIVERSE_PRESETS = ["ETF8", "SP100", "NASDAQ100"] as const
+// Total asset count per preset (including benchmark symbol within ETF8).
+// Used to derive the Top N upper bound shown in the UI.
+const UNIVERSE_SIZES: Record<string, number> = {
+  ETF8: 8,
+  SP100: 20,
+  NASDAQ100: 20,
+}
 const CAPITAL_MIN = 1_000
 const CAPITAL_MAX = 10_000_000
 const CAPITAL_DEFAULT = 100_000
@@ -76,6 +83,8 @@ export function RunForm({ defaults, dataCoverage }: Props) {
   )
   const [startOpen, setStartOpen] = useState(false)
   const [endOpen, setEndOpen] = useState(false)
+
+  const topNMax = UNIVERSE_SIZES[universe] ?? 20
 
   const [applyCosts, setApplyCosts] = useState(defaults?.apply_costs_default ?? true)
 
@@ -390,12 +399,14 @@ export function RunForm({ defaults, dataCoverage }: Props) {
                   name="top_n"
                   type="number"
                   min={1}
-                  max={100}
+                  max={topNMax}
                   step={1}
-                  defaultValue={defaults?.default_top_n ?? 10}
+                  defaultValue={Math.min(defaults?.default_top_n ?? 5, topNMax)}
+                  key={`top_n_${universe}`}
                   className="h-8 text-[13px] bg-secondary/40 border-border"
                   required
                 />
+                <span className="text-[11px] text-muted-foreground">Max {topNMax} for {universe}</span>
               </div>
             </div>
 

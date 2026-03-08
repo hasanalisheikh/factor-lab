@@ -6,17 +6,29 @@ import {
 } from "@/lib/equity-curve"
 
 describe("alignEquityCurveByDate", () => {
-  it("keeps only dates where both portfolio and benchmark are valid positive values", () => {
+  it("drops dates with invalid portfolio; forward-fills missing benchmark from last valid value", () => {
     const rows: EquityCurvePoint[] = [
       { date: "2025-01-01", portfolio: 100, benchmark: 100 },
-      { date: "2025-01-02", portfolio: 101, benchmark: 0 }, // invalid benchmark
-      { date: "2025-01-03", portfolio: Number.NaN, benchmark: 101 }, // invalid portfolio
+      { date: "2025-01-02", portfolio: 101, benchmark: 0 }, // invalid benchmark → forward-fill from 2025-01-01
+      { date: "2025-01-03", portfolio: Number.NaN, benchmark: 101 }, // invalid portfolio → dropped
       { date: "2025-01-04", portfolio: 102, benchmark: 102 },
     ]
 
     expect(alignEquityCurveByDate(rows)).toEqual([
       { date: "2025-01-01", portfolio: 100, benchmark: 100 },
+      { date: "2025-01-02", portfolio: 101, benchmark: 100 }, // forward-filled
       { date: "2025-01-04", portfolio: 102, benchmark: 102 },
+    ])
+  })
+
+  it("drops a date with invalid benchmark when there is no prior valid benchmark to forward-fill from", () => {
+    const rows: EquityCurvePoint[] = [
+      { date: "2025-01-01", portfolio: 100, benchmark: 0 }, // invalid benchmark, no prior → dropped
+      { date: "2025-01-02", portfolio: 101, benchmark: 101 },
+    ]
+
+    expect(alignEquityCurveByDate(rows)).toEqual([
+      { date: "2025-01-02", portfolio: 101, benchmark: 101 },
     ])
   })
 })

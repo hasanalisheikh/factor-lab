@@ -16,9 +16,11 @@ const mockRuns: RunWithMetrics[] = [
     costs_bps: 10,
     top_n: 10,
     run_params: {},
+    run_metadata: {},
     start_date: "2023-01-01",
     end_date: "2023-12-31",
     created_at: "2026-02-01T00:00:00Z",
+    user_id: null,
     run_metrics: {
       id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
       run_id: "11111111-1111-1111-1111-111111111111",

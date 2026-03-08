@@ -6,6 +6,8 @@ For ML strategies (`ml_ridge`, `ml_lightgbm`), it also writes:
 - `features_monthly`
 - `model_metadata`
 - `model_predictions`
+The worker also stores per-run execution evidence in `runs.run_metadata`
+(`model_impl`, `feature_set`, `training_window`, `positions_digest`, `equity_digest`).
 
 ## Quick start
 

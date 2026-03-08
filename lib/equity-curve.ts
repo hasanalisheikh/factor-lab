@@ -72,6 +72,10 @@ function isValidEquityValue(x: number): boolean {
  * Explicit inner join on date after splitting portfolio/benchmark series.
  * This guards KPI math against malformed rows (missing/invalid values) and
  * ensures portfolio + SPY use the exact same date set.
+ *
+ * Benchmark gaps (missing/invalid values) are forward-filled from the last
+ * known valid benchmark value so recent dates are not silently dropped when
+ * the benchmark price feed lags by a day or two.
  */
 export function alignEquityCurveByDate(data: EquityCurvePoint[]): EquityCurvePoint[] {
   const portfolioByDate = new Map<string, number>()
@@ -93,10 +97,14 @@ export function alignEquityCurveByDate(data: EquityCurvePoint[]): EquityCurvePoi
   }
 
   const aligned: EquityCurvePoint[] = []
+  let lastBenchmark: number | undefined
   for (const date of orderedDates) {
     const portfolio = portfolioByDate.get(date)
-    const benchmark = benchmarkByDate.get(date)
-    if (portfolio == null || benchmark == null) continue
+    if (portfolio == null) continue
+    const benchmarkRaw = benchmarkByDate.get(date)
+    const benchmark = benchmarkRaw ?? lastBenchmark
+    if (benchmark == null) continue
+    lastBenchmark = benchmark
     aligned.push({ date, portfolio, benchmark })
   }
   return aligned

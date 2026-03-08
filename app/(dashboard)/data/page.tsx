@@ -3,11 +3,11 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import {
   getDataHealthSummary,
   getTopMissingTickers,
-  getBenchmarkCoverage,
+  getAllBenchmarkCoverage,
   getRecentIngestionHistory,
-  getLatestDataIngestJob,
-  getUserSettings,
+  getLatestDataIngestJobs,
 } from "@/lib/supabase/queries"
+import { BENCHMARK_OPTIONS } from "@/lib/benchmark"
 import {
   formatISODate,
   formatISOTimestamp,
@@ -94,20 +94,18 @@ function healthVerdict(completeness: number | null) {
 export default async function DataPage() {
   const health = await getDataHealthSummary()
 
-  const userSettings = await getUserSettings()
-  const benchmarkTicker = userSettings?.default_benchmark ?? "SPY"
-
-  const [topMissing, benchmarkCov, ingestionLog, latestIngestJob] = await Promise.all([
+  const [topMissing, allBenchmarkCovs, ingestionLog, allIngestJobs] = await Promise.all([
     getTopMissingTickers(50, health.businessDaysInWindow),
-    getBenchmarkCoverage(
-      benchmarkTicker,
-      health.dateStart,
-      health.dateEnd,
-      health.businessDaysInWindow
-    ),
+    getAllBenchmarkCoverage(health.dateStart, health.dateEnd, health.businessDaysInWindow),
     getRecentIngestionHistory(5),
-    getLatestDataIngestJob(benchmarkTicker),
+    getLatestDataIngestJobs(BENCHMARK_OPTIONS),
   ])
+
+  const benchmarkRows = BENCHMARK_OPTIONS.map((ticker) => ({
+    ticker,
+    coverage: allBenchmarkCovs.find((c) => c.ticker === ticker) ?? null,
+    initialJob: allIngestJobs[ticker] ?? null,
+  }))
 
   const freshnessStatus = getFreshnessStatus(health.lastUpdatedAt)
   const daysAgo = daysAgoFromNow(health.lastUpdatedAt)
@@ -294,9 +292,7 @@ export default async function DataPage() {
         <div className="md:col-span-3 flex flex-col gap-4">
           {/* Benchmark coverage */}
           <BenchmarkCoverageCard
-            benchmarkTicker={benchmarkTicker}
-            initialBenchmarkCov={benchmarkCov}
-            initialIngestJob={latestIngestJob}
+            benchmarks={benchmarkRows}
             isDev={isDev}
           />
 

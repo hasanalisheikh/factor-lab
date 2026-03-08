@@ -1,6 +1,7 @@
 "use client"
 
 import Link from "next/link"
+import { Check } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { StatusBadge } from "@/components/status-badge"
 import {
@@ -55,9 +56,17 @@ export function RecentRuns({ runs, total, selectedRunId }: RecentRunsProps) {
           <CardTitle className="text-[13px] font-medium text-card-foreground">
             Recent Runs
           </CardTitle>
-          <span className="text-[11px] text-muted-foreground font-mono">
-            {total} total
-          </span>
+          <div className="flex items-center gap-2">
+            {selectedRunId && runs.some((r) => r.id === selectedRunId) && (
+              <span className="inline-flex items-center gap-1 text-[10px] font-medium text-primary bg-primary/10 px-1.5 py-0.5 rounded-md">
+                <Check className="w-2.5 h-2.5" />
+                Selected
+              </span>
+            )}
+            <span className="text-[11px] text-muted-foreground font-mono">
+              {total} total
+            </span>
+          </div>
         </div>
       </CardHeader>
       <CardContent className="px-4 pb-3">
@@ -70,7 +79,7 @@ export function RecentRuns({ runs, total, selectedRunId }: RecentRunsProps) {
                 <Link
                   key={run.id}
                   href={`/dashboard?run=${run.id}`}
-                  className={`flex items-center justify-between py-2.5 px-2 -mx-2 rounded-lg hover:bg-accent/40 transition-colors group ${run.id === selectedRunId ? "bg-accent/40" : ""}`}
+                  className={`flex items-center justify-between py-2.5 px-2 -mx-2 rounded-lg hover:bg-accent/40 transition-colors group ${run.id === selectedRunId ? "bg-primary/8 ring-1 ring-primary/20" : ""}`}
                 >
                   <div className="flex flex-col gap-0.5 min-w-0">
                     <span className="text-[13px] font-medium text-card-foreground group-hover:text-primary transition-colors truncate">
@@ -99,6 +108,9 @@ export function RecentRuns({ runs, total, selectedRunId }: RecentRunsProps) {
                       )
                     )}
                     <StatusBadge status={status} />
+                    {run.id === selectedRunId && (
+                      <Check className="w-3.5 h-3.5 text-primary shrink-0" />
+                    )}
                   </div>
                 </Link>
               )

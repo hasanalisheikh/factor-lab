@@ -60,21 +60,34 @@ class SupabaseIO:
 
   def claim_job(self, job: Job) -> bool:
     now = datetime.now(timezone.utc).isoformat()
-    claimed = (
-      self.client.table("jobs")
-      .update(
-        {
-          "status": "running",
-          "stage": "ingest",
-          "progress": 5,
-          "started_at": now,
-          "error_message": None,
-        }
+    claim_payload = {
+      "status": "running",
+      "stage": "ingest",
+      "progress": 5,
+      "started_at": now,
+      "finished_at": None,
+      "error_message": None,
+    }
+    try:
+      claimed = (
+        self.client.table("jobs")
+        .update(claim_payload)
+        .eq("id", job.id)
+        .eq("status", "queued")
+        .execute()
       )
-      .eq("id", job.id)
-      .eq("status", "queued")
-      .execute()
-    )
+    except Exception as exc:
+      # Backward compat: older schemas may not have jobs.finished_at yet.
+      if "finished_at" not in str(exc).lower():
+        raise
+      claim_payload.pop("finished_at", None)
+      claimed = (
+        self.client.table("jobs")
+        .update(claim_payload)
+        .eq("id", job.id)
+        .eq("status", "queued")
+        .execute()
+      )
     if not (claimed.data or []):
       return False
 
@@ -93,13 +106,13 @@ class SupabaseIO:
     result = (
       self.client.table("runs")
       .select(
-        "id,name,strategy_id,status,start_date,end_date,benchmark,benchmark_ticker,costs_bps,top_n,universe,universe_symbols,run_params"
+        "id,name,strategy_id,status,start_date,end_date,benchmark,benchmark_ticker,costs_bps,top_n,universe,universe_symbols,run_params,run_metadata"
       )
       .eq("id", run_id)
-      .maybe_single()
       .execute()
     )
-    return result.data
+    rows = result.data or []
+    return rows[0] if rows else None
 
   def update_run_universe_symbols(self, run_id: str, symbols: list[str]) -> None:
     (
@@ -109,13 +122,73 @@ class SupabaseIO:
       .execute()
     )
 
+  def update_run_metadata(self, run_id: str, metadata: dict[str, Any]) -> None:
+    (
+      self.client.table("runs")
+      .update({"run_metadata": metadata})
+      .eq("id", run_id)
+      .execute()
+    )
+
+  def _update_job_row(
+    self,
+    job_id: str,
+    values: dict[str, Any],
+    *,
+    fallback_stage: str | None = None,
+  ) -> Any:
+    """Update a jobs row with light backward-compat fallbacks.
+
+    Handles two migration-drift cases:
+    - `finished_at` column not present yet.
+    - data-ingest custom stage not allowed by legacy jobs_stage_check.
+    """
+    payload = dict(values)
+    for _ in range(3):
+      try:
+        return (
+          self.client.table("jobs")
+          .update(payload)
+          .eq("id", job_id)
+          .execute()
+        )
+      except Exception as exc:
+        message = str(exc).lower()
+        retried = False
+        if "finished_at" in payload and "finished_at" in message:
+          payload.pop("finished_at", None)
+          retried = True
+        if fallback_stage and "stage" in payload and "stage" in message:
+          if payload.get("stage") != fallback_stage:
+            payload["stage"] = fallback_stage
+            retried = True
+        if not retried:
+          raise
+    raise RuntimeError("jobs update failed after fallback retries")
+
   def update_job_progress(self, job_id: str, *, stage: str, progress: int) -> None:
     bounded = max(0, min(int(progress), 100))
-    (
-      self.client.table("jobs")
-      .update({"stage": stage, "progress": bounded})
-      .eq("id", job_id)
-      .execute()
+    # Map newer stage names to a fallback that older DB schemas will accept.
+    # Fallback is used when the jobs_stage_check constraint rejects the value
+    # (i.e., the 20260307_jobs_stage_backtest_detail.sql migration hasn't run yet).
+    _data_ingest_stages = {"download", "transform", "upsert_prices"}
+    _early_backtest_stages = {"load_data"}
+    _mid_backtest_stages = {"compute_signals", "rebalance", "metrics"}
+    _late_backtest_stages = {"persist"}
+    if stage in _data_ingest_stages:
+      fallback_stage = "ingest"
+    elif stage in _early_backtest_stages:
+      fallback_stage = "ingest"
+    elif stage in _mid_backtest_stages:
+      fallback_stage = "backtest"
+    elif stage in _late_backtest_stages:
+      fallback_stage = "report"
+    else:
+      fallback_stage = "report"
+    self._update_job_row(
+      job_id,
+      {"stage": stage, "progress": bounded},
+      fallback_stage=fallback_stage,
     )
 
   def fetch_prices_frame(
@@ -162,23 +235,21 @@ class SupabaseIO:
     if prediction_rows is not None:
       self._replace_model_predictions(job.run_id, prediction_rows)
     if model_metadata is not None:
-      self._upsert_model_metadata(model_metadata)
+      self._replace_model_metadata(job.run_id, model_metadata)
     if position_rows is not None:
       self._replace_positions(job.run_id, position_rows)
 
-    (
-      self.client.table("jobs")
-      .update(
-        {
-          "status": "completed",
-          "stage": "report",
-          "progress": 100,
-          "duration": max(duration_seconds, 0),
-          "error_message": None,
-        }
-      )
-      .eq("id", job.id)
-      .execute()
+    self._update_job_row(
+      job.id,
+      {
+        "status": "completed",
+        "stage": "report",
+        "progress": 100,
+        "duration": max(duration_seconds, 0),
+        "finished_at": datetime.now(timezone.utc).isoformat(),
+        "error_message": None,
+      },
+      fallback_stage="report",
     )
     (
       self.client.table("runs")
@@ -187,21 +258,37 @@ class SupabaseIO:
       .execute()
     )
 
-  def save_failure(self, job: Job, duration_seconds: int, error_message: str) -> None:
-    message = error_message[:400]
-    (
-      self.client.table("jobs")
-      .update(
-        {
-          "status": "failed",
-          "stage": "report",
-          "duration": max(duration_seconds, 0),
-          "progress": 100,
-          "error_message": message,
-        }
-      )
-      .eq("id", job.id)
-      .execute()
+  def save_failure(
+    self,
+    job: Job,
+    duration_seconds: int,
+    error_message: str,
+    *,
+    stage: str = "report",
+  ) -> None:
+    message = error_message[:2000]
+    _data_ingest_stages = {"download", "transform", "upsert_prices"}
+    _early_backtest_stages = {"load_data"}
+    _mid_backtest_stages = {"compute_signals", "rebalance", "metrics"}
+    if stage in _data_ingest_stages:
+      fallback_stage = "ingest"
+    elif stage in _early_backtest_stages:
+      fallback_stage = "ingest"
+    elif stage in _mid_backtest_stages:
+      fallback_stage = "backtest"
+    else:
+      fallback_stage = "report"
+    self._update_job_row(
+      job.id,
+      {
+        "status": "failed",
+        "stage": stage,
+        "duration": max(duration_seconds, 0),
+        "progress": 100,
+        "finished_at": datetime.now(timezone.utc).isoformat(),
+        "error_message": message,
+      },
+      fallback_stage=fallback_stage,
     )
     if job.run_id:
       (
@@ -221,19 +308,17 @@ class SupabaseIO:
     end_date: str,
   ) -> None:
     """Mark a data_ingest job as completed and write a data_ingestion_log entry."""
-    (
-      self.client.table("jobs")
-      .update(
-        {
-          "status": "completed",
-          "stage": "report",
-          "progress": 100,
-          "duration": max(duration_seconds, 0),
-          "error_message": None,
-        }
-      )
-      .eq("id", job.id)
-      .execute()
+    self._update_job_row(
+      job.id,
+      {
+        "status": "completed",
+        "stage": "finalize",
+        "progress": 100,
+        "duration": max(duration_seconds, 0),
+        "finished_at": datetime.now(timezone.utc).isoformat(),
+        "error_message": None,
+      },
+      fallback_stage="report",
     )
     payload = job.payload or {}
     ticker = payload.get("ticker", "unknown")
@@ -306,8 +391,6 @@ class SupabaseIO:
       chunk = rows[start : start + chunk_size]
       self.client.table("positions").insert(chunk).execute()
 
-  def _upsert_model_metadata(self, metadata: dict[str, Any]) -> None:
-    self.client.table("model_metadata").upsert(
-      metadata,
-      on_conflict="run_id",
-    ).execute()
+  def _replace_model_metadata(self, run_id: str, metadata: dict[str, Any]) -> None:
+    self.client.table("model_metadata").delete().eq("run_id", run_id).execute()
+    self.client.table("model_metadata").insert([metadata]).execute()

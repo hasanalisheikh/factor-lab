@@ -14,6 +14,7 @@ async function transferGuestRuns(guestUserId: string, newUserId: string) {
 }
 
 export type AuthState = { error: string } | null
+export type ResendState = { error: string } | { success: true } | null
 
 const passwordSchema = z
   .string()
@@ -109,7 +110,7 @@ export async function signUpAction(
     "http://localhost:3000"
   const emailRedirectTo = `${origin}/auth/callback`
 
-  const { error } = await supabase.auth.signUp({
+  const { data: signUpData, error } = await supabase.auth.signUp({
     email: parsed.data.email,
     password: parsed.data.password,
     options: { emailRedirectTo },
@@ -122,23 +123,15 @@ export async function signUpAction(
     return { error: error.message }
   }
 
-  // Sign in immediately after sign up (auto-confirm flow)
-  const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({
-    email: parsed.data.email,
-    password: parsed.data.password,
-  })
-
-  if (signInError) {
-    // Account created but couldn't sign in (email confirmation required)
-    return {
-      error:
-        "Account created! Check your email for a confirmation link, then sign in.",
-    }
+  if (!signUpData.session) {
+    // Email confirmation required — session will be established when they click the link
+    const verifyUrl = `/login?tab=verify&email=${encodeURIComponent(parsed.data.email)}`
+    redirect(verifyUrl)
   }
 
-  // Transfer any guest runs to the new account
-  if (guestUserId && signInData.user && signInData.user.id !== guestUserId) {
-    await transferGuestRuns(guestUserId, signInData.user.id)
+  // Auto-confirmed (email confirmation disabled) — session already set in cookies
+  if (guestUserId && signUpData.user && signUpData.user.id !== guestUserId) {
+    await transferGuestRuns(guestUserId, signUpData.user.id)
   }
 
   redirect("/dashboard")
@@ -150,4 +143,32 @@ export async function signOutAction(): Promise<void> {
   const supabase = await createClient()
   await supabase.auth.signOut()
   redirect("/login")
+}
+
+// ─── Resend Verification Email ────────────────────────────────────────────────
+
+export async function resendVerificationAction(
+  _prev: ResendState,
+  formData: FormData
+): Promise<ResendState> {
+  const email = String(formData.get("email") ?? "").trim()
+  if (!email) {
+    return { error: "Email address is required." }
+  }
+
+  const headersList = await headers()
+  const ip = headersList.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "unknown"
+  const { allowed, error: rateLimitError } = await checkAccountCreationRateLimit(ip)
+  if (!allowed) {
+    return { error: rateLimitError ?? "Rate limit exceeded. Try again later." }
+  }
+
+  const supabase = await createClient()
+  const { error } = await supabase.auth.resend({ type: "signup", email })
+
+  if (error) {
+    return { error: error.message }
+  }
+
+  return { success: true }
 }

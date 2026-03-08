@@ -462,7 +462,7 @@ def run_walk_forward(
       "model_version": "factorlab_ml_daily_v1",
       "feature_set": "factorlab_daily_v1",
       "rows_after_dropna": rows_after_dropna,
-      "train_days": n_train_days,
+      "train_days": int(n_train_days),
       "avg_symbols_per_day": round(avg_symbols, 2),
       "training_window": {
         "min_train_days": min_train_days,

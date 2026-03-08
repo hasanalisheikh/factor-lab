@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/table"
 import { StatusBadge } from "@/components/status-badge"
 import { cn } from "@/lib/utils"
+import { formatDrawdown } from "@/lib/format"
 import type { RunMetricsRow, RunWithMetrics } from "@/lib/supabase/types"
 import { STRATEGY_LABELS, type StrategyId, type RunStatus } from "@/lib/types"
 
@@ -160,7 +161,7 @@ export function RunsTable({ runs, searchQuery }: RunsTableProps) {
                       {hasMetrics ? metrics.sharpe.toFixed(2) : "--"}
                     </TableCell>
                     <TableCell className="text-[13px] font-mono text-right py-2.5 text-destructive hidden lg:table-cell">
-                      {hasMetrics ? `${Math.abs(metrics.max_drawdown * 100).toFixed(1)}%` : "--"}
+                      {hasMetrics ? formatDrawdown(metrics.max_drawdown) : "--"}
                     </TableCell>
                     <TableCell className="text-[12px] font-mono pr-4 py-2.5 text-muted-foreground hidden lg:table-cell">
                       {startPeriod} – {endPeriod}

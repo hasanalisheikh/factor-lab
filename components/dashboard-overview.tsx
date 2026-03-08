@@ -1,7 +1,6 @@
 "use client"
 
 import { useState, useMemo, type ReactNode } from "react"
-import Link from "next/link"
 import { MetricCards } from "@/components/metric-cards"
 import { EquityChart } from "@/components/equity-chart"
 import { computeMetrics } from "@/lib/metrics"
@@ -12,6 +11,7 @@ import {
   formatNum,
   formatSignedPctPoints,
   formatSignedNum,
+  formatDrawdown,
 } from "@/lib/format"
 import type { DashboardMetric } from "@/lib/types"
 import { BenchmarkOverlapWarning } from "@/components/benchmark-overlap-warning"
@@ -28,8 +28,6 @@ interface DashboardOverviewProps {
   benchmark: string
   benchmarkOverlapConfirmed: boolean
   storedTurnover: number | null
-  featuredRunId: string | null
-  featuredRunName: string | null
   children?: ReactNode
 }
 
@@ -38,8 +36,6 @@ export function DashboardOverview({
   benchmark,
   benchmarkOverlapConfirmed,
   storedTurnover,
-  featuredRunId,
-  featuredRunName,
   children,
 }: DashboardOverviewProps) {
   const [selectedTf, setSelectedTf] = useState(() => getDefaultTimeframe(equityCurve))
@@ -101,7 +97,7 @@ export function DashboardOverview({
       },
       {
         label: "Max Drawdown",
-        value: pm?.maxDrawdown != null ? formatPct(pm.maxDrawdown) : "—",
+        value: pm?.maxDrawdown != null ? formatDrawdown(pm.maxDrawdown) : "—",
         deltaRaw: maxDDDelta,
         deltaFormatted: maxDDDelta != null ? formatSignedPctPoints(maxDDDelta) : null,
         deltaLabel: `vs ${benchmark}`,
@@ -134,17 +130,6 @@ export function DashboardOverview({
       <div className="grid grid-cols-1 lg:grid-cols-[340px_minmax(0,1fr)] gap-4">
         {children}
         <div className="flex flex-col gap-2">
-          {featuredRunName && featuredRunId && (
-            <div className="flex items-center gap-1.5 text-[12px] text-muted-foreground">
-              <span>Showing</span>
-              <Link
-                href={`/runs/${featuredRunId}`}
-                className="font-medium text-foreground hover:text-primary transition-colors truncate max-w-[260px]"
-              >
-                {featuredRunName}
-              </Link>
-            </div>
-          )}
           <EquityChart
             data={equityCurve}
             benchmarkTicker={benchmark}

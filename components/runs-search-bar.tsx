@@ -50,7 +50,7 @@ export function RunsSearchBar({ defaultQuery = "" }: { defaultQuery?: string }) 
       <Input
         id="runs-search"
         type="search"
-        placeholder="Search runs…"
+        placeholder="Search by name or strategy…"
         value={value}
         onChange={handleChange}
         className="h-8 pl-8 pr-8 text-[12px] bg-secondary/40 border-border"

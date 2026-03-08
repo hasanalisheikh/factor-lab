@@ -72,10 +72,10 @@ export function EquityChart({
       86400000
     if (spanDays > 365) {
       return (v: string) =>
-        new Date(v).toLocaleDateString("en-US", { month: "short", year: "2-digit" })
+        new Date(v + "T00:00:00Z").toLocaleDateString("en-US", { month: "short", year: "2-digit", timeZone: "UTC" })
     }
     return (v: string) =>
-      new Date(v).toLocaleDateString("en-US", { month: "short", day: "numeric" })
+      new Date(v + "T00:00:00Z").toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" })
   }, [chartData])
 
   return (

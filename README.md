@@ -78,6 +78,57 @@ At execution time the worker snapshots the resolved universe to `runs.universe_s
 
 ---
 
+## Auth & Email Verification Setup
+
+### Supabase Dashboard — URL Configuration
+
+Go to **Authentication → URL Configuration** in your Supabase project and set:
+
+| Setting | Value |
+|---|---|
+| Site URL (prod) | `https://factor-lab.vercel.app` |
+| Site URL (dev) | `http://localhost:3000` |
+| Additional redirect URLs | `https://factor-lab.vercel.app/**` and `http://localhost:3000/**` |
+
+> **Note:** The Site URL must match the environment you're testing. Change it when switching between local dev and production, or use the redirect URL wildcard patterns to cover both.
+
+### Environment Variables
+
+```bash
+# .env.local (production only — omit for local dev)
+NEXT_PUBLIC_SITE_URL=https://factor-lab.vercel.app
+```
+
+When `NEXT_PUBLIC_SITE_URL` is not set, the app derives the callback URL from the request `origin` header automatically (works for local dev).
+
+### How the Flow Works
+
+**Email confirmation disabled (dev default):**
+1. User signs up → Supabase auto-confirms and returns a live session
+2. User is redirected straight to `/dashboard`
+
+**Email confirmation enabled (production):**
+1. User signs up → Supabase sends a verification email, returns `session: null`
+2. User is redirected to `/login?tab=verify&email=<address>` — verify tab shows instructions + resend button
+3. User clicks the email link → lands on `/auth/callback?code=...`
+4. Callback exchanges the code for a session and redirects to `/dashboard`
+5. **Expired link**: `/auth/callback` redirects to `/login?tab=verify&error=expired` — user can enter their email and resend
+
+### Manual Test Steps
+
+```
+# Dev (confirm email OFF in Supabase dashboard)
+1. Sign up with a new email → should land on /dashboard immediately
+
+# Prod (confirm email ON)
+1. Sign up → redirected to /login?tab=verify
+2. Check inbox, click verification link → redirected to /dashboard while signed in
+3. Resend: click "Resend verification email" → success message
+4. Expired link: paste an old verification URL → /login?tab=verify with error + email input to resend
+```
+
+---
+
 ## Strategy Glossary & Methodology
 
 ### Common Framework
@@ -175,7 +226,7 @@ Same framework as `ml_ridge`, substituting gradient-boosted trees for the linear
 | Field | Detail |
 |-------|--------|
 | Model | `LGBMRegressor(n_estimators=300, learning_rate=0.05, num_leaves=31, min_child_samples=20)` |
-| Fallback | Falls back to `Ridge(α=0.7)` if LightGBM is not installed |
+| Failure mode | Fails loudly if LightGBM is unavailable (no fallback to Ridge) |
 | Features / Target / Walk-Forward | Identical to ml_ridge |
 
 **Expectations:** May outperform Ridge when factor relationships are non-linear or interaction effects matter. More sensitive to small dataset sizes.
@@ -253,13 +304,34 @@ Guest accounts are full accounts: `guest_<uuid>@factorlab.local`, never exposed 
 
 ### Supabase Auth Setup
 
-1. In your Supabase project → **Authentication** → **URL Configuration**, add:
-   - **Site URL**: `http://localhost:3000` (local) or your Vercel domain
-   - **Redirect URLs**: `http://localhost:3000/**` and `https://your-app.vercel.app/**`
+1. In your Supabase project → **Authentication** → **URL Configuration**:
 
-2. Under **Email** provider settings, you can disable "Confirm email" for development (guests require this to be off, or handled via `email_confirm: true` in admin API).
+   | Setting | Local dev | Production |
+   |---------|-----------|------------|
+   | **Site URL** | `http://localhost:3000` | `https://factor-lab.vercel.app` |
+   | **Redirect URLs** | `http://localhost:3000/**` | `https://factor-lab.vercel.app/**` |
 
-3. For production, optionally re-enable email confirmation for regular sign-ups. The sign-up flow will return a friendly "check your email" message.
+   Add both environments to **Redirect URLs** so verification links work in both contexts.
+
+2. Under **Email** provider settings:
+   - **Dev**: disable "Confirm email" for fast local iteration (auto-confirms, lands on `/dashboard`)
+   - **Prod**: enable "Confirm email" — sign-up redirects to `/login?tab=verify&email=...` where users can see instructions and resend the link
+
+3. Guest accounts use `email_confirm: true` via the admin API and are never affected by the confirm-email setting.
+
+#### Email verification flow (when "Confirm email" is ON)
+
+```
+Sign Up → signUpAction → Supabase signUp (emailRedirectTo: /auth/callback)
+                      ↓ session = null (email not confirmed yet)
+        redirect /login?tab=verify&email=user@example.com
+                      ↓
+        Verify panel: instructions + Resend button
+                      ↓ user clicks email link
+        /auth/callback?code=... → exchangeCodeForSession → redirect /dashboard
+                      ↓ expired link
+        /login?tab=verify&error=Verification link expired...
+```
 
 ---
 
