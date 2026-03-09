@@ -29,7 +29,7 @@ import type {
   DataIngestJobStatus,
 } from "./types"
 import { COVERAGE_WINDOW_START, TICKER_INCEPTION_DATES } from "./types"
-import { UNIVERSE_PRESETS, computeUniverseValidFrom, type UniverseId } from "@/lib/universe-config"
+import { UNIVERSE_PRESETS } from "@/lib/universe-config"
 
 // Re-export for server-side consumers that import types from this module
 export type {
