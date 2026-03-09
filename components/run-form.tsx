@@ -90,10 +90,9 @@ export function RunForm({ defaults, dataCoverage, universeValidFrom }: Props) {
   const startDateStr = startDate ? format(startDate, "yyyy-MM-dd") : null
   const showUniverseWarning =
     universeStart !== null && startDateStr !== null && startDateStr < universeStart
-  const effectiveStrategyStart = computeStrategyEarliestStart(
-    strategy as StrategyId,
-    dataCoverage?.minDateStr ?? null
-  )
+  const effectiveStrategyStart = strategy
+    ? computeStrategyEarliestStart(strategy as StrategyId, dataCoverage?.minDateStr ?? null)
+    : null
   const showWarmupWarning =
     effectiveStrategyStart !== null &&
     startDateStr !== null &&

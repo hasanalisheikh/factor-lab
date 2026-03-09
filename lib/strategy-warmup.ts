@@ -41,7 +41,7 @@ export function computeStrategyEarliestStart(
 ): string | null {
   if (!globalMinDate) return null
   const warmup = STRATEGY_WARMUP_CALENDAR_DAYS[strategyId]
-  if (warmup === 0) return globalMinDate
+  if (!warmup) return globalMinDate
   const d = new Date(`${globalMinDate}T00:00:00Z`)
   d.setUTCDate(d.getUTCDate() + warmup)
   return d.toISOString().slice(0, 10)
