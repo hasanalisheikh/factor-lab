@@ -10,7 +10,7 @@ export function RunStatusPoller({ status }: { status: RunStatus }) {
   const router = useRouter()
 
   useEffect(() => {
-    if (status !== "queued" && status !== "running") return
+    if (status !== "queued" && status !== "running" && status !== "waiting_for_data") return
 
     const id = setInterval(() => {
       router.refresh()

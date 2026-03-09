@@ -7,8 +7,10 @@ import {
   signInAction,
   signUpAction,
   resendVerificationAction,
+  forgotPasswordAction,
   type AuthState,
   type ResendState,
+  type ForgotPasswordState,
 } from "@/app/actions/auth"
 import { Logo } from "@/components/logo"
 import { Alert, AlertDescription } from "@/components/ui/alert"
@@ -23,11 +25,13 @@ export function LoginForm({
   initialTab,
   initialEmail,
   verifyError,
+  forgotError,
 }: {
   authError?: string
-  initialTab?: "signin" | "signup" | "verify"
+  initialTab?: "signin" | "signup" | "verify" | "forgot"
   initialEmail?: string
   verifyError?: string
+  forgotError?: string
 }) {
   const [signInState, signInAction_, isSignInPending] = useActionState<AuthState, FormData>(
     signInAction,
@@ -42,9 +46,15 @@ export function LoginForm({
     null
   )
 
+  const [forgotState, forgotAction_, isForgotPending] = useActionState<ForgotPasswordState, FormData>(
+    forgotPasswordAction,
+    null
+  )
+  const [forgotEmail, setForgotEmail] = useState("")
+
   const [isGuestPending, setIsGuestPending] = useState(false)
   const [guestError, setGuestError] = useState<string | null>(null)
-  const [activeTab, setActiveTab] = useState<"signin" | "signup" | "verify">(
+  const [activeTab, setActiveTab] = useState<"signin" | "signup" | "verify" | "forgot">(
     initialTab ?? "signin"
   )
 
@@ -113,7 +123,9 @@ export function LoginForm({
                 ? "Sign in"
                 : activeTab === "signup"
                   ? "Create account"
-                  : "Verify your email"}
+                  : activeTab === "forgot"
+                    ? "Reset password"
+                    : "Verify your email"}
             </h1>
             <p className="text-sm text-white/60">
               Quant research dashboard for backtests and reports.
@@ -128,7 +140,80 @@ export function LoginForm({
           </Alert>
         )}
 
-        {activeTab === "verify" ? (
+        {activeTab === "forgot" ? (
+          <div className="space-y-3">
+            {"success" in (forgotState ?? {}) ? (
+              <>
+                <div className="flex flex-col items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-4 py-5 text-center">
+                  <Mail className="size-8 text-primary/80" />
+                  <p className="text-sm text-white/70">
+                    If an account exists for{" "}
+                    <span className="font-medium text-white/90">{forgotEmail}</span>,
+                    you&apos;ll receive a password reset email shortly.
+                  </p>
+                </div>
+                <Button
+                  variant="ghost"
+                  onClick={() => setActiveTab("signin")}
+                  className="h-9 w-full border-white/15 text-white/60 hover:bg-white/5 hover:text-white/80"
+                >
+                  ← Back to Sign in
+                </Button>
+              </>
+            ) : (
+              <>
+                {(forgotError || ("error" in (forgotState ?? {}) && (forgotState as { error: string } | null)?.error)) && (
+                  <Alert variant="destructive" className="border-destructive/40 bg-destructive/10">
+                    <AlertCircle className="size-4" />
+                    <AlertDescription>
+                      {forgotError ?? (forgotState as { error: string }).error}
+                    </AlertDescription>
+                  </Alert>
+                )}
+                <form action={forgotAction_} className="space-y-2.5">
+                  <div className="space-y-1.5">
+                    <Label htmlFor="forgot-email" className="text-xs font-medium text-white/60">
+                      Email
+                    </Label>
+                    <Input
+                      id="forgot-email"
+                      name="email"
+                      type="email"
+                      autoComplete="email"
+                      required
+                      value={forgotEmail}
+                      onChange={(e) => setForgotEmail(e.target.value)}
+                      disabled={isForgotPending}
+                      className={inputClassName}
+                    />
+                  </div>
+                  <Button
+                    type="submit"
+                    disabled={isForgotPending}
+                    aria-disabled={isForgotPending}
+                    className={primaryButtonClassName}
+                  >
+                    {isForgotPending ? (
+                      <>
+                        <Spinner className="size-4" />
+                        Sending...
+                      </>
+                    ) : (
+                      "Send reset email"
+                    )}
+                  </Button>
+                </form>
+                <Button
+                  variant="ghost"
+                  onClick={() => setActiveTab("signin")}
+                  className="h-9 w-full border-white/15 text-white/60 hover:bg-white/5 hover:text-white/80"
+                >
+                  ← Back to Sign in
+                </Button>
+              </>
+            )}
+          </div>
+        ) : activeTab === "verify" ? (
           <div className="space-y-3">
             <div className="flex flex-col items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-4 py-5 text-center">
               <Mail className="size-8 text-primary/80" />
@@ -275,6 +360,19 @@ export function LoginForm({
                     disabled={isAnyPending}
                     className={inputClassName}
                   />
+                </div>
+
+                <div className="flex justify-end">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setForgotEmail(signInEmail)
+                      setActiveTab("forgot")
+                    }}
+                    className="text-xs text-white/45 hover:text-emerald-400 hover:underline"
+                  >
+                    Forgot password?
+                  </button>
                 </div>
 
                 {signInError && (
@@ -428,7 +526,7 @@ export function LoginForm({
           </Tabs>
         )}
 
-        {activeTab !== "verify" && (
+        {activeTab !== "verify" && activeTab !== "forgot" && (
           <>
             {guestError && (
               <Alert variant="destructive" className="border-destructive/40 bg-destructive/10">

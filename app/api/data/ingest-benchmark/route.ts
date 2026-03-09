@@ -5,7 +5,7 @@ import { createAdminClient } from "@/lib/supabase/admin"
 export const runtime = "nodejs"
 export const maxDuration = 60 // requires Vercel Pro; safe to set for all plans
 
-const ALLOWED_TICKERS = new Set(["SPY", "QQQ", "IWM", "VTI", "EFA", "TLT", "GLD", "VNQ"])
+const ALLOWED_TICKERS = new Set(["SPY", "QQQ", "IWM", "VTI", "EFA", "EEM", "TLT", "GLD", "VNQ"])
 const STUCK_JOB_MINUTES = 5
 const STUCK_JOB_MS = STUCK_JOB_MINUTES * 60 * 1000
 

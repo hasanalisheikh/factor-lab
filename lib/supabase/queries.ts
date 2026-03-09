@@ -23,10 +23,13 @@ import type {
   RunWithMetrics,
   CompareRunBundle,
   TickerMissingness,
+  TickerDateRange,
+  TickerMissingnessV2,
   BenchmarkCoverage,
   DataIngestJobStatus,
 } from "./types"
-import { COVERAGE_WINDOW_START } from "./types"
+import { COVERAGE_WINDOW_START, TICKER_INCEPTION_DATES } from "./types"
+import { UNIVERSE_PRESETS, computeUniverseValidFrom, type UniverseId } from "@/lib/universe-config"
 
 // Re-export for server-side consumers that import types from this module
 export type {
@@ -502,6 +505,21 @@ export async function getDataCoverage(): Promise<DataCoverage> {
   }
 }
 
+/** Count Mon–Fri business days between two inclusive YYYY-MM-DD date strings. */
+function countBusinessDays(startStr: string, endStr: string): number {
+  if (!startStr || !endStr || startStr > endStr) return 0
+  const start = new Date(`${startStr}T00:00:00Z`)
+  const end = new Date(`${endStr}T00:00:00Z`)
+  let count = 0
+  const cur = new Date(start)
+  while (cur <= end) {
+    const day = cur.getUTCDay()
+    if (day !== 0 && day !== 6) count++
+    cur.setUTCDate(cur.getUTCDate() + 1)
+  }
+  return count
+}
+
 export async function getDataHealthSummary(): Promise<DataHealthSummary> {
   const empty: DataHealthSummary = {
     tickersCount: 0,
@@ -572,15 +590,7 @@ export async function getDataHealthSummary(): Promise<DataHealthSummary> {
     let completenessPercent: number | null = null
 
     if (tickersCount > 0 && dateStart && dateEnd) {
-      // Count Mon–Fri business days across the full coverage window
-      const start = new Date(`${dateStart}T00:00:00Z`)
-      const end = new Date(`${dateEnd}T00:00:00Z`)
-      const current = new Date(start)
-      while (current <= end) {
-        const day = current.getUTCDay()
-        if (day !== 0 && day !== 6) businessDaysInWindow++
-        current.setUTCDate(current.getUTCDate() + 1)
-      }
+      businessDaysInWindow = countBusinessDays(dateStart, dateEnd)
       expectedTickerDays = businessDaysInWindow * tickersCount
       missingTickerDays = Math.max(expectedTickerDays - actualTickerDays, 0)
       completenessPercent =
@@ -841,8 +851,9 @@ export async function getAllBenchmarkCoverage(
             : coveragePercent < 99
               ? "partial"
               : "ok"
+      const inceptionDate = TICKER_INCEPTION_DATES[ticker] ?? null
       const needsHistoricalBackfill =
-        earliestDate !== null && earliestDate > COVERAGE_WINDOW_START
+        earliestDate !== null && inceptionDate !== null && earliestDate > inceptionDate
       return {
         ticker,
         actualDays,
@@ -926,6 +937,70 @@ export async function getRecentIngestionHistory(limit = 5): Promise<IngestionLog
   } catch (err) {
     console.error("getRecentIngestionHistory exception:", err)
     return []
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Auto-queue benchmark ingestions
+// ---------------------------------------------------------------------------
+
+/**
+ * Server-side: enqueue data_ingest jobs for any benchmark ticker that is
+ * not_ingested or needs a historical backfill, skipping tickers that
+ * already have an active (queued/running) job. Idempotent — safe to call
+ * on every page render.
+ */
+export async function autoQueueBenchmarkIngestions(
+  coverages: BenchmarkCoverage[]
+): Promise<void> {
+  try {
+    const needsAction = coverages.filter(
+      (c) => c.status === "not_ingested" || c.needsHistoricalBackfill
+    )
+    if (needsAction.length === 0) return
+
+    const admin = createAdminClient()
+    const today = new Date().toISOString().slice(0, 10)
+
+    // Deduplicate: skip tickers already queued or running
+    const { data: activeJobs } = await admin
+      .from("jobs")
+      .select("payload")
+      .eq("job_type", "data_ingest")
+      .in("status", ["queued", "running"])
+
+    const activeTickers = new Set(
+      (activeJobs ?? [])
+        .map((j) => (j.payload as { ticker?: string })?.ticker?.toUpperCase())
+        .filter(Boolean) as string[]
+    )
+
+    const toQueue = needsAction.filter((c) => !activeTickers.has(c.ticker))
+    if (toQueue.length === 0) return
+
+    await admin.from("jobs").insert(
+      toQueue.map((c) => {
+        const inceptionDate = TICKER_INCEPTION_DATES[c.ticker] ?? "1993-01-01"
+        const isBackfill = c.needsHistoricalBackfill && c.status !== "not_ingested"
+        return {
+          name: isBackfill
+            ? `Ingest ${c.ticker} (backfill from ${inceptionDate})`
+            : `Ingest ${c.ticker}`,
+          status: "queued",
+          stage: "download",
+          progress: 0,
+          job_type: "data_ingest",
+          payload: { ticker: c.ticker, start_date: inceptionDate, end_date: today },
+        }
+      })
+    )
+    console.log(
+      `[auto-ingest] queued ${toQueue.length} benchmark job(s):`,
+      toQueue.map((c) => c.ticker).join(", ")
+    )
+  } catch (err) {
+    // Non-fatal — page still renders; user can trigger manually
+    console.error("[auto-ingest] autoQueueBenchmarkIngestions error:", err)
   }
 }
 
@@ -1124,4 +1199,114 @@ export async function getBenchmarkOverlapStateForRun(
   } catch {
     return { confirmed: false, possible: fallbackPossible }
   }
+}
+
+// ---------------------------------------------------------------------------
+// Inception-aware data health
+// ---------------------------------------------------------------------------
+
+/**
+ * Fetches first_date, last_date, and actual_days per ticker from the DB.
+ * Requires migration 20260309_ticker_date_ranges.sql to be applied.
+ * Returns an empty array gracefully if the RPC doesn't exist yet.
+ */
+export async function getTickerDateRanges(): Promise<TickerDateRange[]> {
+  try {
+    const supabase = createAdminClient()
+    type RawRow = { ticker: string; first_date: string; last_date: string; actual_days: string | number }
+    const { data, error } = await supabase.rpc("get_ticker_date_ranges") as unknown as {
+      data: RawRow[] | null
+      error: { message: string } | null
+    }
+    if (error) {
+      if (!error.message.includes("Could not find the function")) {
+        console.error("getTickerDateRanges error:", error.message)
+      }
+      return []
+    }
+    return (data ?? []).map((r) => ({
+      ticker: r.ticker,
+      firstDate: r.first_date,
+      lastDate: r.last_date,
+      actualDays: Number(r.actual_days),
+    }))
+  } catch (err) {
+    console.error("getTickerDateRanges exception:", err)
+    return []
+  }
+}
+
+// computeUniverseValidFrom is a pure function defined in lib/universe-config.ts
+// and re-exported from there so client components and tests can import it
+// without hitting the server-only constraint.
+export { computeUniverseValidFrom } from "@/lib/universe-config"
+
+/**
+ * Returns inception-aware missingness for each ticker that has data.
+ * "True missing" = gaps within the ticker's own [firstDate, lastDate] window.
+ * "Pre-inception" = business days in [globalStart, firstDate) — not an error.
+ */
+export async function getTopMissingTickersV2(
+  limit: number,
+  globalStart: string | null,
+  globalEnd: string | null
+): Promise<TickerMissingnessV2[]> {
+  const ranges = await getTickerDateRanges()
+  if (!ranges.length) return []
+
+  const effectiveGlobalStart = globalStart ?? ranges.reduce(
+    (min, r) => (!min || r.firstDate < min ? r.firstDate : min),
+    null as string | null
+  ) ?? ""
+
+  const rows: TickerMissingnessV2[] = ranges.map((r) => {
+    const expectedDays = countBusinessDays(r.firstDate, r.lastDate)
+    const trueMissingDays = Math.max(expectedDays - r.actualDays, 0)
+    // Business days from globalStart up to (but not including) firstDate
+    const dayBeforeFirst = (() => {
+      const d = new Date(`${r.firstDate}T00:00:00Z`)
+      d.setUTCDate(d.getUTCDate() - 1)
+      return d.toISOString().slice(0, 10)
+    })()
+    const preInceptionDays = effectiveGlobalStart < r.firstDate
+      ? countBusinessDays(effectiveGlobalStart, dayBeforeFirst)
+      : 0
+    const coveragePercent = expectedDays > 0
+      ? Math.min((r.actualDays / expectedDays) * 100, 100)
+      : 100
+
+    return {
+      ticker: r.ticker,
+      firstDate: r.firstDate,
+      lastDate: r.lastDate,
+      actualDays: r.actualDays,
+      expectedDays,
+      trueMissingDays,
+      preInceptionDays,
+      coveragePercent,
+    }
+  })
+
+  // Filter to window if globalEnd provided
+  const filtered = globalEnd
+    ? rows.filter((r) => r.firstDate <= globalEnd)
+    : rows
+
+  return filtered
+    .filter((r) => r.trueMissingDays > 0)
+    .sort((a, b) => b.trueMissingDays - a.trueMissingDays)
+    .slice(0, limit)
+}
+
+/**
+ * Returns tickers from all universe presets that have zero rows in the prices table.
+ */
+export async function getNotIngestedUniverseTickers(): Promise<string[]> {
+  const ranges = await getTickerDateRanges()
+  const ingested = new Set(ranges.map((r) => r.ticker))
+  const allTickers = new Set<string>()
+  for (const tickers of Object.values(UNIVERSE_PRESETS)) {
+    for (const t of tickers) allTickers.add(t)
+  }
+  return [...allTickers].filter((t) => !ingested.has(t)).sort()
 }

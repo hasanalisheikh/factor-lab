@@ -9,6 +9,7 @@ export default async function LoginPage({
 }) {
   const { error, tab, email } = await searchParams
   const isVerify = tab === "verify"
+  const isForgot = tab === "forgot"
   return (
     <div className="w-full">
       <Card className="relative mx-auto w-full max-w-6xl overflow-hidden rounded-3xl border-white/10 bg-card/95 shadow-[0_28px_75px_-36px_rgba(0,0,0,0.95)] lg:h-[80vh] lg:max-h-[80vh]">
@@ -16,10 +17,11 @@ export default async function LoginPage({
         <div className="relative z-10 grid h-full grid-cols-1 lg:grid-cols-5">
           <section className="relative order-2 border-t border-white/10 bg-card/96 p-4 sm:p-5 lg:order-1 lg:col-span-2 lg:h-full lg:border-t-0 lg:border-r lg:p-4">
             <LoginForm
-              authError={isVerify ? undefined : error}
-              initialTab={isVerify ? "verify" : undefined}
+              authError={isVerify || isForgot ? undefined : error}
+              initialTab={isVerify ? "verify" : isForgot ? "forgot" : undefined}
               initialEmail={email}
               verifyError={isVerify ? error : undefined}
+              forgotError={isForgot ? error : undefined}
             />
           </section>
           <section className="order-1 min-h-[180px] overflow-hidden lg:order-2 lg:col-span-3 lg:h-full lg:min-h-0">

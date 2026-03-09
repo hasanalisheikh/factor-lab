@@ -308,11 +308,22 @@ def _ensure_min_history(prices: pd.DataFrame, *, context: str) -> None:
     )
 
 
+def _get_ticker_inception_dates(prices: pd.DataFrame) -> dict[str, pd.Timestamp]:
+  """Return the first date with a non-NaN price for each column in the prices frame."""
+  inception: dict[str, pd.Timestamp] = {}
+  for col in prices.columns:
+    valid = prices[col].dropna()
+    if not valid.empty:
+      inception[col] = valid.index[0]
+  return inception
+
+
 def _equal_weight(prices: pd.DataFrame) -> tuple[pd.Series, float, pd.Series, list[dict[str, Any]]]:
+  # Compute per-ticker inception dates so pre-launch tickers are excluded at each rebalance.
+  inception_dates = _get_ticker_inception_dates(prices)
+
   rets = prices.pct_change().fillna(0.0)
-  n = prices.shape[1]
-  weights = np.full(n, 1.0 / n)
-  portfolio_rets = (rets * weights).sum(axis=1)
+  portfolio_rets = pd.Series(0.0, index=prices.index)
   monthly_turnover = pd.Series(0.0, index=prices.index)
   rebalance_mask = prices.index.to_series().dt.to_period("M").ne(
     prices.index.to_series().shift(1).dt.to_period("M")
@@ -320,20 +331,36 @@ def _equal_weight(prices: pd.DataFrame) -> tuple[pd.Series, float, pd.Series, li
   monthly_turnover.loc[rebalance_mask.values] = 0.08
   annualized_turnover = float(monthly_turnover[monthly_turnover > 0].mean() * 12.0)
 
-  # Collect rebalance-date positions (first day of each month)
-  weight_per_asset = 1.0 / n if n > 0 else 0.0
+  # Collect rebalance-date positions (first day of each month), excluding pre-inception tickers.
   rebalance_positions: list[dict[str, Any]] = []
   prev_month = None
+  prev_weights: pd.Series = pd.Series(0.0, index=prices.columns)
+
   for dt in prices.index:
     current_month = dt.to_period("M")
     if current_month != prev_month:
       prev_month = current_month
-      for col in prices.columns:
+      # Available = tickers that have launched by this rebalance date
+      available_cols = [
+        col for col in prices.columns
+        if inception_dates.get(col, dt) <= dt
+      ]
+      n = len(available_cols)
+      weight_per_asset = 1.0 / n if n > 0 else 0.0
+      current_w = pd.Series(0.0, index=prices.columns)
+      if n > 0:
+        current_w.loc[available_cols] = weight_per_asset
+      prev_weights = current_w
+
+      for col in available_cols:
         rebalance_positions.append({
           "date": pd.Timestamp(dt).strftime("%Y-%m-%d"),
           "symbol": str(col),
           "weight": weight_per_asset,
         })
+
+    # Daily portfolio return using weights set at last rebalance
+    portfolio_rets.loc[dt] = float((rets.loc[dt] * prev_weights).sum())
 
   return portfolio_rets, annualized_turnover, monthly_turnover, rebalance_positions
 
@@ -356,6 +383,8 @@ def _momentum_12_1(
 
   for i, dt in enumerate(prices.index):
     if i == 0 or dt.month != prices.index[i - 1].month:
+      # dropna() is inception-aware: tickers with insufficient lookback history
+      # (including pre-launch tickers) return NaN scores and are excluded naturally.
       s = scores.loc[dt].dropna()
       s = s[s > 0].sort_values(ascending=False).head(effective_top_n)
       current_w = pd.Series(0.0, index=prices.columns)
@@ -957,7 +986,10 @@ def _process_data_ingest_job(io: SupabaseIO, job: Job) -> None:
       )
       print(f"[engine] data_ingest skipped job={job.id} {ticker} already current ({existing_latest})")
       return
-    start_date = next_day
+    # Only advance start_date if it is already past existing_latest.
+    # If start_date < existing_latest, this is a force backfill — preserve it.
+    if start_date > existing_latest:
+      start_date = next_day
 
   print(f"[engine] data_ingest job={job.id} ticker={ticker} {start_date}→{end_date}")
   stage = "download"
@@ -1062,6 +1094,8 @@ def _process_job(io: SupabaseIO, job: Job) -> None:
 
   if job.job_type == "data_ingest":
     _process_data_ingest_job(io, job)
+    # Chain to backtest if this was the last preflight ingest job for a waiting run
+    io.try_chain_preflight_backtest(job)
     return
 
   started = datetime.utcnow()

@@ -11,7 +11,7 @@ import {
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import type { BenchmarkCoverage, DataIngestJobStatus } from "@/lib/supabase/types"
-import { COVERAGE_WINDOW_START } from "@/lib/supabase/types"
+import { TICKER_INCEPTION_DATES } from "@/lib/supabase/types"
 
 // ---------------------------------------------------------------------------
 // Types
@@ -104,6 +104,9 @@ function BenchmarkRow({
     }
   }
 
+  // Per-ticker inception date for accurate backfill start
+  const inceptionDate = TICKER_INCEPTION_DATES[ticker] ?? "1993-01-01"
+
   // Derive display values
   const status = coverage?.status ?? "not_ingested"
   const needsBackfill = coverage?.needsHistoricalBackfill ?? false
@@ -185,7 +188,7 @@ function BenchmarkRow({
             size="sm"
             variant="outline"
             className="h-6 px-2 text-[11px] flex-shrink-0 border-amber-800/50 text-amber-400 hover:text-amber-300"
-            onClick={() => handleAction(COVERAGE_WINDOW_START)}
+            onClick={() => handleAction(inceptionDate)}
             disabled={isSubmitting}
           >
             {isSubmitting ? <Loader2 className="w-3 h-3 animate-spin" /> : "Backfill"}
@@ -207,7 +210,7 @@ function BenchmarkRow({
             size="sm"
             variant="outline"
             className="h-6 px-2 text-[11px] flex-shrink-0 border-red-800/50 text-red-400 hover:text-red-300"
-            onClick={() => handleAction(needsBackfill ? COVERAGE_WINDOW_START : undefined)}
+            onClick={() => handleAction(needsBackfill ? inceptionDate : undefined)}
             disabled={isSubmitting}
           >
             {isSubmitting ? <Loader2 className="w-3 h-3 animate-spin" /> : "Retry"}
@@ -238,9 +241,7 @@ export function BenchmarkCoverageCard({ benchmarks, isDev: _isDev = false }: Pro
           Benchmark Coverage
         </CardTitle>
         <p className="text-xs text-muted-foreground">
-          Coverage from{" "}
-          <span className="font-mono text-foreground">{COVERAGE_WINDOW_START}</span> to today
-          across all supported benchmarks.
+          Coverage from ticker inception to today across all supported benchmarks.
         </p>
       </CardHeader>
 
@@ -249,9 +250,8 @@ export function BenchmarkCoverageCard({ benchmarks, isDev: _isDev = false }: Pro
           <div className="flex items-start gap-1.5 rounded-md bg-amber-950/30 border border-amber-800/40 px-2.5 py-2 mb-3">
             <AlertTriangle className="w-3.5 h-3.5 text-amber-400 flex-shrink-0 mt-0.5" />
             <p className="text-[11px] text-amber-300/80 leading-snug">
-              Some benchmarks need a historical backfill from{" "}
-              <span className="font-mono">{COVERAGE_WINDOW_START}</span>. Click{" "}
-              <strong>Backfill</strong> on any affected row to fix.
+              Some benchmarks have incomplete history. Click{" "}
+              <strong>Backfill</strong> on any affected row to download full history from ticker inception.
             </p>
           </div>
         )}

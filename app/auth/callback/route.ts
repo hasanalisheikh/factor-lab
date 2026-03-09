@@ -10,22 +10,27 @@ export async function GET(request: NextRequest) {
   // `next` lets the caller specify a post-auth redirect (defaults to /dashboard)
   const next = searchParams.get("next") ?? "/dashboard"
 
-  // Surface Supabase auth errors (e.g. expired link) via the verify tab
-  if (error) {
+  const isResetFlow = next.startsWith("/reset-password")
+
+  function errorRedirect(message?: string) {
     const loginUrl = new URL("/login", origin)
-    loginUrl.searchParams.set("tab", "verify")
+    loginUrl.searchParams.set("tab", isResetFlow ? "forgot" : "verify")
     loginUrl.searchParams.set(
       "error",
-      errorDescription ?? "Verification link expired. Please request a new one."
+      message ?? (isResetFlow
+        ? "Reset link expired. Please request a new one."
+        : "Verification link expired. Please request a new one.")
     )
     return NextResponse.redirect(loginUrl)
   }
 
+  // Surface Supabase auth errors (e.g. expired link)
+  if (error) {
+    return errorRedirect(errorDescription ?? undefined)
+  }
+
   if (!code) {
-    const loginUrl = new URL("/login", origin)
-    loginUrl.searchParams.set("tab", "verify")
-    loginUrl.searchParams.set("error", "Verification link expired. Please request a new one.")
-    return NextResponse.redirect(loginUrl)
+    return errorRedirect()
   }
 
   const cookieStore = await cookies()
@@ -47,10 +52,7 @@ export async function GET(request: NextRequest) {
   const { error: exchangeError } = await supabase.auth.exchangeCodeForSession(code)
 
   if (exchangeError) {
-    const loginUrl = new URL("/login", origin)
-    loginUrl.searchParams.set("tab", "verify")
-    loginUrl.searchParams.set("error", "Verification link expired. Please request a new one.")
-    return NextResponse.redirect(loginUrl)
+    return errorRedirect()
   }
 
   // Successful verification — redirect to the app

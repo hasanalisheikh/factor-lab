@@ -21,8 +21,13 @@ export async function changePasswordAction(
   _prev: AccountActionState,
   formData: FormData
 ): Promise<AccountActionState> {
+  const currentPassword = String(formData.get("current_password") ?? "")
   const newPassword = String(formData.get("new_password") ?? "")
   const confirmPassword = String(formData.get("confirm_password") ?? "")
+
+  if (!currentPassword) {
+    return { error: "Current password is required" }
+  }
 
   if (newPassword !== confirmPassword) {
     return { error: "Passwords do not match" }
@@ -34,6 +39,20 @@ export async function changePasswordAction(
   }
 
   const supabase = await createClient()
+
+  // Verify current password before allowing the change
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user?.email) {
+    return { error: "Not authenticated" }
+  }
+  const { error: signInError } = await supabase.auth.signInWithPassword({
+    email: user.email,
+    password: currentPassword,
+  })
+  if (signInError) {
+    return { error: "Current password is incorrect" }
+  }
+
   const { error } = await supabase.auth.updateUser({ password: parsed.data })
 
   if (error) {
@@ -124,6 +143,21 @@ export async function deleteAccountAction(
   const { data: { user }, error: userError } = await supabase.auth.getUser()
   if (userError || !user) {
     return { error: "Not authenticated" }
+  }
+
+  // Non-guest accounts must confirm with their current password
+  if (!user.user_metadata?.is_guest) {
+    const password = String(formData.get("password") ?? "")
+    if (!password) {
+      return { error: "Password is required to delete your account" }
+    }
+    const { error: signInError } = await supabase.auth.signInWithPassword({
+      email: user.email!,
+      password,
+    })
+    if (signInError) {
+      return { error: "Incorrect password. Please try again." }
+    }
   }
 
   const admin = createAdminClient()

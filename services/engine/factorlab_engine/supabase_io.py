@@ -17,6 +17,7 @@ class Job:
   stage: str | None = None
   job_type: str = "backtest"
   payload: dict | None = None
+  preflight_run_id: str | None = None  # Links a data_ingest job to its waiting run
 
 
 class SupabaseIO:
@@ -32,7 +33,7 @@ class SupabaseIO:
   def fetch_queued_jobs(self, limit: int = 3) -> list[Job]:
     result = (
       self.client.table("jobs")
-      .select("id,run_id,name,stage,job_type,payload")
+      .select("id,run_id,name,stage,job_type,payload,preflight_run_id")
       .eq("status", "queued")
       .order("created_at")
       .limit(limit)
@@ -54,6 +55,7 @@ class SupabaseIO:
           stage=row.get("stage"),
           job_type=job_type,
           payload=row.get("payload"),
+          preflight_run_id=row.get("preflight_run_id"),
         )
       )
     return jobs
@@ -394,3 +396,93 @@ class SupabaseIO:
   def _replace_model_metadata(self, run_id: str, metadata: dict[str, Any]) -> None:
     self.client.table("model_metadata").delete().eq("run_id", run_id).execute()
     self.client.table("model_metadata").insert([metadata]).execute()
+
+  def try_chain_preflight_backtest(self, job: Job) -> None:
+    """After a data_ingest job completes (or fails), check whether all preflight
+    ingest jobs for the linked run have settled. If so, either enqueue the
+    backtest job (all succeeded) or fail the run (any failed).
+
+    This implements the automatic chaining from waiting_for_data → queued.
+    """
+    run_id = job.preflight_run_id
+    if not run_id:
+      return
+
+    try:
+      # Fetch all preflight ingest jobs for this run
+      preflight_result = (
+        self.client.table("jobs")
+        .select("id,status,payload")
+        .eq("preflight_run_id", run_id)
+        .execute()
+      )
+      preflight_jobs = preflight_result.data or []
+      if not preflight_jobs:
+        return
+
+      statuses = [j["status"] for j in preflight_jobs]
+
+      # Still pending — another job will finish and call this
+      if any(s in ("queued", "running") for s in statuses):
+        return
+
+      # Guard: only act if run is still waiting_for_data (idempotency check)
+      run_result = (
+        self.client.table("runs")
+        .select("id,name,status")
+        .eq("id", run_id)
+        .eq("status", "waiting_for_data")
+        .execute()
+      )
+      run_rows = run_result.data or []
+      if not run_rows:
+        return  # Run already handled (failed/cancelled elsewhere)
+      run = run_rows[0]
+
+      failed_jobs = [j for j in preflight_jobs if j["status"] == "failed"]
+      if failed_jobs:
+        # Some ingest jobs failed — fail the run with a diagnostic
+        failed_tickers = [
+          str(j.get("payload", {}).get("ticker", "?")) for j in failed_jobs
+        ]
+        error_msg = (
+          f"Data ingestion failed for: {', '.join(failed_tickers)}. "
+          "Coverage below threshold after ingest attempt. "
+          "Visit the Data page to retry or check the logs."
+        )
+        (
+          self.client.table("runs")
+          .update({"status": "failed"})
+          .eq("id", run_id)
+          .execute()
+        )
+        # Sentinel job so the run detail page shows the failure message
+        self.client.table("jobs").insert({
+          "run_id": run_id,
+          "name": run["name"],
+          "status": "failed",
+          "stage": "ingest",
+          "progress": 0,
+          "error_message": error_msg[:2000],
+        }).execute()
+        print(f"[supabase_io] preflight failed for run={run_id}: {error_msg}")
+        return
+
+      # All ingest jobs completed — enqueue the backtest job
+      self.client.table("jobs").insert({
+        "run_id": run_id,
+        "name": run["name"],
+        "status": "queued",
+        "stage": "ingest",
+        "progress": 0,
+      }).execute()
+      (
+        self.client.table("runs")
+        .update({"status": "queued"})
+        .eq("id", run_id)
+        .execute()
+      )
+      print(f"[supabase_io] chained backtest for run={run_id} after preflight ingest")
+
+    except Exception as exc:
+      print(f"[supabase_io] try_chain_preflight_backtest error for run={run_id}: {exc}")

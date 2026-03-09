@@ -15,6 +15,8 @@ async function transferGuestRuns(guestUserId: string, newUserId: string) {
 
 export type AuthState = { error: string } | null
 export type ResendState = { error: string } | { success: true } | null
+export type ForgotPasswordState = { success: true } | { error: string } | null
+export type ResetPasswordState = { error: string } | null
 
 const passwordSchema = z
   .string()
@@ -118,9 +120,16 @@ export async function signUpAction(
 
   if (error) {
     if (error.message.toLowerCase().includes("already registered")) {
-      return { error: "An account with this email already exists. Please sign in." }
+      return { error: "An account with this email already exists. Please sign in instead." }
     }
     return { error: error.message }
+  }
+
+  // When email confirmation is enabled, Supabase silently re-sends the confirmation
+  // email for duplicate addresses instead of returning an error. An empty identities
+  // array is the reliable signal that the email is already taken.
+  if (signUpData.user && (signUpData.user.identities?.length ?? 0) === 0) {
+    return { error: "An account with this email already exists. Please sign in instead." }
   }
 
   if (!signUpData.session) {
@@ -143,6 +152,59 @@ export async function signOutAction(): Promise<void> {
   const supabase = await createClient()
   await supabase.auth.signOut()
   redirect("/login")
+}
+
+// ─── Forgot Password ─────────────────────────────────────────────────────────
+
+export async function forgotPasswordAction(
+  _prev: ForgotPasswordState,
+  formData: FormData
+): Promise<ForgotPasswordState> {
+  const email = String(formData.get("email") ?? "").trim()
+  if (!email || !z.string().email().safeParse(email).success) {
+    return { error: "Please enter a valid email address." }
+  }
+
+  const origin =
+    process.env.NEXT_PUBLIC_SITE_URL ??
+    (await headers()).get("origin") ??
+    "http://localhost:3000"
+
+  const supabase = await createClient()
+  await supabase.auth.resetPasswordForEmail(email, {
+    redirectTo: `${origin}/auth/callback?next=/reset-password`,
+  })
+
+  // Always return success — don't reveal whether the email exists
+  return { success: true }
+}
+
+// ─── Reset Password ───────────────────────────────────────────────────────────
+
+export async function resetPasswordAction(
+  _prev: ResetPasswordState,
+  formData: FormData
+): Promise<ResetPasswordState> {
+  const password = String(formData.get("password") ?? "")
+  const confirmPassword = String(formData.get("confirmPassword") ?? "")
+
+  if (password !== confirmPassword) {
+    return { error: "Passwords do not match." }
+  }
+
+  const parsed = passwordSchema.safeParse(password)
+  if (!parsed.success) {
+    return { error: parsed.error.issues[0].message }
+  }
+
+  const supabase = await createClient()
+  const { error } = await supabase.auth.updateUser({ password: parsed.data })
+
+  if (error) {
+    return { error: error.message }
+  }
+
+  redirect("/dashboard")
 }
 
 // ─── Resend Verification Email ────────────────────────────────────────────────

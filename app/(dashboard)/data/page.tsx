@@ -2,12 +2,16 @@ import { AppShell } from "@/components/layout/app-shell"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import {
   getDataHealthSummary,
-  getTopMissingTickers,
+  getTopMissingTickersV2,
+  getNotIngestedUniverseTickers,
   getAllBenchmarkCoverage,
   getRecentIngestionHistory,
   getLatestDataIngestJobs,
+  autoQueueBenchmarkIngestions,
+  getTickerDateRanges,
 } from "@/lib/supabase/queries"
 import { BENCHMARK_OPTIONS } from "@/lib/benchmark"
+import { COVERAGE_WINDOW_START } from "@/lib/supabase/types"
 import {
   formatISODate,
   formatISOTimestamp,
@@ -17,6 +21,7 @@ import {
 import { InfoTooltip } from "@/components/data/info-tooltip"
 import { TopMissingTable } from "@/components/data/top-missing-table"
 import { BenchmarkCoverageCard } from "@/components/data/benchmark-coverage-card"
+import { UniverseTierSummary } from "@/components/data/universe-tier-summary"
 import {
   AlertTriangle,
   Calendar,
@@ -27,6 +32,7 @@ import {
   XCircle,
   AlertCircle,
 } from "lucide-react"
+import Link from "next/link"
 
 export const dynamic = "force-dynamic"
 
@@ -65,7 +71,7 @@ function healthVerdict(completeness: number | null) {
   if (completeness >= 99)
     return {
       label: "Good",
-      desc: `Coverage is ${completeness.toFixed(1)}% complete. Backtests should be reliable.`,
+      desc: `Inception-aware coverage is ${completeness.toFixed(1)}% complete. Backtests should be reliable.`,
       Icon: CheckCircle2,
       textCls: "text-emerald-400",
       borderCls: "border-emerald-800/40",
@@ -73,14 +79,14 @@ function healthVerdict(completeness: number | null) {
   if (completeness >= 95)
     return {
       label: "Warning",
-      desc: `Coverage is ${completeness.toFixed(1)}%. Some tickers have gaps that may affect signal quality.`,
+      desc: `Inception-aware coverage is ${completeness.toFixed(1)}%. Some tickers have gaps that may affect signal quality.`,
       Icon: AlertCircle,
       textCls: "text-amber-400",
       borderCls: "border-amber-800/40",
     }
   return {
     label: "Degraded",
-    desc: `Coverage is only ${completeness.toFixed(1)}%. Significant gaps may bias backtest returns.`,
+    desc: `Inception-aware coverage is only ${completeness.toFixed(1)}%. Significant gaps may bias backtest returns.`,
     Icon: XCircle,
     textCls: "text-red-400",
     borderCls: "border-red-800/40",
@@ -91,15 +97,34 @@ function healthVerdict(completeness: number | null) {
 // Page
 // ---------------------------------------------------------------------------
 
-export default async function DataPage() {
+export default async function DataPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | undefined>>
+}) {
+  const params = await searchParams
+  const mode = params.mode === "full" ? "full" : "backtest"
+
   const health = await getDataHealthSummary()
 
-  const [topMissing, allBenchmarkCovs, ingestionLog, allIngestJobs] = await Promise.all([
-    getTopMissingTickers(50, health.businessDaysInWindow),
-    getAllBenchmarkCoverage(health.dateStart, health.dateEnd, health.businessDaysInWindow),
-    getRecentIngestionHistory(5),
-    getLatestDataIngestJobs(BENCHMARK_OPTIONS),
-  ])
+  // In backtest mode use the fixed coverage window start; in full mode use DB global min.
+  const windowStart = mode === "backtest" ? COVERAGE_WINDOW_START : health.dateStart
+
+  // Phase 1: fetch coverage + other data in parallel (jobs fetched after auto-queue)
+  const [topMissingV2, notIngested, allBenchmarkCovs, ingestionLog, tickerRanges] =
+    await Promise.all([
+      getTopMissingTickersV2(50, windowStart, health.dateEnd),
+      getNotIngestedUniverseTickers(),
+      getAllBenchmarkCoverage(health.dateStart, health.dateEnd, health.businessDaysInWindow),
+      getRecentIngestionHistory(5),
+      getTickerDateRanges(),
+    ])
+
+  // Phase 2: auto-queue any benchmarks that need ingestion/backfill (idempotent)
+  await autoQueueBenchmarkIngestions(allBenchmarkCovs)
+
+  // Phase 3: fetch jobs after auto-queue so newly queued jobs appear in initialJob
+  const allIngestJobs = await getLatestDataIngestJobs(BENCHMARK_OPTIONS)
 
   const benchmarkRows = BENCHMARK_OPTIONS.map((ticker) => ({
     ticker,
@@ -110,13 +135,76 @@ export default async function DataPage() {
   const freshnessStatus = getFreshnessStatus(health.lastUpdatedAt)
   const daysAgo = daysAgoFromNow(health.lastUpdatedAt)
   const freshness = freshnessLabel(freshnessStatus)
-  const verdict = healthVerdict(health.completenessPercent)
+
+  // Inception-aware completeness: total actual / total expected (within each ticker's own window)
+  const totalExpected = topMissingV2.reduce((s, r) => s + r.expectedDays, 0)
+  const totalActualForMissing = topMissingV2.reduce((s, r) => s + r.actualDays, 0)
+  const inceptionAwareCompleteness =
+    totalExpected > 0 && topMissingV2.length > 0
+      ? Math.min((totalActualForMissing / totalExpected) * 100, 100)
+      : health.completenessPercent  // fallback to original if V2 not available
+
+  const verdict = healthVerdict(inceptionAwareCompleteness)
   const { Icon: VerdictIcon } = verdict
+
+  // Aggregate missingness breakdown
+  const totalTrueMissing = topMissingV2.reduce((s, r) => s + r.trueMissingDays, 0)
+  const totalPreInception = topMissingV2.reduce((s, r) => s + r.preInceptionDays, 0)
 
   const isDev = process.env.NODE_ENV !== "production"
 
   return (
     <AppShell title="Data">
+      {/* ------------------------------------------------------------------ */}
+      {/* Product copy                                                        */}
+      {/* ------------------------------------------------------------------ */}
+      <div className="mb-1">
+        <p className="text-sm text-foreground">
+          Monitor price coverage, detect gaps that bias signals, and ingest/backfill
+          tickers and benchmarks so backtests remain reliable.
+        </p>
+        <p className="text-xs text-muted-foreground mt-0.5">
+          Backtest-ready focuses on your recommended research window; Full history
+          shows DB-wide earliest coverage and pre-inception counts.
+        </p>
+      </div>
+
+      {/* ------------------------------------------------------------------ */}
+      {/* Mode toggle                                                         */}
+      {/* ------------------------------------------------------------------ */}
+      <div className="flex items-center gap-1 mb-4 p-1 rounded-lg bg-muted/40 border border-border w-fit">
+        <Link
+          href="/data"
+          className={`text-xs px-3 py-1.5 rounded-md font-medium transition-colors ${
+            mode === "backtest"
+              ? "bg-card text-foreground shadow-sm"
+              : "text-muted-foreground hover:text-foreground"
+          }`}
+        >
+          Backtest-ready
+        </Link>
+        <Link
+          href="/data?mode=full"
+          className={`text-xs px-3 py-1.5 rounded-md font-medium transition-colors ${
+            mode === "full"
+              ? "bg-card text-foreground shadow-sm"
+              : "text-muted-foreground hover:text-foreground"
+          }`}
+        >
+          Full history
+        </Link>
+      </div>
+
+      {mode === "full" && (
+        <div className="flex items-start gap-2 mb-4 px-3 py-2 rounded-md bg-amber-950/30 border border-amber-800/40">
+          <AlertTriangle className="w-3.5 h-3.5 text-amber-400 flex-shrink-0 mt-0.5" />
+          <p className="text-xs text-amber-300/80">
+            <strong>Full history mode:</strong> Coverage window starts at the DB global minimum. Pre-inception
+            counts are large because tickers like TSLA, META, AVGO did not exist yet — this is expected.
+          </p>
+        </div>
+      )}
+
       {/* ------------------------------------------------------------------ */}
       {/* Health verdict banner                                               */}
       {/* ------------------------------------------------------------------ */}
@@ -178,55 +266,63 @@ export default async function DataPage() {
           </CardContent>
         </Card>
 
-        {/* Missing Ticker-Days */}
-        <Card className="bg-card border-border">
+        {/* Inception-aware breakdown card */}
+        <Card className="bg-card border-border md:col-span-1 xl:col-span-1">
           <CardHeader className="pb-2">
             <CardTitle className="text-xs font-medium text-muted-foreground flex items-center">
-              Missing Ticker-Days
-              <InfoTooltip text="Count of missing (ticker, trading day) rows vs an expected Mon–Fri business-day grid across all tickers and the full coverage window." />
+              Missingness
+              <InfoTooltip text="True Missing: gaps within each ticker's own trading window. Pre-Inception: dates before a ticker launched (not an error). Not Ingested: universe tickers absent from DB." />
             </CardTitle>
           </CardHeader>
-          <CardContent className="flex items-center justify-between">
-            <p className="text-2xl font-semibold text-foreground">
-              {health.tickersCount > 0
-                ? health.missingTickerDays.toLocaleString()
-                : "—"}
-            </p>
-            <AlertTriangle
-              className={`w-5 h-5 ${
-                health.missingTickerDays > 0 ? "text-amber-400" : "text-muted-foreground"
-              }`}
-            />
+          <CardContent className="space-y-1">
+            <div className="flex items-center justify-between text-xs">
+              <span className="text-muted-foreground">True Missing</span>
+              <span className={`font-medium ${totalTrueMissing > 0 ? "text-amber-400" : "text-emerald-400"}`}>
+                {topMissingV2.length > 0 ? totalTrueMissing.toLocaleString() : health.missingTickerDays.toLocaleString()}
+              </span>
+            </div>
+            <div className="flex items-center justify-between text-xs">
+              <span className="text-muted-foreground">Pre-Inception</span>
+              <span className="text-muted-foreground/70">
+                {totalPreInception.toLocaleString()}
+              </span>
+            </div>
+            <div className="flex items-center justify-between text-xs">
+              <span className="text-muted-foreground">Not Ingested</span>
+              <span className={`font-medium ${notIngested.length > 0 ? "text-amber-400" : "text-emerald-400"}`}>
+                {notIngested.length > 0 ? `${notIngested.length} tickers` : "0"}
+              </span>
+            </div>
           </CardContent>
         </Card>
 
-        {/* Completeness % */}
+        {/* Completeness % (inception-aware) */}
         <Card className="bg-card border-border">
           <CardHeader className="pb-2">
             <CardTitle className="text-xs font-medium text-muted-foreground flex items-center">
               Completeness
-              <InfoTooltip text="Actual ticker-day rows ÷ expected rows (tickers × business days in coverage window). 100% means no missing rows." />
+              <InfoTooltip text="Inception-aware: actual rows ÷ expected rows per ticker's own [firstDate, lastDate] window. Pre-inception dates are excluded from the denominator." />
             </CardTitle>
           </CardHeader>
           <CardContent className="flex items-center justify-between">
             <p
               className={`text-2xl font-semibold ${
-                health.completenessPercent === null
+                inceptionAwareCompleteness === null
                   ? "text-muted-foreground"
-                  : health.completenessPercent >= 99
+                  : inceptionAwareCompleteness >= 99
                     ? "text-emerald-400"
-                    : health.completenessPercent >= 95
+                    : inceptionAwareCompleteness >= 95
                       ? "text-amber-400"
                       : "text-red-400"
               }`}
             >
-              {health.completenessPercent !== null
-                ? `${health.completenessPercent.toFixed(1)}%`
+              {inceptionAwareCompleteness !== null
+                ? `${inceptionAwareCompleteness.toFixed(1)}%`
                 : "—"}
             </p>
             <CheckCircle2
               className={`w-5 h-5 ${
-                health.completenessPercent !== null && health.completenessPercent >= 99
+                inceptionAwareCompleteness !== null && inceptionAwareCompleteness >= 99
                   ? "text-emerald-400"
                   : "text-muted-foreground"
               }`}
@@ -266,25 +362,43 @@ export default async function DataPage() {
       </div>
 
       {/* ------------------------------------------------------------------ */}
+      {/* Universe Tier Summary                                               */}
+      {/* ------------------------------------------------------------------ */}
+      <UniverseTierSummary
+        ranges={tickerRanges}
+        notIngested={notIngested}
+        mode={mode}
+      />
+
+      {/* Not-ingested universe tickers alert */}
+      {notIngested.length > 0 && (
+        <div className="flex items-start gap-2 mb-4 px-3 py-2 rounded-md bg-amber-950/30 border border-amber-800/40">
+          <AlertTriangle className="w-3.5 h-3.5 text-amber-400 flex-shrink-0 mt-0.5" />
+          <p className="text-xs text-amber-300/80">
+            <strong>Universe tickers not ingested:</strong>{" "}
+            <span className="font-mono">{notIngested.join(", ")}</span>. These tickers appear in universe
+            presets but have no price data. Runs using these universes will skip them.
+          </p>
+        </div>
+      )}
+
+      {/* ------------------------------------------------------------------ */}
       {/* Two-column: top-missing + benchmark/ingestion                      */}
       {/* ------------------------------------------------------------------ */}
       <div className="grid gap-4 md:grid-cols-7 mb-4">
-        {/* Most Missing Tickers */}
+        {/* Most Missing Tickers (inception-aware) */}
         <Card className="bg-card border-border md:col-span-4">
           <CardHeader className="pb-3">
             <CardTitle className="text-sm font-semibold text-foreground">
-              Most Missing Tickers
+              Tickers with True Gaps
             </CardTitle>
             <p className="text-xs text-muted-foreground">
-              Ranked by missing trading days vs the{" "}
-              {health.businessDaysInWindow > 0
-                ? health.businessDaysInWindow.toLocaleString()
-                : "—"}
-              -day expected window.
+              Ranked by true missing days (gaps within each ticker&apos;s own trading window).
+              Pre-inception dates are shown separately and are not errors.
             </p>
           </CardHeader>
           <CardContent>
-            <TopMissingTable rows={topMissing} />
+            <TopMissingTable rows={topMissingV2} />
           </CardContent>
         </Card>
 
@@ -359,14 +473,14 @@ export default async function DataPage() {
           <Info className="w-4 h-4 text-muted-foreground flex-shrink-0 mt-0.5" />
           <div>
             <p className="text-xs font-semibold text-foreground mb-1">
-              What missing data affects
+              Inception-aware coverage
             </p>
             <p className="text-xs text-muted-foreground leading-relaxed">
-              Missing price rows cause portfolio rebalances to skip those tickers,
-              which can bias returns depending on which tickers are absent. Signal
-              quality also degrades when momentum or ML features are computed over
-              incomplete histories. Runs executed over periods with high missingness
-              may be less reliable than their metrics suggest.
+              FactorLab tracks each ticker&apos;s first available date separately. A ticker that
+              launched in 2004 (e.g. GLD) is not counted as &ldquo;missing&rdquo; before that date — only
+              genuine gaps within its own trading history count toward missingness. The equity
+              curve and rebalances automatically exclude tickers that have not yet launched at
+              each rebalance date.
             </p>
           </div>
         </CardContent>

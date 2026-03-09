@@ -25,8 +25,7 @@ import {
 import { BENCHMARK_OPTIONS } from "@/lib/benchmark"
 import type { UserSettings } from "@/lib/supabase/types"
 import { cn } from "@/lib/utils"
-
-const UNIVERSE_PRESETS = ["ETF8", "SP100", "NASDAQ100"] as const
+import { ALL_UNIVERSES } from "@/lib/universe-config"
 const DATE_RANGE_OPTIONS = [1, 2, 3, 5, 7, 10] as const
 const REBALANCE_OPTIONS = ["Monthly", "Weekly"] as const
 const CAPITAL_MIN = 1_000
@@ -145,7 +144,7 @@ function BacktestTab({ defaults }: { defaults: UserSettings | null }) {
                 hasValue
                 className="h-8 border-border bg-secondary/40 pl-3 pr-8 text-[13px]"
               >
-                {UNIVERSE_PRESETS.map((u) => (
+                {ALL_UNIVERSES.map((u) => (
                   <option key={u} value={u} className="text-foreground">
                     {u}
                   </option>
@@ -413,6 +412,19 @@ function ChangePasswordForm() {
   return (
     <form action={formAction} className="flex flex-col gap-3">
       <div className="flex flex-col gap-1.5">
+        <Label htmlFor="current_password" className="text-[12px] font-medium text-muted-foreground">
+          Current password
+        </Label>
+        <Input
+          id="current_password"
+          name="current_password"
+          type="password"
+          autoComplete="current-password"
+          className="h-8 text-[13px] bg-secondary/40 border-border"
+          required
+        />
+      </div>
+      <div className="flex flex-col gap-1.5">
         <Label htmlFor="new_password" className="text-[12px] font-medium text-muted-foreground">
           New password
         </Label>
@@ -545,12 +557,15 @@ function GuestUpgradeForm() {
 
 // ─── Danger zone ──────────────────────────────────────────────────────────────
 
-function DangerZone() {
+function DangerZone({ isGuest }: { isGuest: boolean }) {
   const [state, formAction, isPending] = useActionState<AccountActionState, FormData>(
     deleteAccountAction,
     null
   )
   const [confirmText, setConfirmText] = useState("")
+  const [password, setPassword] = useState("")
+
+  const canSubmit = confirmText === "DELETE" && (isGuest || password.length > 0)
 
   return (
     <Card className="bg-card border-destructive/30">
@@ -565,6 +580,22 @@ function DangerZone() {
       </CardHeader>
       <CardContent className="px-5 pb-5">
         <form action={formAction} className="flex flex-col gap-3">
+          {!isGuest && (
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="delete_password" className="text-[12px] font-medium text-muted-foreground">
+                Current password
+              </Label>
+              <Input
+                id="delete_password"
+                name="password"
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                autoComplete="current-password"
+                className="h-8 text-[13px] bg-secondary/40 border-destructive/30 focus-visible:ring-destructive/30"
+              />
+            </div>
+          )}
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="confirm_text" className="text-[12px] font-medium text-muted-foreground">
               Type{" "}
@@ -589,7 +620,7 @@ function DangerZone() {
             type="submit"
             size="sm"
             variant="destructive"
-            disabled={isPending || confirmText !== "DELETE"}
+            disabled={isPending || !canSubmit}
             className="h-8 text-[12px] font-medium w-full"
           >
             {isPending ? (
@@ -678,7 +709,7 @@ function AccountTab({ user }: { user: UserInfo }) {
       {user.is_guest && <GuestUpgradeForm />}
 
       {/* Danger zone */}
-      <DangerZone />
+      <DangerZone isGuest={user.is_guest} />
     </div>
   )
 }

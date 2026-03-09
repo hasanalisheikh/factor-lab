@@ -5,24 +5,12 @@ import { z } from "zod"
 import { createAdminClient } from "@/lib/supabase/admin"
 import { createClient } from "@/lib/supabase/server"
 import { BENCHMARK_OPTIONS } from "@/lib/benchmark"
-import { getDataCoverage, COVERAGE_WINDOW_START } from "@/lib/supabase/queries"
-
-// Mirror of the static presets in worker.py — snapshotted at run creation so
-// the exact universe is recorded in the DB even if the worker dies before it
-// can do its own snapshot.
-const UNIVERSE_PRESETS: Record<string, string[]> = {
-  ETF8: ["SPY", "QQQ", "IWM", "EFA", "EEM", "TLT", "GLD", "VNQ"],
-  SP100: [
-    "AAPL", "MSFT", "AMZN", "GOOGL", "GOOG", "META", "NVDA", "BRK.B",
-    "JPM", "XOM", "UNH", "JNJ", "PG", "V", "MA", "HD", "COST", "ABBV",
-    "PEP", "MRK",
-  ],
-  NASDAQ100: [
-    "AAPL", "MSFT", "NVDA", "AMZN", "META", "GOOGL", "GOOG", "AVGO",
-    "COST", "TSLA", "NFLX", "AMD", "ADBE", "CSCO", "PEP", "INTC",
-    "QCOM", "AMGN", "TXN", "CMCSA",
-  ],
-}
+import { getDataCoverage } from "@/lib/supabase/queries"
+import { UNIVERSE_PRESETS } from "@/lib/universe-config"
+import {
+  runPreflightCoverageCheck,
+  getActiveIngestTickers,
+} from "@/lib/coverage-check"
 
 function triggerWorker(): void {
   const url = process.env.WORKER_TRIGGER_URL
@@ -160,52 +148,33 @@ export async function createRun(
     }
   }
 
+  // Snapshot the universe symbols at creation time.
+  const universeSymbols = UNIVERSE_PRESETS[universe] ? [...UNIVERSE_PRESETS[universe]] : []
+
+  // ── Preflight coverage check ────────────────────────────────────────────────
+  // For each universe symbol + benchmark, verify sufficient price history exists
+  // for the backtest window (including strategy warmup). If any symbol is
+  // missing or below its coverage threshold, set the run to waiting_for_data
+  // and enqueue data_ingest jobs. The worker chains to the backtest automatically
+  // once all ingestion succeeds.
+  const preflight = await runPreflightCoverageCheck({
+    strategyId: strategy_id,
+    startDate: start_date,
+    endDate: end_date,
+    universeSymbols,
+    benchmark,
+  })
+
   const supabase = createAdminClient()
-
-  // Auto-backfill the selected benchmark if it lacks historical data.
-  // We insert the data_ingest job BEFORE the backtest job so the worker
-  // processes it first (FIFO by created_at), giving the backtest full prices.
-  try {
-    const today = new Date().toISOString().slice(0, 10)
-    const { data: minDateRow } = await supabase
-      .from("prices")
-      .select("date")
-      .eq("ticker", benchmark)
-      .order("date", { ascending: true })
-      .limit(1)
-      .maybeSingle()
-
-    const earliestBenchmarkDate: string | null = minDateRow?.date ?? null
-    const needsBenchmarkBackfill =
-      !earliestBenchmarkDate || earliestBenchmarkDate > COVERAGE_WINDOW_START
-
-    if (needsBenchmarkBackfill) {
-      await supabase.from("jobs").insert({
-        name: `Ingest ${benchmark} (auto-backfill)`,
-        status: "queued",
-        stage: "download",
-        progress: 0,
-        job_type: "data_ingest",
-        payload: { ticker: benchmark, start_date: COVERAGE_WINDOW_START, end_date: today },
-      })
-    }
-  } catch {
-    // Non-blocking: run creation proceeds even if the coverage check fails
-  }
-
-  // Snapshot the universe symbols at creation time so the exact universe is
-  // persisted in the DB even if the worker dies before running its own snapshot.
-  const universeSymbols = UNIVERSE_PRESETS[universe] ?? null
 
   const basePayload = {
     name,
     strategy_id,
-    status: "queued",
     start_date,
     end_date,
     benchmark_ticker: benchmark,
     universe,
-    universe_symbols: universeSymbols,
+    universe_symbols: universeSymbols.length > 0 ? universeSymbols : null,
     costs_bps: effectiveCostsBps,
     top_n,
     user_id: user.id,
@@ -222,19 +191,58 @@ export async function createRun(
     },
   }
 
+  if (preflight.allHealthy) {
+    // ── Fast path: all coverage healthy — enqueue backtest immediately ────────
+    let { data: run, error: runError } = await supabase
+      .from("runs")
+      .insert({ ...basePayload, status: "queued", benchmark })
+      .select("id")
+      .single()
+
+    if (runError && isMissingBenchmarkColumnError(runError.message)) {
+      const fallback = await supabase
+        .from("runs")
+        .insert({ ...basePayload, status: "queued" })
+        .select("id")
+        .single()
+      run = fallback.data
+      runError = fallback.error
+    }
+
+    if (runError || !run) {
+      console.error("createRun insert error:", runError?.message)
+      return { error: "Failed to create run. Check server env + database config." }
+    }
+
+    const { error: jobError } = await supabase.from("jobs").insert({
+      run_id: run.id,
+      name,
+      status: "queued",
+      stage: "ingest",
+      progress: 0,
+    })
+
+    if (jobError) {
+      console.error("createRun job insert error:", jobError.message)
+      await supabase.from("runs").delete().eq("id", run.id)
+      return { error: "Failed to queue run for processing. Please try again." }
+    }
+
+    triggerWorker()
+    redirect(`/runs/${run.id}`)
+  }
+
+  // ── Waiting path: some symbols lack coverage — preflight ingest first ───────
   let { data: run, error: runError } = await supabase
     .from("runs")
-    .insert({
-      ...basePayload,
-      benchmark,
-    })
+    .insert({ ...basePayload, status: "waiting_for_data", benchmark })
     .select("id")
     .single()
 
   if (runError && isMissingBenchmarkColumnError(runError.message)) {
     const fallback = await supabase
       .from("runs")
-      .insert(basePayload)
+      .insert({ ...basePayload, status: "waiting_for_data" })
       .select("id")
       .single()
     run = fallback.data
@@ -242,27 +250,51 @@ export async function createRun(
   }
 
   if (runError || !run) {
-    console.error("createRun insert error:", runError?.message)
+    console.error("createRun (waiting) insert error:", runError?.message)
     return { error: "Failed to create run. Check server env + database config." }
   }
 
-  const { error: jobError } = await supabase.from("jobs").insert({
-    run_id: run.id,
-    name,
-    status: "queued",
-    stage: "ingest",
-    progress: 0,
-  })
+  // Deduplicate: skip tickers already being actively ingested by another job.
+  const activeTickers = await getActiveIngestTickers()
+  const today = new Date().toISOString().slice(0, 10)
 
-  if (jobError) {
-    console.error("createRun job insert error:", jobError.message)
-    // Roll back: delete the run so the user doesn't see a stuck queued run
-    // with no job to process it.
+  const ingestJobs = preflight.unhealthy
+    .filter((c) => !activeTickers.has(c.symbol.toUpperCase()))
+    .map((c) => ({
+      name: `Ingest ${c.symbol} (preflight)`,
+      status: "queued",
+      stage: "download",
+      progress: 0,
+      job_type: "data_ingest",
+      preflight_run_id: run!.id,
+      payload: {
+        ticker: c.symbol,
+        start_date: preflight.requiredStart,
+        end_date: today,
+      },
+    }))
+
+  if (ingestJobs.length > 0) {
+    const { error: ingestError } = await supabase.from("jobs").insert(ingestJobs)
+    if (ingestError) {
+      console.error("createRun preflight ingest insert error:", ingestError.message)
+      // Clean up the run so it doesn't sit stuck in waiting_for_data with no jobs
+      await supabase.from("runs").delete().eq("id", run.id)
+      return { error: "Failed to queue data ingestion. Please try again." }
+    }
+  } else {
+    // All unhealthy symbols already have active ingest jobs. The worker's
+    // try_chain_preflight_backtest won't fire because those jobs lack
+    // preflight_run_id. Re-evaluate once they finish by immediately checking
+    // coverage again — for simplicity, fail fast with a helpful message.
+    // Users can retry run creation once the active ingest jobs complete.
     await supabase.from("runs").delete().eq("id", run.id)
-    return { error: "Failed to queue run for processing. Please try again." }
+    const symbols = preflight.unhealthy.map((c) => c.symbol).join(", ")
+    return {
+      error: `Data for ${symbols} is already being ingested. Please wait a few minutes and try again — coverage will be complete shortly.`,
+    }
   }
 
   triggerWorker()
-
   redirect(`/runs/${run.id}`)
 }

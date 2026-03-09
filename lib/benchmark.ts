@@ -4,6 +4,7 @@ export const BENCHMARK_OPTIONS = [
   "IWM",
   "VTI",
   "EFA",
+  "EEM",
   "TLT",
   "GLD",
   "VNQ",

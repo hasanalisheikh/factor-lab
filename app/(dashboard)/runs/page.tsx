@@ -26,7 +26,9 @@ export default async function RunsPage({ searchParams }: PageProps) {
     getRunsCount(filters),
   ])
 
-  const hasActiveRuns = runs.some((r) => r.status === "queued" || r.status === "running")
+  const hasActiveRuns = runs.some(
+    (r) => r.status === "queued" || r.status === "running" || r.status === "waiting_for_data"
+  )
 
   return (
     <AppShell title="Runs">

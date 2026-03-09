@@ -27,6 +27,7 @@ export type Database = {
           end_date: string
           created_at: string
           user_id: string | null
+          executed_with_missing_data: boolean
         }
         Insert: {
           id?: string
@@ -45,6 +46,7 @@ export type Database = {
           end_date: string
           created_at?: string
           user_id?: string | null
+          executed_with_missing_data?: boolean
         }
         Update: Partial<Database['public']['Tables']['runs']['Insert']>
         Relationships: []
@@ -158,6 +160,7 @@ export type Database = {
           created_at: string
           job_type: string
           payload: Json | null
+          preflight_run_id: string | null
         }
         Insert: {
           id?: string
@@ -173,6 +176,7 @@ export type Database = {
           created_at?: string
           job_type?: string
           payload?: Json | null
+          preflight_run_id?: string | null
         }
         Update: Partial<Database['public']['Tables']['jobs']['Insert']>
         Relationships: []
@@ -403,3 +407,36 @@ export type DataIngestJobStatus = {
 
 /** Earliest date we expect all benchmark tickers to be fully ingested from */
 export const COVERAGE_WINDOW_START = "2015-01-02"
+
+/** Real-world ETF inception dates used to detect incomplete historical ingests. */
+export const TICKER_INCEPTION_DATES: Record<string, string> = {
+  SPY: "1993-01-22",
+  QQQ: "1999-03-10",
+  IWM: "2000-05-26",
+  VTI: "2001-05-31",
+  EFA: "2001-08-27",
+  EEM: "2003-04-14",
+  TLT: "2002-07-30",
+  GLD: "2004-11-18",
+  VNQ: "2004-09-29",
+}
+
+/** Per-ticker date range from the prices table (from get_ticker_date_ranges RPC) */
+export type TickerDateRange = {
+  ticker: string
+  firstDate: string  // YYYY-MM-DD — first price row for this ticker
+  lastDate: string   // YYYY-MM-DD — last price row for this ticker
+  actualDays: number // total rows ingested for this ticker
+}
+
+/** Inception-aware missingness for a single ticker */
+export type TickerMissingnessV2 = {
+  ticker: string
+  firstDate: string
+  lastDate: string
+  actualDays: number
+  expectedDays: number     // business days in [firstDate, lastDate]
+  trueMissingDays: number  // gaps within the ticker's own window (expectedDays - actualDays, ≥0)
+  preInceptionDays: number // business days in [globalStart, firstDate) — not counted as missing
+  coveragePercent: number  // actualDays / expectedDays × 100 (within own window)
+}

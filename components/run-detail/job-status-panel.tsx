@@ -1,7 +1,7 @@
 "use client"
 
 import { useState } from "react"
-import { Clock, Loader2 } from "lucide-react"
+import { Clock, Download, Loader2 } from "lucide-react"
 import { Card, CardContent } from "@/components/ui/card"
 import type { JobRow } from "@/lib/supabase/types"
 import type { RunStatus } from "@/lib/types"
@@ -34,11 +34,17 @@ interface JobStatusPanelProps {
 }
 
 export function JobStatusPanel({ job, runStatus }: JobStatusPanelProps) {
-  if (runStatus !== "queued" && runStatus !== "running" && runStatus !== "failed") return null
+  if (
+    runStatus !== "queued" &&
+    runStatus !== "running" &&
+    runStatus !== "failed" &&
+    runStatus !== "waiting_for_data"
+  ) return null
 
   const isQueued = runStatus === "queued"
   const isRunning = runStatus === "running"
   const isFailed = runStatus === "failed"
+  const isWaiting = runStatus === "waiting_for_data"
   const progress = job?.progress ?? 0
   const stage = job?.stage ?? "ingest"
   const stageLabel = stage.charAt(0).toUpperCase() + stage.slice(1)
@@ -52,6 +58,8 @@ export function JobStatusPanel({ job, runStatus }: JobStatusPanelProps) {
           <div className="mt-0.5 shrink-0">
             {isRunning ? (
               <Loader2 className="w-4 h-4 text-warning animate-spin" />
+            ) : isWaiting ? (
+              <Download className="w-4 h-4 text-blue-500" />
             ) : (
               <Clock className="w-4 h-4 text-muted-foreground" />
             )}
@@ -60,11 +68,19 @@ export function JobStatusPanel({ job, runStatus }: JobStatusPanelProps) {
           {/* Text + progress */}
           <div className="flex-1 min-w-0">
             <p className="text-[13px] font-medium text-card-foreground">
-              {isQueued ? "Queued" : isFailed ? "Run failed" : "Running backtest…"}
+              {isQueued
+                ? "Queued"
+                : isWaiting
+                ? "Waiting for data"
+                : isFailed
+                ? "Run failed"
+                : "Running backtest…"}
             </p>
             <p className="text-[12px] text-muted-foreground mt-0.5">
               {isQueued
                 ? "Your run is being processed, please wait shortly!"
+                : isWaiting
+                ? "Ingesting required price history — the backtest will start automatically when done."
                 : isRunning
                 ? `Stage: ${stageLabel} — ${progress}% complete`
                 : isFailed && errorText

@@ -206,6 +206,7 @@ export function OverviewTab({ metrics, equityCurve, benchmarkTicker, runConfig }
                 { label: "Costs", value: `${runConfig.costsBps} bps per rebalance` },
                 { label: "Rebalance", value: runConfig.rebalanceFreq ?? "Monthly" },
                 { label: "Construction", value: "Equal weight" },
+                { label: "Data Handling", value: "Inception-aware (pre-launch tickers excluded at each rebalance)" },
                 ...(runConfig.topN != null ? [{ label: "Top N", value: String(runConfig.topN) }] : []),
               ].map(({ label, value }) => (
                 <div key={label} className="flex flex-col gap-0.5">

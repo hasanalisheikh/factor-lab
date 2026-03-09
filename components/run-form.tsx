@@ -18,16 +18,14 @@ import { STRATEGY_LABELS, type StrategyId } from "@/lib/types"
 import { BENCHMARK_OPTIONS } from "@/lib/benchmark"
 import type { UserSettings } from "@/lib/supabase/types"
 import { cn } from "@/lib/utils"
+import { ALL_UNIVERSES, UNIVERSE_SIZES } from "@/lib/universe-config"
+import {
+  STRATEGY_WARMUP_CALENDAR_DAYS,
+  STRATEGY_WARMUP_DESCRIPTIONS,
+  computeStrategyEarliestStart,
+} from "@/lib/strategy-warmup"
 
 const STRATEGIES = Object.entries(STRATEGY_LABELS) as [StrategyId, string][]
-const UNIVERSE_PRESETS = ["ETF8", "SP100", "NASDAQ100"] as const
-// Total asset count per preset (including benchmark symbol within ETF8).
-// Used to derive the Top N upper bound shown in the UI.
-const UNIVERSE_SIZES: Record<string, number> = {
-  ETF8: 8,
-  SP100: 20,
-  NASDAQ100: 20,
-}
 const CAPITAL_MIN = 1_000
 const CAPITAL_MAX = 10_000_000
 const CAPITAL_DEFAULT = 100_000
@@ -55,9 +53,10 @@ type DataCoverage = {
 type Props = {
   defaults: UserSettings | null
   dataCoverage?: DataCoverage | null
+  universeValidFrom?: Record<string, string | null>
 }
 
-export function RunForm({ defaults, dataCoverage }: Props) {
+export function RunForm({ defaults, dataCoverage, universeValidFrom }: Props) {
   const coverageMin = dataCoverage ? parseLocalDate(dataCoverage.minDateStr) : null
   const coverageMax = dataCoverage ? parseLocalDate(dataCoverage.maxDateStr) : null
 
@@ -84,7 +83,23 @@ export function RunForm({ defaults, dataCoverage }: Props) {
   const [startOpen, setStartOpen] = useState(false)
   const [endOpen, setEndOpen] = useState(false)
 
-  const topNMax = UNIVERSE_SIZES[universe] ?? 20
+  const topNMax = UNIVERSE_SIZES[universe as keyof typeof UNIVERSE_SIZES] ?? 20
+
+  // Universe valid_from and strategy warmup derived values
+  const universeStart = universeValidFrom?.[universe] ?? null
+  const startDateStr = startDate ? format(startDate, "yyyy-MM-dd") : null
+  const showUniverseWarning =
+    universeStart !== null && startDateStr !== null && startDateStr < universeStart
+  const effectiveStrategyStart = computeStrategyEarliestStart(
+    strategy as StrategyId,
+    dataCoverage?.minDateStr ?? null
+  )
+  const showWarmupWarning =
+    effectiveStrategyStart !== null &&
+    startDateStr !== null &&
+    startDateStr < effectiveStrategyStart
+  const warmupDays = strategy ? STRATEGY_WARMUP_CALENDAR_DAYS[strategy as StrategyId] ?? 0 : 0
+  const warmupDesc = strategy ? STRATEGY_WARMUP_DESCRIPTIONS[strategy as StrategyId] ?? "" : ""
 
   const [applyCosts, setApplyCosts] = useState(defaults?.apply_costs_default ?? true)
 
@@ -195,13 +210,32 @@ export function RunForm({ defaults, dataCoverage }: Props) {
                 hasValue
                 className="h-8 border-border bg-secondary/40 pl-3 pr-8 text-[13px]"
               >
-                {UNIVERSE_PRESETS.map((preset) => (
+                {ALL_UNIVERSES.map((preset) => (
                   <option key={preset} value={preset} className="text-foreground">
                     {preset}
                   </option>
                 ))}
               </NativeSelect>
+              {universeStart && (
+                <p className="text-[11px] text-muted-foreground mt-0.5">
+                  Earliest supported start:{" "}
+                  <span className="font-mono text-foreground">{universeStart}</span>
+                </p>
+              )}
             </div>
+
+            {/* Universe early-start warning */}
+            {showUniverseWarning && universeStart && (
+              <div className="flex items-start gap-2 px-2.5 py-2 rounded-md bg-amber-950/30 border border-amber-800/40">
+                <span className="text-amber-400 text-xs mt-0.5">⚠</span>
+                <p className="text-xs text-amber-300/80 leading-snug">
+                  Your start date is before some tickers in{" "}
+                  <strong>{universe}</strong> were available (earliest:{" "}
+                  <span className="font-mono">{universeStart}</span>). Pre-inception tickers will
+                  be excluded at each rebalance until they launch.
+                </p>
+              </div>
+            )}
 
             {/* Date range */}
             <div className="flex flex-col gap-1.5">
@@ -305,6 +339,19 @@ export function RunForm({ defaults, dataCoverage }: Props) {
                 </p>
               )}
             </div>
+
+            {/* Strategy warmup warning */}
+            {showWarmupWarning && effectiveStrategyStart && (
+              <div className="flex items-start gap-2 px-2.5 py-2 rounded-md bg-amber-950/30 border border-amber-800/40">
+                <span className="text-amber-400 text-xs mt-0.5">⚠</span>
+                <p className="text-xs text-amber-300/80 leading-snug">
+                  <strong>{STRATEGY_LABELS[strategy as StrategyId]}</strong> needs ~{warmupDays}{" "}
+                  calendar days of history before it can trade.{warmupDesc ? ` ${warmupDesc}` : ""}{" "}
+                  Earliest recommended start:{" "}
+                  <span className="font-mono">{effectiveStrategyStart}</span>.
+                </p>
+              </div>
+            )}
 
             {/* Initial capital */}
             <div className="flex flex-col gap-1.5">

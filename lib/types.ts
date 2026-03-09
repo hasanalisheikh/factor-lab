@@ -1,6 +1,6 @@
 // ── Status & Strategy ──────────────────────────────────
 
-export type RunStatus = "queued" | "running" | "completed" | "failed"
+export type RunStatus = "queued" | "running" | "completed" | "failed" | "waiting_for_data"
 
 export type StrategyId =
   | "equal_weight"
