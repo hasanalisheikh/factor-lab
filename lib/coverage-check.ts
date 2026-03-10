@@ -213,21 +213,22 @@ export async function runPreflightCoverageCheck(params: {
 
 /**
  * Returns the set of tickers that already have an active (queued or running)
- * data_ingest job, so we can skip creating duplicate ingestion storms.
+ * data_ingest_job, so we can skip creating duplicate ingestion storms.
+ * Queries the dedicated data_ingest_jobs table (explicit symbol column).
  */
 export async function getActiveIngestTickers(): Promise<Set<string>> {
   try {
-    const admin = createAdminClient()
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const admin = createAdminClient() as any
     const { data } = await admin
-      .from("jobs")
-      .select("payload")
-      .eq("job_type", "data_ingest")
+      .from("data_ingest_jobs")
+      .select("symbol")
       .in("status", ["queued", "running"])
 
     return new Set(
       (data ?? [])
-        .map((j) => (j.payload as { ticker?: string } | null)?.ticker?.toUpperCase())
-        .filter((t): t is string => Boolean(t))
+        .map((j: { symbol?: string }) => j.symbol?.toUpperCase())
+        .filter((t: string | undefined): t is string => Boolean(t))
     )
   } catch {
     return new Set()

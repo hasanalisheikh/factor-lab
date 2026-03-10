@@ -258,24 +258,21 @@ export async function createRun(
   const activeTickers = await getActiveIngestTickers()
   const today = new Date().toISOString().slice(0, 10)
 
-  const ingestJobs = preflight.unhealthy
-    .filter((c) => !activeTickers.has(c.symbol.toUpperCase()))
-    .map((c) => ({
-      name: `Ingest ${c.symbol} (preflight)`,
-      status: "queued",
-      stage: "download",
-      progress: 0,
-      job_type: "data_ingest",
-      preflight_run_id: run!.id,
-      payload: {
-        ticker: c.symbol,
-        start_date: preflight.requiredStart,
-        end_date: today,
-      },
-    }))
+  // Insert preflight ingest jobs into data_ingest_jobs (explicit-schema table).
+  const toIngest = preflight.unhealthy.filter((c) => !activeTickers.has(c.symbol.toUpperCase()))
+  const ingestRows = toIngest.map((c) => ({
+    symbol: c.symbol,
+    start_date: preflight.requiredStart,
+    end_date: today,
+    status: "queued",
+    stage: "download",
+    progress: 0,
+    requested_by_run_id: run!.id,
+  }))
 
-  if (ingestJobs.length > 0) {
-    const { error: ingestError } = await supabase.from("jobs").insert(ingestJobs)
+  if (ingestRows.length > 0) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { error: ingestError } = await (supabase as any).from("data_ingest_jobs").insert(ingestRows)
     if (ingestError) {
       console.error("createRun preflight ingest insert error:", ingestError.message)
       // Clean up the run so it doesn't sit stuck in waiting_for_data with no jobs

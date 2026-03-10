@@ -8,7 +8,8 @@ import {
   getRecentIngestionHistory,
   getLatestDataIngestJobs,
   autoQueueBenchmarkIngestions,
-  getTickerDateRanges,
+  autoQueueUniverseIngestions,
+  getAllTickerStats,
 } from "@/lib/supabase/queries"
 import { BENCHMARK_OPTIONS } from "@/lib/benchmark"
 import { COVERAGE_WINDOW_START } from "@/lib/supabase/types"
@@ -22,6 +23,7 @@ import { InfoTooltip } from "@/components/data/info-tooltip"
 import { TopMissingTable } from "@/components/data/top-missing-table"
 import { BenchmarkCoverageCard } from "@/components/data/benchmark-coverage-card"
 import { UniverseTierSummary } from "@/components/data/universe-tier-summary"
+import { DiagnosticsSection } from "@/components/data/diagnostics-section"
 import {
   AlertTriangle,
   Calendar,
@@ -110,25 +112,35 @@ export default async function DataPage({
   // In backtest mode use the fixed coverage window start; in full mode use DB global min.
   const windowStart = mode === "backtest" ? COVERAGE_WINDOW_START : health.dateStart
 
-  // Phase 1: fetch coverage + other data in parallel (jobs fetched after auto-queue)
-  const [topMissingV2, notIngested, allBenchmarkCovs, ingestionLog, tickerRanges] =
+  // Phase 1: fetch ticker stats ONCE from ticker_stats cache + other data in parallel.
+  // getAllTickerStats() reads the cached table (one row/ticker) — no full GROUP BY on prices.
+  // The result is passed into getTopMissingTickersV2 and getNotIngestedUniverseTickers
+  // so neither function makes a second DB call.
+  const [tickerRanges, allBenchmarkCovs, ingestionLog] =
     await Promise.all([
-      getTopMissingTickersV2(50, windowStart, health.dateEnd),
-      getNotIngestedUniverseTickers(),
+      getAllTickerStats(),
       getAllBenchmarkCoverage(health.dateStart, health.dateEnd, health.businessDaysInWindow),
       getRecentIngestionHistory(5),
-      getTickerDateRanges(),
     ])
 
-  // Phase 2: auto-queue any benchmarks that need ingestion/backfill (idempotent)
-  await autoQueueBenchmarkIngestions(allBenchmarkCovs)
+  // Derive in-memory from the pre-fetched stats — no extra DB calls.
+  const topMissingV2 = await getTopMissingTickersV2(50, windowStart, health.dateEnd, tickerRanges)
+  const notIngested = await getNotIngestedUniverseTickers(tickerRanges)
+
+  // Phase 2: auto-queue benchmarks + universe tickers that need ingestion/backfill/incremental.
+  // Both calls are idempotent — safe on every page render.
+  // Skip benchmark queue if coverage query failed (null) — don't queue on stale data.
+  if (allBenchmarkCovs !== null) {
+    await autoQueueBenchmarkIngestions(allBenchmarkCovs, tickerRanges)
+  }
+  await autoQueueUniverseIngestions(tickerRanges)
 
   // Phase 3: fetch jobs after auto-queue so newly queued jobs appear in initialJob
   const allIngestJobs = await getLatestDataIngestJobs(BENCHMARK_OPTIONS)
 
   const benchmarkRows = BENCHMARK_OPTIONS.map((ticker) => ({
     ticker,
-    coverage: allBenchmarkCovs.find((c) => c.ticker === ticker) ?? null,
+    coverage: (allBenchmarkCovs ?? []).find((c: { ticker: string }) => c.ticker === ticker) ?? null,
     initialJob: allIngestJobs[ticker] ?? null,
   }))
 
@@ -137,8 +149,8 @@ export default async function DataPage({
   const freshness = freshnessLabel(freshnessStatus)
 
   // Inception-aware completeness: total actual / total expected (within each ticker's own window)
-  const totalExpected = topMissingV2.reduce((s, r) => s + r.expectedDays, 0)
-  const totalActualForMissing = topMissingV2.reduce((s, r) => s + r.actualDays, 0)
+  const totalExpected = topMissingV2.reduce((s: number, r: { expectedDays: number }) => s + r.expectedDays, 0)
+  const totalActualForMissing = topMissingV2.reduce((s: number, r: { actualDays: number }) => s + r.actualDays, 0)
   const inceptionAwareCompleteness =
     totalExpected > 0 && topMissingV2.length > 0
       ? Math.min((totalActualForMissing / totalExpected) * 100, 100)
@@ -148,8 +160,8 @@ export default async function DataPage({
   const { Icon: VerdictIcon } = verdict
 
   // Aggregate missingness breakdown
-  const totalTrueMissing = topMissingV2.reduce((s, r) => s + r.trueMissingDays, 0)
-  const totalPreInception = topMissingV2.reduce((s, r) => s + r.preInceptionDays, 0)
+  const totalTrueMissing = topMissingV2.reduce((s: number, r: { trueMissingDays: number }) => s + r.trueMissingDays, 0)
+  const totalPreInception = topMissingV2.reduce((s: number, r: { preInceptionDays: number }) => s + r.preInceptionDays, 0)
 
   const isDev = process.env.NODE_ENV !== "production"
 
@@ -375,16 +387,17 @@ export default async function DataPage({
         <div className="flex items-start gap-2 mb-4 px-3 py-2 rounded-md bg-amber-950/30 border border-amber-800/40">
           <AlertTriangle className="w-3.5 h-3.5 text-amber-400 flex-shrink-0 mt-0.5" />
           <p className="text-xs text-amber-300/80">
-            <strong>Universe tickers not ingested:</strong>{" "}
-            <span className="font-mono">{notIngested.join(", ")}</span>. These tickers appear in universe
-            presets but have no price data. Runs using these universes will skip them.
+            <strong>Auto-ingesting universe tickers:</strong>{" "}
+            <span className="font-mono">{notIngested.join(", ")}</span>. These tickers are being
+            downloaded — runs will include them once ingestion completes.
           </p>
         </div>
       )}
 
       {/* ------------------------------------------------------------------ */}
-      {/* Two-column: top-missing + benchmark/ingestion                      */}
+      {/* Two-column: top-missing + benchmark/ingestion (diagnostics only)   */}
       {/* ------------------------------------------------------------------ */}
+      <DiagnosticsSection>
       <div className="grid gap-4 md:grid-cols-7 mb-4">
         {/* Most Missing Tickers (inception-aware) */}
         <Card className="bg-card border-border md:col-span-4">
@@ -406,7 +419,7 @@ export default async function DataPage({
         <div className="md:col-span-3 flex flex-col gap-4">
           {/* Benchmark coverage */}
           <BenchmarkCoverageCard
-            benchmarks={benchmarkRows}
+            benchmarks={allBenchmarkCovs === null ? null : benchmarkRows}
             isDev={isDev}
           />
 
@@ -464,6 +477,7 @@ export default async function DataPage({
           </Card>
         </div>
       </div>
+      </DiagnosticsSection>
 
       {/* ------------------------------------------------------------------ */}
       {/* "What this affects" callout                                         */}

@@ -14,8 +14,11 @@ import { Logo } from "@/components/logo"
 import { TopbarUserMenu } from "@/components/layout/topbar-user-menu"
 import { TopbarSearch } from "@/components/layout/topbar-search"
 import { TopbarNotifications } from "@/components/layout/topbar-notifications"
+import { DiagnosticsToggle } from "@/components/data/diagnostics-toggle"
+import { usePathname } from "next/navigation"
 
 export function Topbar({ title = "Dashboard" }: { title?: string }) {
+  const pathname = usePathname()
   return (
     <header className="flex items-center justify-between h-14 px-4 lg:px-6 border-b border-border bg-card/40 backdrop-blur-sm shrink-0">
       <div className="flex items-center gap-3">
@@ -52,6 +55,7 @@ export function Topbar({ title = "Dashboard" }: { title?: string }) {
 
       <div className="flex items-center gap-1">
         <TopbarSearch />
+        {pathname === "/data" && <DiagnosticsToggle />}
         <TopbarNotifications />
         <TopbarUserMenu />
       </div>

@@ -763,7 +763,7 @@ export async function getLatestDataIngestJob(ticker: string): Promise<DataIngest
     // (JSONB @> filtering may not be available in all environments)
     const { data, error } = await supabase
       .from("jobs")
-      .select("id, status, stage, progress, error_message, created_at, started_at, payload, job_type")
+      .select("id, status, stage, progress, error_message, created_at, started_at, updated_at, next_retry_at, attempt_count, payload, job_type")
       .eq("job_type", "data_ingest")
       .order("created_at", { ascending: false })
       .limit(20)
@@ -789,6 +789,9 @@ export async function getLatestDataIngestJob(ticker: string): Promise<DataIngest
       error_message: match.error_message,
       created_at: match.created_at ?? null,
       started_at: match.started_at ?? null,
+      updated_at: match.updated_at ?? null,
+      next_retry_at: match.next_retry_at ?? null,
+      attempt_count: match.attempt_count ?? null,
     }
   } catch (err) {
     console.error("getLatestDataIngestJob exception:", err)
@@ -796,41 +799,71 @@ export async function getLatestDataIngestJob(ticker: string): Promise<DataIngest
   }
 }
 
-/** Fetch coverage for all 8 BENCHMARK_OPTIONS in a single query. */
+/**
+ * Fetch coverage for all BENCHMARK_OPTIONS using a server-side GROUP BY RPC.
+ * Returns null on error so callers can distinguish "query failed" from "not ingested".
+ */
 export async function getAllBenchmarkCoverage(
   dateStart: string | null,
   dateEnd: string | null,
   businessDaysInWindow: number
-): Promise<BenchmarkCoverage[]> {
+): Promise<BenchmarkCoverage[] | null> {
   const tickers = [...BENCHMARK_OPTIONS]
   try {
     const supabase = createAdminClient()
 
-    // Single query: aggregate per ticker within the coverage window
-    const { data, error } = await supabase
-      .from("prices")
-      .select("ticker, date")
-      .in("ticker", tickers)
-      .gte("date", dateStart ?? "1900-01-01")
-      .lte("date", dateEnd ?? "9999-12-31")
+    // Use DB-side GROUP BY RPC (returns 1 row per ticker, not ~25k rows to JS).
+    // Falls back to row-fetch if RPC not yet deployed.
+    type AggRow = { ticker: string; actual_days: string | number; earliest_date: string | null; latest_date: string | null }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: rpcData, error: rpcError } = await (supabase as any).rpc("get_benchmark_coverage_agg", {
+      p_tickers: tickers,
+      p_start: dateStart ?? "1900-01-01",
+      p_end: dateEnd ?? "9999-12-31",
+    }) as { data: AggRow[] | null; error: { message: string } | null }
 
-    if (error) {
-      console.error("getAllBenchmarkCoverage error:", error.message)
-      return []
-    }
+    let agg: Map<string, { actualDays: number; earliest: string | null; latest: string | null }>
 
-    // Build a map: ticker → { actualDays, earliestDate, latestDate }
-    const agg = new Map<string, { actualDays: number; earliest: string; latest: string }>()
-    for (const row of data ?? []) {
-      const t = row.ticker as string
-      const d = row.date as string
-      const existing = agg.get(t)
-      if (!existing) {
-        agg.set(t, { actualDays: 1, earliest: d, latest: d })
+    if (rpcError) {
+      if (rpcError.message.includes("Could not find the function")) {
+        // RPC not deployed yet — fall back to row-level fetch
+        const { data: rowData, error: rowError } = await supabase
+          .from("prices")
+          .select("ticker, date")
+          .in("ticker", tickers)
+          .gte("date", dateStart ?? "1900-01-01")
+          .lte("date", dateEnd ?? "9999-12-31")
+
+        if (rowError) {
+          console.error("getAllBenchmarkCoverage fallback error:", rowError.message)
+          return null
+        }
+
+        agg = new Map()
+        for (const row of rowData ?? []) {
+          const t = row.ticker as string
+          const d = row.date as string
+          const existing = agg.get(t)
+          if (!existing) {
+            agg.set(t, { actualDays: 1, earliest: d, latest: d })
+          } else {
+            existing.actualDays += 1
+            if (d < (existing.earliest ?? d)) existing.earliest = d
+            if (d > (existing.latest ?? d)) existing.latest = d
+          }
+        }
       } else {
-        existing.actualDays += 1
-        if (d < existing.earliest) existing.earliest = d
-        if (d > existing.latest) existing.latest = d
+        console.error("getAllBenchmarkCoverage RPC error:", rpcError.message)
+        return null
+      }
+    } else {
+      agg = new Map()
+      for (const row of rpcData ?? []) {
+        agg.set(row.ticker, {
+          actualDays: Number(row.actual_days),
+          earliest: row.earliest_date,
+          latest: row.latest_date,
+        })
       }
     }
 
@@ -868,11 +901,15 @@ export async function getAllBenchmarkCoverage(
     })
   } catch (err) {
     console.error("getAllBenchmarkCoverage exception:", err)
-    return []
+    return null
   }
 }
 
-/** Fetch the latest data_ingest job for each ticker in a single query. */
+/**
+ * Fetch the latest data_ingest_job for each ticker using the DB-side RPC
+ * `get_latest_data_ingest_jobs`. Falls back to a direct table scan if the
+ * RPC is not yet deployed. Never limited to 50 rows — uses DISTINCT ON per symbol.
+ */
 export async function getLatestDataIngestJobs(
   tickers: readonly string[]
 ): Promise<Record<string, DataIngestJobStatus | null>> {
@@ -881,34 +918,71 @@ export async function getLatestDataIngestJobs(
   for (const t of normalized) result[t] = null
 
   try {
-    const supabase = createAdminClient()
-    const { data, error } = await supabase
-      .from("jobs")
-      .select("id, status, stage, progress, error_message, created_at, started_at, payload, job_type")
-      .eq("job_type", "data_ingest")
-      .order("created_at", { ascending: false })
-      .limit(50)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const supabase = createAdminClient() as any
 
-    if (error) {
-      if (error.message.includes("job_type") || error.message.includes("does not exist")) return result
-      console.error("getLatestDataIngestJobs error:", error.message)
+    // Try RPC first (returns 1 row per symbol, no LIMIT needed)
+    const { data: rpcData, error: rpcError } = await supabase.rpc(
+      "get_latest_data_ingest_jobs",
+      { p_symbols: normalized }
+    )
+
+    if (!rpcError && Array.isArray(rpcData)) {
+      for (const j of rpcData) {
+        const t = String(j.symbol ?? "").toUpperCase()
+        if (!normalized.includes(t)) continue
+        result[t] = {
+          id: j.id,
+          status: j.status,
+          stage: j.stage ?? null,
+          progress: j.progress ?? 0,
+          symbol: j.symbol ?? null,
+          start_date: j.start_date ?? null,
+          end_date: j.end_date ?? null,
+          error: j.error ?? null,
+          error_message: j.error ?? null,
+          created_at: j.created_at ?? null,
+          started_at: j.started_at ?? null,
+          updated_at: j.updated_at ?? null,
+          next_retry_at: j.next_retry_at ?? null,
+          attempt_count: j.attempt_count ?? null,
+        }
+      }
       return result
     }
 
-    // Walk newest-first; record the first (most recent) job per ticker
+    // Fallback: direct scan of data_ingest_jobs (all rows per symbol, pick latest in JS)
+    const { data, error } = await supabase
+      .from("data_ingest_jobs")
+      .select("id, symbol, status, stage, progress, error, created_at, started_at, updated_at, next_retry_at, attempt_count, start_date, end_date")
+      .in("symbol", normalized)
+      .order("created_at", { ascending: false })
+
+    if (error) {
+      if (String(error.message).includes("does not exist")) return result
+      console.error("getLatestDataIngestJobs fallback error:", error.message)
+      return result
+    }
+
     for (const j of data ?? []) {
-      const p = j.payload as { ticker?: string } | null
-      const t = p?.ticker?.toUpperCase()
-      if (!t || !normalized.includes(t)) continue
-      if (result[t] !== null) continue // already recorded a newer job
+      const t = String(j.symbol ?? "").toUpperCase()
+      if (!normalized.includes(t)) continue
+      if (result[t] !== null) continue // already have a newer row
       result[t] = {
         id: j.id,
         status: j.status,
-        stage: j.stage,
-        progress: j.progress,
-        error_message: j.error_message,
+        stage: j.stage ?? null,
+        progress: j.progress ?? 0,
+        symbol: j.symbol ?? null,
+        start_date: j.start_date ?? null,
+        end_date: j.end_date ?? null,
+        error: j.error ?? null,
+        error_message: j.error ?? null,
         created_at: j.created_at ?? null,
         started_at: j.started_at ?? null,
+        updated_at: j.updated_at ?? null,
+        next_retry_at: j.next_retry_at ?? null,
+        attempt_count: j.attempt_count ?? null,
       }
     }
   } catch (err) {
@@ -945,63 +1019,231 @@ export async function getRecentIngestionHistory(limit = 5): Promise<IngestionLog
 // ---------------------------------------------------------------------------
 
 /**
- * Server-side: enqueue data_ingest jobs for any benchmark ticker that is
- * not_ingested or needs a historical backfill, skipping tickers that
- * already have an active (queued/running) job. Idempotent — safe to call
- * on every page render.
+ * Server-side: enqueue data_ingest_jobs for benchmark tickers that need action:
+ *   - not_ingested (no price data at all)
+ *   - needsHistoricalBackfill (earliestDate > inception date)
+ *   - stale (latestDate < yesterday — incremental update needed)
+ *
+ * Skips tickers that already have an active (queued/running) job.
+ * Inserts into data_ingest_jobs (explicit-schema table).
+ * Idempotent — safe to call on every page render.
  */
 export async function autoQueueBenchmarkIngestions(
-  coverages: BenchmarkCoverage[]
+  coverages: BenchmarkCoverage[],
+  tickerStats?: TickerDateRange[]
 ): Promise<void> {
   try {
-    const needsAction = coverages.filter(
-      (c) => c.status === "not_ingested" || c.needsHistoricalBackfill
-    )
+    const today = new Date().toISOString().slice(0, 10)
+    const yesterday = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10)
+
+    // Build a map of ticker → lastDate from ticker_stats for staleness check
+    const lastDateMap = new Map<string, string>()
+    for (const r of tickerStats ?? []) {
+      if (r.lastDate) lastDateMap.set(r.ticker.toUpperCase(), r.lastDate)
+    }
+
+    // Determine which tickers need action (including staleness)
+    const needsAction = coverages.filter((c) => {
+      if (c.status === "not_ingested") return true
+      if (c.needsHistoricalBackfill) return true
+      const lastDate = lastDateMap.get(c.ticker.toUpperCase()) ?? c.latestDate
+      if (lastDate && lastDate < yesterday) return true
+      return false
+    })
     if (needsAction.length === 0) return
 
-    const admin = createAdminClient()
-    const today = new Date().toISOString().slice(0, 10)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const admin = createAdminClient() as any
 
-    // Deduplicate: skip tickers already queued or running
+    // Fetch active jobs from data_ingest_jobs to avoid duplicates
     const { data: activeJobs } = await admin
-      .from("jobs")
-      .select("payload")
-      .eq("job_type", "data_ingest")
+      .from("data_ingest_jobs")
+      .select("symbol, status, start_date, end_date, id")
+      .in("symbol", needsAction.map((c) => c.ticker))
       .in("status", ["queued", "running"])
 
-    const activeTickers = new Set(
-      (activeJobs ?? [])
-        .map((j) => (j.payload as { ticker?: string })?.ticker?.toUpperCase())
-        .filter(Boolean) as string[]
-    )
+    const activeBySymbol = new Map<string, { id: string; status: string; start_date: string; end_date: string }>()
+    for (const j of activeJobs ?? []) {
+      if (!activeBySymbol.has(j.symbol)) activeBySymbol.set(j.symbol, j)
+    }
 
-    const toQueue = needsAction.filter((c) => !activeTickers.has(c.ticker))
-    if (toQueue.length === 0) return
+    const toInsert: { symbol: string; start_date: string; end_date: string; status: string; stage: string; progress: number }[] = []
+    const toWiden: { id: string; start_date: string; end_date: string }[] = []
 
-    await admin.from("jobs").insert(
-      toQueue.map((c) => {
-        const inceptionDate = TICKER_INCEPTION_DATES[c.ticker] ?? "1993-01-01"
-        const isBackfill = c.needsHistoricalBackfill && c.status !== "not_ingested"
-        return {
-          name: isBackfill
-            ? `Ingest ${c.ticker} (backfill from ${inceptionDate})`
-            : `Ingest ${c.ticker}`,
-          status: "queued",
-          stage: "download",
-          progress: 0,
-          job_type: "data_ingest",
-          payload: { ticker: c.ticker, start_date: inceptionDate, end_date: today },
+    for (const c of needsAction) {
+      const inceptionDate = TICKER_INCEPTION_DATES[c.ticker] ?? "1993-01-01"
+      const lastDate = lastDateMap.get(c.ticker.toUpperCase()) ?? c.latestDate
+      const existing = activeBySymbol.get(c.ticker)
+
+      // Determine desired start date
+      let desiredStart: string
+      if (c.status === "not_ingested" || c.needsHistoricalBackfill) {
+        desiredStart = inceptionDate
+      } else {
+        // Incremental only
+        if (!lastDate) { desiredStart = inceptionDate }
+        else {
+          const next = new Date(lastDate)
+          next.setDate(next.getDate() + 1)
+          desiredStart = next.toISOString().slice(0, 10)
+          if (desiredStart > today) continue // Already current
         }
+      }
+
+      if (existing) {
+        if (existing.status === "queued") {
+          // Widen range if needed
+          const newStart = desiredStart < existing.start_date ? desiredStart : existing.start_date
+          const newEnd = today > existing.end_date ? today : existing.end_date
+          if (newStart !== existing.start_date || newEnd !== existing.end_date) {
+            toWiden.push({ id: existing.id, start_date: newStart, end_date: newEnd })
+          }
+        }
+        // running — leave it alone
+        continue
+      }
+
+      toInsert.push({
+        symbol: c.ticker,
+        start_date: desiredStart,
+        end_date: today,
+        status: "queued",
+        stage: "download",
+        progress: 0,
       })
-    )
-    console.log(
-      `[auto-ingest] queued ${toQueue.length} benchmark job(s):`,
-      toQueue.map((c) => c.ticker).join(", ")
-    )
+    }
+
+    if (toInsert.length > 0) {
+      await admin.from("data_ingest_jobs").insert(toInsert)
+      console.log(
+        `[auto-ingest] queued ${toInsert.length} benchmark job(s):`,
+        toInsert.map((j) => j.symbol).join(", ")
+      )
+    }
+    for (const w of toWiden) {
+      await admin.from("data_ingest_jobs").update({ start_date: w.start_date, end_date: w.end_date }).eq("id", w.id)
+    }
+    if (toWiden.length > 0) {
+      console.log(`[auto-ingest] widened ${toWiden.length} queued job(s)`)
+    }
   } catch (err) {
     // Non-fatal — page still renders; user can trigger manually
     console.error("[auto-ingest] autoQueueBenchmarkIngestions error:", err)
   }
+}
+
+// ---------------------------------------------------------------------------
+// Auto-queue universe ticker ingestions
+// ---------------------------------------------------------------------------
+
+/**
+ * Idempotently queues data_ingest_jobs for all universe preset tickers that are
+ * not yet ingested or are stale (last_date < yesterday). Safe to call on every
+ * page render — duplicates are widened or skipped, not created.
+ */
+export async function autoQueueUniverseIngestions(
+  tickerRanges: TickerDateRange[]
+): Promise<{ queued: string[]; widened: string[]; skipped: string[] }> {
+  const result = { queued: [] as string[], widened: [] as string[], skipped: [] as string[] }
+  try {
+    const today = new Date().toISOString().slice(0, 10)
+    const yesterday = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10)
+
+    // All unique tickers from every universe preset
+    const allUniverseTickers = [...new Set(Object.values(UNIVERSE_PRESETS).flat())]
+
+    // Build map from existing ticker stats
+    const statsMap = new Map<string, TickerDateRange>()
+    for (const r of tickerRanges) {
+      statsMap.set(r.ticker.toUpperCase(), r)
+    }
+
+    // Determine which tickers need action
+    const needsAction: { ticker: string; needsFullIngest: boolean; desiredStart: string }[] = []
+    for (const ticker of allUniverseTickers) {
+      const stats = statsMap.get(ticker.toUpperCase())
+      const inceptionDate = TICKER_INCEPTION_DATES[ticker] ?? "2003-01-01"
+
+      if (!stats || stats.actualDays === 0) {
+        needsAction.push({ ticker, needsFullIngest: true, desiredStart: inceptionDate })
+      } else if (stats.lastDate && stats.lastDate < yesterday) {
+        const next = new Date(stats.lastDate)
+        next.setDate(next.getDate() + 1)
+        const nextStr = next.toISOString().slice(0, 10)
+        if (nextStr <= today) {
+          needsAction.push({ ticker, needsFullIngest: false, desiredStart: nextStr })
+        } else {
+          result.skipped.push(ticker)
+        }
+      } else {
+        result.skipped.push(ticker)
+      }
+    }
+
+    if (needsAction.length === 0) return result
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const admin = createAdminClient() as any
+
+    // Fetch active (queued/running) jobs to avoid duplicates
+    const { data: activeJobs } = await admin
+      .from("data_ingest_jobs")
+      .select("symbol, status, start_date, end_date, id")
+      .in("symbol", needsAction.map((n) => n.ticker))
+      .in("status", ["queued", "running"])
+
+    const activeBySymbol = new Map<string, { id: string; status: string; start_date: string; end_date: string }>()
+    for (const j of activeJobs ?? []) {
+      if (!activeBySymbol.has(j.symbol)) activeBySymbol.set(j.symbol, j)
+    }
+
+    const toInsert: { symbol: string; start_date: string; end_date: string; status: string; stage: string; progress: number }[] = []
+
+    for (const { ticker, desiredStart } of needsAction) {
+      const existing = activeBySymbol.get(ticker)
+      if (existing) {
+        if (existing.status === "queued") {
+          const newStart = desiredStart < existing.start_date ? desiredStart : existing.start_date
+          const newEnd = today > existing.end_date ? today : existing.end_date
+          if (newStart !== existing.start_date || newEnd !== existing.end_date) {
+            await admin
+              .from("data_ingest_jobs")
+              .update({ start_date: newStart, end_date: newEnd })
+              .eq("id", existing.id)
+            result.widened.push(ticker)
+          } else {
+            result.skipped.push(ticker)
+          }
+        } else {
+          // running — leave alone
+          result.skipped.push(ticker)
+        }
+        continue
+      }
+
+      toInsert.push({
+        symbol: ticker,
+        start_date: desiredStart,
+        end_date: today,
+        status: "queued",
+        stage: "download",
+        progress: 0,
+      })
+    }
+
+    if (toInsert.length > 0) {
+      await admin.from("data_ingest_jobs").insert(toInsert)
+      result.queued.push(...toInsert.map((j) => j.symbol))
+      console.log(
+        `[auto-ingest] queued ${toInsert.length} universe job(s):`,
+        result.queued.join(", ")
+      )
+    }
+  } catch (err) {
+    // Non-fatal — page still renders
+    console.error("[auto-ingest] autoQueueUniverseIngestions error:", err)
+  }
+  return result
 }
 
 // ---------------------------------------------------------------------------
@@ -1206,9 +1448,52 @@ export async function getBenchmarkOverlapStateForRun(
 // ---------------------------------------------------------------------------
 
 /**
+ * Reads per-ticker stats from the ticker_stats cache table (one row per ticker).
+ * Fast: no GROUP BY over prices. Maintained by Python worker after each data_ingest job.
+ * Falls back to getTickerDateRanges() if the table doesn't exist yet.
+ */
+export async function getAllTickerStats(): Promise<TickerDateRange[]> {
+  try {
+    const supabase = createAdminClient()
+    type StatsRow = { symbol: string; first_date: string; last_date: string; distinct_days: string | number }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data, error } = await (supabase as any)
+      .from("ticker_stats")
+      .select("symbol, first_date, last_date, distinct_days") as { data: StatsRow[] | null; error: { message: string } | null }
+    if (error) {
+      if (
+        error.message.includes("does not exist") ||
+        error.message.includes("relation") ||
+        error.message.includes("schema cache")
+      ) {
+        // Migration not yet applied — fall back to legacy full-table RPC
+        return getTickerDateRanges()
+      }
+      console.error("getAllTickerStats error:", error.message)
+      return []
+    }
+    // Table exists but hasn't been populated yet (migration applied before worker ran).
+    // Fall back to live query so existing prices are still discovered.
+    if ((data ?? []).length === 0) {
+      return getTickerDateRanges()
+    }
+    return (data ?? []).map((r) => ({
+      ticker: r.symbol,
+      firstDate: r.first_date,
+      lastDate: r.last_date,
+      actualDays: Number(r.distinct_days),
+    }))
+  } catch (err) {
+    console.error("getAllTickerStats exception:", err)
+    return []
+  }
+}
+
+/**
  * Fetches first_date, last_date, and actual_days per ticker from the DB.
  * Requires migration 20260309_ticker_date_ranges.sql to be applied.
  * Returns an empty array gracefully if the RPC doesn't exist yet.
+ * @deprecated Use getAllTickerStats() which reads from the fast ticker_stats cache.
  */
 export async function getTickerDateRanges(): Promise<TickerDateRange[]> {
   try {
@@ -1245,13 +1530,15 @@ export { computeUniverseValidFrom } from "@/lib/universe-config"
  * Returns inception-aware missingness for each ticker that has data.
  * "True missing" = gaps within the ticker's own [firstDate, lastDate] window.
  * "Pre-inception" = business days in [globalStart, firstDate) — not an error.
+ * Pass prefetchedRanges to avoid an extra DB round-trip when caller already has stats.
  */
 export async function getTopMissingTickersV2(
   limit: number,
   globalStart: string | null,
-  globalEnd: string | null
+  globalEnd: string | null,
+  prefetchedRanges?: TickerDateRange[]
 ): Promise<TickerMissingnessV2[]> {
-  const ranges = await getTickerDateRanges()
+  const ranges = prefetchedRanges ?? await getAllTickerStats()
   if (!ranges.length) return []
 
   const effectiveGlobalStart = globalStart ?? ranges.reduce(
@@ -1300,9 +1587,12 @@ export async function getTopMissingTickersV2(
 
 /**
  * Returns tickers from all universe presets that have zero rows in the prices table.
+ * Pass prefetchedRanges to avoid an extra DB round-trip when caller already has stats.
  */
-export async function getNotIngestedUniverseTickers(): Promise<string[]> {
-  const ranges = await getTickerDateRanges()
+export async function getNotIngestedUniverseTickers(
+  prefetchedRanges?: TickerDateRange[]
+): Promise<string[]> {
+  const ranges = prefetchedRanges ?? await getAllTickerStats()
   const ingested = new Set(ranges.map((r) => r.ticker))
   const allTickers = new Set<string>()
   for (const tickers of Object.values(UNIVERSE_PRESETS)) {

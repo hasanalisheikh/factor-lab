@@ -18,7 +18,7 @@ import pandas as pd
 import yfinance as yf
 
 from .ml import run_walk_forward
-from .supabase_io import Job, SupabaseIO
+from .supabase_io import DataIngestJob, Job, SupabaseIO
 
 # ---------------------------------------------------------------------------
 # Job-level wall-clock timeout (prevents stuck/runaway jobs)
@@ -896,6 +896,32 @@ def _run_backtest(
   raise ValueError(f"Unsupported strategy: {strategy}")
 
 
+_BLOCKED_ERROR_PATTERNS: list[str] = [
+  "no timezone found for ticker",
+  "no price data available",
+  "possibly delisted",
+  "no data found for ticker",
+  "symbol not found",
+  "invalid ticker",
+  "404",
+  "403 forbidden",
+]
+
+
+def _classify_ingest_error(error: str) -> str:
+  """Classify an ingest exception as 'blocked' (permanent) or 'retriable' (transient).
+
+  'blocked' errors indicate a permanent issue (invalid ticker, delisted symbol, etc.)
+  and should not be retried automatically. 'retriable' errors are transient (network,
+  timeout) and will be scheduled for automatic retry with exponential backoff.
+  """
+  lower = error.lower()
+  for pattern in _BLOCKED_ERROR_PATTERNS:
+    if pattern in lower:
+      return "blocked"
+  return "retriable"
+
+
 def _download_data_ingest_prices(
   ticker: str,
   start_date: str,
@@ -953,118 +979,258 @@ def _process_data_ingest_job(io: SupabaseIO, job: Job) -> None:
   start_date = str(payload.get("start_date", default_start))
   end_date = str(payload.get("end_date", datetime.utcnow().strftime("%Y-%m-%d")))
 
-  # Incremental: only download rows that aren't already stored.
-  try:
-    latest_result = (
-      io.client.table("prices")
-      .select("date")
-      .eq("ticker", ticker)
-      .order("date", desc=True)
-      .limit(1)
-      .execute()
-    )
-    existing_latest: str | None = (
-      latest_result.data[0]["date"] if latest_result.data else None
-    )
-  except Exception:
-    existing_latest = None
+  # Wrap all blocking work in a heartbeat context so the stall scanner can
+  # distinguish an alive job from a crashed one (heartbeat fires every 10 s).
+  with _Heartbeat(lambda: io.heartbeat_job(job.id), interval=10, job_id=job.id):
+    # Incremental: only download rows that aren't already stored.
+    try:
+      latest_result = (
+        io.client.table("prices")
+        .select("date")
+        .eq("ticker", ticker)
+        .order("date", desc=True)
+        .limit(1)
+        .execute()
+      )
+      existing_latest: str | None = (
+        latest_result.data[0]["date"] if latest_result.data else None
+      )
+    except Exception:
+      existing_latest = None
 
-  if existing_latest:
-    next_day = (
-      pd.Timestamp(existing_latest) + pd.Timedelta(days=1)
-    ).strftime("%Y-%m-%d")
-    if next_day > end_date:
-      # Already up to date — nothing to download.
+    if existing_latest:
+      next_day = (
+        pd.Timestamp(existing_latest) + pd.Timedelta(days=1)
+      ).strftime("%Y-%m-%d")
+      if next_day > end_date:
+        # Already up to date — nothing to download.
+        duration = int((datetime.utcnow() - started).total_seconds())
+        io.save_data_ingest_success(
+          job=job,
+          duration_seconds=duration,
+          tickers_updated=1,
+          rows_upserted=0,
+          start_date=existing_latest,
+          end_date=existing_latest,
+        )
+        print(f"[engine] data_ingest skipped job={job.id} {ticker} already current ({existing_latest})")
+        return
+      # Only advance start_date if it is already past existing_latest.
+      # If start_date < existing_latest, this is a force backfill — preserve it.
+      if start_date > existing_latest:
+        start_date = next_day
+
+    print(f"[engine] data_ingest job={job.id} ticker={ticker} {start_date}→{end_date}")
+    stage = "download"
+    try:
+      io.update_job_progress(job.id, stage=stage, progress=15)
+
+      # Download without the 40-row guard used by backtests — incremental updates
+      # may legitimately produce only a handful of new rows.
+      raw = _download_data_ingest_with_retry(ticker, start_date, end_date)
+      if raw.empty:
+        # No new trading days in range (e.g. weekend/holiday at end of window).
+        duration = int((datetime.utcnow() - started).total_seconds())
+        actual = existing_latest or start_date
+        io.update_job_progress(job.id, stage="finalize", progress=95)
+        io.save_data_ingest_success(
+          job=job,
+          duration_seconds=duration,
+          tickers_updated=1,
+          rows_upserted=0,
+          start_date=actual,
+          end_date=actual,
+        )
+        print(f"[engine] data_ingest completed job={job.id} no new rows")
+        return
+
+      # Normalise to a Series of close prices.
+      stage = "transform"
+      io.update_job_progress(job.id, stage=stage, progress=45)
+      if isinstance(raw.columns, pd.MultiIndex):
+        level0 = raw.columns.get_level_values(0)
+        key = "Close" if "Close" in level0 else "Adj Close"
+        close_raw = raw[key]
+        close_series = close_raw.iloc[:, 0] if isinstance(close_raw, pd.DataFrame) else close_raw
+      else:
+        close_series = raw.iloc[:, 0]
+      close_series = close_series.sort_index().ffill().dropna()
+
+      # Build upsert rows
+      stage = "upsert_prices"
+      io.update_job_progress(job.id, stage=stage, progress=70)
+      price_rows: list[dict[str, Any]] = []
+      for dt, val in close_series.items():
+        if pd.isna(val):
+          continue
+        price_rows.append({
+          "ticker": ticker,
+          "date": pd.Timestamp(dt).strftime("%Y-%m-%d"),
+          "adj_close": float(val),
+        })
+
+      # Upsert in larger chunks to reduce Supabase round-trips
+      chunk_size = 5000
+      for i in range(0, len(price_rows), chunk_size):
+        chunk = price_rows[i : i + chunk_size]
+        io.client.table("prices").upsert(chunk, on_conflict="ticker,date").execute()
+
+      stage = "finalize"
+      io.update_job_progress(job.id, stage=stage, progress=95)
+
       duration = int((datetime.utcnow() - started).total_seconds())
+      actual_start = price_rows[0]["date"] if price_rows else start_date
+      actual_end = price_rows[-1]["date"] if price_rows else end_date
       io.save_data_ingest_success(
         job=job,
         duration_seconds=duration,
         tickers_updated=1,
-        rows_upserted=0,
-        start_date=existing_latest,
-        end_date=existing_latest,
+        rows_upserted=len(price_rows),
+        start_date=actual_start,
+        end_date=actual_end,
       )
-      print(f"[engine] data_ingest skipped job={job.id} {ticker} already current ({existing_latest})")
-      return
-    # Only advance start_date if it is already past existing_latest.
-    # If start_date < existing_latest, this is a force backfill — preserve it.
-    if start_date > existing_latest:
-      start_date = next_day
-
-  print(f"[engine] data_ingest job={job.id} ticker={ticker} {start_date}→{end_date}")
-  stage = "download"
-  try:
-    io.update_job_progress(job.id, stage=stage, progress=15)
-
-    # Download without the 40-row guard used by backtests — incremental updates
-    # may legitimately produce only a handful of new rows.
-    raw = _download_data_ingest_with_retry(ticker, start_date, end_date)
-    if raw.empty:
-      # No new trading days in range (e.g. weekend/holiday at end of window).
+      print(f"[engine] data_ingest completed job={job.id} {len(price_rows)} rows in {duration}s")
+    except Exception as exc:
       duration = int((datetime.utcnow() - started).total_seconds())
-      actual = existing_latest or start_date
-      io.update_job_progress(job.id, stage="finalize", progress=95)
-      io.save_data_ingest_success(
+      err_str = f"[stage={stage}] {exc}"
+      # Log first so the error is always visible even if the DB write fails.
+      print(f"[engine] data_ingest failed job={job.id} in {duration}s: {exc}")
+      classification = _classify_ingest_error(str(exc))
+      if classification == "blocked":
+        io.save_blocked(job, duration, err_str, stage=stage)
+        print(f"[engine] data_ingest BLOCKED job={job.id} (permanent): {exc}")
+      else:
+        io.save_data_ingest_failure_with_retry(job, duration, err_str, stage=stage)
+
+
+def _process_data_ingest_job_v2(io: SupabaseIO, job: DataIngestJob) -> None:
+  """Download and upsert historical prices for a data_ingest_jobs row.
+
+  Uses the dedicated data_ingest_jobs table (explicit schema) rather than the
+  generic jobs table. Heartbeat fires every 10 s via heartbeat_data_ingest_job.
+  """
+  started = datetime.utcnow()
+
+  with _Heartbeat(lambda: io.heartbeat_data_ingest_job(job.id), interval=10, job_id=job.id):
+    # Incremental: only download rows not already stored.
+    try:
+      latest_result = (
+        io.client.table("prices")
+        .select("date")
+        .eq("ticker", job.symbol)
+        .order("date", desc=True)
+        .limit(1)
+        .execute()
+      )
+      existing_latest: str | None = (
+        latest_result.data[0]["date"] if latest_result.data else None
+      )
+    except Exception:
+      existing_latest = None
+
+    start_date = job.start_date
+    end_date = job.end_date
+
+    if existing_latest:
+      next_day = (
+        pd.Timestamp(existing_latest) + pd.Timedelta(days=1)
+      ).strftime("%Y-%m-%d")
+      if next_day > end_date:
+        duration = int((datetime.utcnow() - started).total_seconds())
+        io.update_data_ingest_progress(job.id, stage="finalize", progress=95)
+        io.save_data_ingest_job_success(
+          job=job,
+          duration_seconds=duration,
+          tickers_updated=1,
+          rows_upserted=0,
+          start_date=existing_latest,
+          end_date=existing_latest,
+        )
+        print(
+          f"[engine] data_ingest_v2 skipped job={job.id} "
+          f"{job.symbol} already current ({existing_latest})"
+        )
+        return
+      if start_date > existing_latest:
+        start_date = next_day
+
+    print(f"[engine] data_ingest_v2 job={job.id} symbol={job.symbol} {start_date}→{end_date}")
+    stage = "download"
+    try:
+      io.update_data_ingest_progress(job.id, stage=stage, progress=15)
+
+      raw = _download_data_ingest_with_retry(job.symbol, start_date, end_date)
+      if raw.empty:
+        duration = int((datetime.utcnow() - started).total_seconds())
+        actual = existing_latest or start_date
+        io.update_data_ingest_progress(job.id, stage="finalize", progress=95)
+        io.save_data_ingest_job_success(
+          job=job,
+          duration_seconds=duration,
+          tickers_updated=1,
+          rows_upserted=0,
+          start_date=actual,
+          end_date=actual,
+        )
+        print(f"[engine] data_ingest_v2 completed job={job.id} no new rows")
+        return
+
+      stage = "transform"
+      io.update_data_ingest_progress(job.id, stage=stage, progress=45)
+      if isinstance(raw.columns, pd.MultiIndex):
+        level0 = raw.columns.get_level_values(0)
+        key = "Close" if "Close" in level0 else "Adj Close"
+        close_raw = raw[key]
+        close_series = close_raw.iloc[:, 0] if isinstance(close_raw, pd.DataFrame) else close_raw
+      else:
+        close_series = raw.iloc[:, 0]
+      close_series = close_series.sort_index().ffill().dropna()
+
+      stage = "upsert"
+      io.update_data_ingest_progress(job.id, stage=stage, progress=70)
+      price_rows: list[dict[str, Any]] = []
+      for dt, val in close_series.items():
+        if pd.isna(val):
+          continue
+        price_rows.append({
+          "ticker": job.symbol,
+          "date": pd.Timestamp(dt).strftime("%Y-%m-%d"),
+          "adj_close": float(val),
+        })
+
+      chunk_size = 5000
+      for i in range(0, len(price_rows), chunk_size):
+        chunk = price_rows[i : i + chunk_size]
+        io.client.table("prices").upsert(chunk, on_conflict="ticker,date").execute()
+
+      stage = "finalize"
+      io.update_data_ingest_progress(job.id, stage=stage, progress=95)
+
+      duration = int((datetime.utcnow() - started).total_seconds())
+      actual_start = price_rows[0]["date"] if price_rows else start_date
+      actual_end = price_rows[-1]["date"] if price_rows else end_date
+      io.save_data_ingest_job_success(
         job=job,
         duration_seconds=duration,
         tickers_updated=1,
-        rows_upserted=0,
-        start_date=actual,
-        end_date=actual,
+        rows_upserted=len(price_rows),
+        start_date=actual_start,
+        end_date=actual_end,
       )
-      print(f"[engine] data_ingest completed job={job.id} no new rows")
-      return
-
-    # Normalise to a Series of close prices.
-    stage = "transform"
-    io.update_job_progress(job.id, stage=stage, progress=45)
-    if isinstance(raw.columns, pd.MultiIndex):
-      level0 = raw.columns.get_level_values(0)
-      key = "Close" if "Close" in level0 else "Adj Close"
-      close_raw = raw[key]
-      close_series = close_raw.iloc[:, 0] if isinstance(close_raw, pd.DataFrame) else close_raw
-    else:
-      close_series = raw.iloc[:, 0]
-    close_series = close_series.sort_index().ffill().dropna()
-
-    # Build upsert rows
-    stage = "upsert_prices"
-    io.update_job_progress(job.id, stage=stage, progress=70)
-    price_rows: list[dict[str, Any]] = []
-    for dt, val in close_series.items():
-      if pd.isna(val):
-        continue
-      price_rows.append({
-        "ticker": ticker,
-        "date": pd.Timestamp(dt).strftime("%Y-%m-%d"),
-        "adj_close": float(val),
-      })
-
-    # Upsert in larger chunks to reduce Supabase round-trips
-    chunk_size = 5000
-    for i in range(0, len(price_rows), chunk_size):
-      chunk = price_rows[i : i + chunk_size]
-      io.client.table("prices").upsert(chunk, on_conflict="ticker,date").execute()
-
-    stage = "finalize"
-    io.update_job_progress(job.id, stage=stage, progress=95)
-
-    duration = int((datetime.utcnow() - started).total_seconds())
-    actual_start = price_rows[0]["date"] if price_rows else start_date
-    actual_end = price_rows[-1]["date"] if price_rows else end_date
-    io.save_data_ingest_success(
-      job=job,
-      duration_seconds=duration,
-      tickers_updated=1,
-      rows_upserted=len(price_rows),
-      start_date=actual_start,
-      end_date=actual_end,
-    )
-    print(f"[engine] data_ingest completed job={job.id} {len(price_rows)} rows in {duration}s")
-  except Exception as exc:
-    duration = int((datetime.utcnow() - started).total_seconds())
-    io.save_failure(job, duration, f"[stage={stage}] {exc}", stage=stage)
-    print(f"[engine] data_ingest failed job={job.id} in {duration}s: {exc}")
+      print(
+        f"[engine] data_ingest_v2 completed job={job.id} "
+        f"{len(price_rows)} rows in {duration}s"
+      )
+    except Exception as exc:
+      duration = int((datetime.utcnow() - started).total_seconds())
+      err_str = f"[stage={stage}] {exc}"
+      print(f"[engine] data_ingest_v2 failed job={job.id} in {duration}s: {exc}")
+      classification = _classify_ingest_error(str(exc))
+      if classification == "blocked":
+        io.save_data_ingest_job_blocked(job, duration, err_str, stage=stage)
+        print(f"[engine] data_ingest_v2 BLOCKED job={job.id} (permanent): {exc}")
+      else:
+        io.save_data_ingest_job_failure_with_retry(job, duration, err_str, stage=stage)
 
 
 def _install_job_timeout(seconds: int) -> None:
@@ -1086,6 +1252,50 @@ def _cancel_job_timeout() -> None:
   if platform.system() == "Windows":
     return
   signal.alarm(0)
+
+
+class _Heartbeat:
+  """Background daemon thread that calls a heartbeat function every `interval` seconds.
+
+  Usage:
+      with _Heartbeat(lambda: io.heartbeat_job(job_id), interval=10):
+          # blocking work — heartbeat fires every interval seconds
+
+  The thread is a daemon so it never prevents worker shutdown.
+  Any exception in the heartbeat thread is swallowed — a failed heartbeat
+  must never kill an in-progress job.
+  """
+
+  def __init__(
+    self,
+    beat_fn: "Callable[[], None]",
+    interval: int = 15,
+    *,
+    job_id: str = "",
+  ) -> None:
+    self._beat_fn = beat_fn
+    self._interval = interval
+    self._job_id = job_id
+    self._stop = threading.Event()
+    self._thread: threading.Thread | None = None
+
+  def __enter__(self) -> "_Heartbeat":
+    def _run() -> None:
+      while not self._stop.wait(timeout=self._interval):
+        try:
+          self._beat_fn()
+        except Exception:
+          pass  # swallow — a failed heartbeat must never kill the job
+
+    name = f"heartbeat-{self._job_id[:8]}" if self._job_id else "heartbeat"
+    self._thread = threading.Thread(target=_run, daemon=True, name=name)
+    self._thread.start()
+    return self
+
+  def __exit__(self, *args: object) -> None:
+    self._stop.set()
+    if self._thread is not None:
+      self._thread.join(timeout=self._interval + 2)
 
 
 def _process_job(io: SupabaseIO, job: Job) -> None:
@@ -1222,8 +1432,21 @@ def main() -> None:
   io = SupabaseIO()
   print("[engine] worker started")
   while True:
+    # --- Watchdog & retry scheduler (run before fetching new work) ---
+    # jobs table (backtest + legacy data_ingest jobs)
+    io.scan_and_requeue_stalled_jobs(stall_minutes=2, max_attempts=5)
+    io.scan_and_requeue_queued_too_long(timeout_minutes=10, max_attempts=5)
+    io.requeue_due_for_retry(max_attempts=5)
+    # data_ingest_jobs table (new explicit-schema ingest jobs)
+    io.scan_stalled_data_ingest_jobs(stall_minutes=2, max_attempts=5)
+    io.scan_queued_too_long_data_ingest(timeout_minutes=10, max_attempts=5)
+    io.requeue_due_data_ingest(max_attempts=5)
+
+    # Fetch from both queues and process
     jobs = io.fetch_queued_jobs(limit=batch_size)
-    if not jobs:
+    ingest_jobs = io.fetch_queued_data_ingest_jobs(limit=batch_size)
+
+    if not jobs and not ingest_jobs:
       if once:
         print("[engine] no more queued jobs — exiting")
         break
@@ -1234,6 +1457,9 @@ def main() -> None:
     _wakeup.clear()
     for job in jobs:
       _process_job(io, job)
+    for ingest_job in ingest_jobs:
+      if io.claim_data_ingest_job(ingest_job):
+        _process_data_ingest_job_v2(io, ingest_job)
 
 
 if __name__ == "__main__":

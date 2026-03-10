@@ -161,6 +161,10 @@ export type Database = {
           job_type: string
           payload: Json | null
           preflight_run_id: string | null
+          updated_at: string | null
+          attempt_count: number
+          next_retry_at: string | null
+          locked_at: string | null
         }
         Insert: {
           id?: string
@@ -177,6 +181,10 @@ export type Database = {
           job_type?: string
           payload?: Json | null
           preflight_run_id?: string | null
+          updated_at?: string | null
+          attempt_count?: number
+          next_retry_at?: string | null
+          locked_at?: string | null
         }
         Update: Partial<Database['public']['Tables']['jobs']['Insert']>
         Relationships: []
@@ -397,12 +405,32 @@ export type BenchmarkCoverage = {
 
 export type DataIngestJobStatus = {
   id: string
+  /** "queued" | "running" | "completed" | "failed" | "blocked" */
   status: string
+  /** "download" | "transform" | "upsert" | "finalize" */
   stage: string | null
   progress: number
-  error_message: string | null
+  /** Explicit symbol field from data_ingest_jobs (replaces payload->ticker) */
+  symbol?: string | null
+  /** Start/end dates explicitly stored (replaces payload->start_date/end_date) */
+  start_date?: string | null
+  end_date?: string | null
+  /** Error message from data_ingest_jobs.error column */
+  error?: string | null
+  /** Legacy field from jobs.error_message (for backward compat) */
+  error_message?: string | null
   created_at: string | null
   started_at: string | null
+  updated_at: string | null
+  /** When set, the retry scheduler will requeue this failed job at this time. */
+  next_retry_at: string | null
+  /** Number of times this job has been attempted (claimed by a worker). */
+  attempt_count: number | null
+}
+
+/** Helper to read the error text from either new or legacy job row. */
+export function getIngestJobError(job: DataIngestJobStatus): string | null {
+  return job.error ?? job.error_message ?? null
 }
 
 /** Earliest date we expect all benchmark tickers to be fully ingested from */
