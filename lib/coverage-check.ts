@@ -61,6 +61,26 @@ export function countBusinessDays(startDate: string, endDate: string): number {
 }
 
 /**
+ * Returns the most recent "finalized" trading date — yesterday, or last Friday
+ * if today is Saturday (yesterday=Friday) or Sunday (two days ago=Friday).
+ *
+ * This prevents coverage checks from counting today's partially-ingested data
+ * as "missing". The auto-maintain cron also uses yesterday as its staleness
+ * threshold, so this keeps the two systems in sync.
+ */
+export function getSafeLastDate(): string {
+  const now = new Date()
+  // Work in UTC to avoid local-timezone drift
+  const dow = now.getUTCDay() // 0=Sun, 6=Sat
+  let daysBack = 1 // default: yesterday
+  if (dow === 0) daysBack = 2 // Sunday → Friday
+  if (dow === 6) daysBack = 1 // Saturday → Friday
+  const safe = new Date(now)
+  safe.setUTCDate(safe.getUTCDate() - daysBack)
+  return safe.toISOString().slice(0, 10)
+}
+
+/**
  * Subtract calendar days from a YYYY-MM-DD string.
  * Returns the new date as YYYY-MM-DD.
  */
@@ -136,10 +156,13 @@ export async function runPreflightCoverageCheck(params: {
 }): Promise<PreflightResult> {
   const { strategyId, startDate, endDate, universeSymbols, benchmark } = params
 
-  // Warmup-adjusted required window
+  // Warmup-adjusted required window.
+  // Cap requiredEnd at getSafeLastDate() so we never measure coverage against
+  // today's partially-ingested data (which would cause false coverage failures).
   const warmupDays = STRATEGY_WARMUP_CALENDAR_DAYS[strategyId] ?? 0
   const requiredStart = subtractCalendarDays(startDate, warmupDays)
-  const requiredEnd = endDate
+  const safeEnd = getSafeLastDate()
+  const requiredEnd = endDate < safeEnd ? endDate : safeEnd
 
   const expectedDays = countBusinessDays(requiredStart, requiredEnd)
   if (expectedDays === 0) {
@@ -154,48 +177,45 @@ export async function runPreflightCoverageCheck(params: {
 
   const admin = createAdminClient()
 
-  // Query actual day counts in parallel — one count query per symbol.
-  // This is typically 9–21 symbols (small enough for parallel execution).
-  const coverages: SymbolCoverage[] = await Promise.all(
-    allSymbols.map(async (symbol): Promise<SymbolCoverage> => {
-      const isBenchmark = symbol === benchmark
-      const threshold = isBenchmark ? benchmarkThreshold : universeThreshold
+  // ONE batch RPC call instead of N parallel COUNT queries.
+  // get_benchmark_coverage_agg (migration 20260311_ticker_stats.sql) does a
+  // single DB-side GROUP BY using idx_prices_ticker_date — vastly faster than
+  // N individual COUNT(*) queries under load.
+  type AggRow = { ticker: string; actual_days: string | number }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: rpcData, error: rpcError } = await (admin as any).rpc(
+    "get_benchmark_coverage_agg",
+    { p_tickers: allSymbols, p_start: requiredStart, p_end: requiredEnd }
+  ) as { data: AggRow[] | null; error: { message: string } | null }
 
-      try {
-        const { count } = await admin
-          .from("prices")
-          .select("*", { count: "exact", head: true })
-          .eq("ticker", symbol)
-          .gte("date", requiredStart)
-          .lte("date", requiredEnd)
+  if (rpcError) {
+    // Log for debugging but don't throw — fall through with empty map so every
+    // symbol gets status="not_ingested" (conservative: run waits for data).
+    console.error("[coverage-check] get_benchmark_coverage_agg error:", rpcError.message)
+  }
 
-        const actualDays = count ?? 0
-        const coverageRatio = actualDays / expectedDays
+  const actualDaysMap = new Map<string, number>()
+  for (const row of rpcData ?? []) {
+    actualDaysMap.set(row.ticker, Number(row.actual_days))
+  }
 
-        let status: SymbolCoverageStatus
-        if (actualDays === 0) {
-          status = "not_ingested"
-        } else if (coverageRatio < threshold) {
-          status = "partial"
-        } else {
-          status = "healthy"
-        }
+  const coverages: SymbolCoverage[] = allSymbols.map((symbol): SymbolCoverage => {
+    const isBenchmark = symbol === benchmark
+    const threshold = isBenchmark ? benchmarkThreshold : universeThreshold
+    const actualDays = actualDaysMap.get(symbol) ?? 0
+    const coverageRatio = actualDays / expectedDays
 
-        return { symbol, isBenchmark, actualDays, expectedDays, coverageRatio, status, threshold }
-      } catch {
-        // Treat query failures as not_ingested (conservative)
-        return {
-          symbol,
-          isBenchmark,
-          actualDays: 0,
-          expectedDays,
-          coverageRatio: 0,
-          status: "not_ingested",
-          threshold,
-        }
-      }
-    })
-  )
+    let status: SymbolCoverageStatus
+    if (actualDays === 0) {
+      status = "not_ingested"
+    } else if (coverageRatio < threshold) {
+      status = "partial"
+    } else {
+      status = "healthy"
+    }
+
+    return { symbol, isBenchmark, actualDays, expectedDays, coverageRatio, status, threshold }
+  })
 
   const unhealthy = coverages.filter((c) => c.status !== "healthy")
   return {

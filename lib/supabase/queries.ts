@@ -812,58 +812,97 @@ export async function getAllBenchmarkCoverage(
   try {
     const supabase = createAdminClient()
 
-    // Use DB-side GROUP BY RPC (returns 1 row per ticker, not ~25k rows to JS).
-    // Falls back to row-fetch if RPC not yet deployed.
-    type AggRow = { ticker: string; actual_days: string | number; earliest_date: string | null; latest_date: string | null }
+    // Fast path: read coverage_window_days from ticker_stats cache.
+    // coverage_window_days = COUNT(*) WHERE date >= '2015-01-02' (COVERAGE_WINDOW_START).
+    // This avoids a GROUP BY on prices entirely (migration 20260316).
+    // Falls back to the get_benchmark_coverage_agg RPC if the column is missing
+    // (pre-migration environment), and then to row-level fetch as a last resort.
+    type StatsRow = {
+      symbol: string
+      first_date: string
+      last_date: string
+      coverage_window_days: string | number | null
+    }
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { data: rpcData, error: rpcError } = await (supabase as any).rpc("get_benchmark_coverage_agg", {
-      p_tickers: tickers,
-      p_start: dateStart ?? "1900-01-01",
-      p_end: dateEnd ?? "9999-12-31",
-    }) as { data: AggRow[] | null; error: { message: string } | null }
+    const { data: statsData, error: statsError } = await (supabase as any)
+      .from("ticker_stats")
+      .select("symbol, first_date, last_date, coverage_window_days")
+      .in("symbol", tickers) as { data: StatsRow[] | null; error: { message: string } | null }
+
+    // Fast path is usable when: no error, rows returned, and at least one row
+    // has coverage_window_days populated (i.e. migration 20260316 was applied).
+    const fastPathOk =
+      !statsError &&
+      statsData !== null &&
+      statsData.length > 0 &&
+      statsData.some((r) => r.coverage_window_days !== null)
 
     let agg: Map<string, { actualDays: number; earliest: string | null; latest: string | null }>
 
-    if (rpcError) {
-      if (rpcError.message.includes("Could not find the function")) {
-        // RPC not deployed yet — fall back to row-level fetch
-        const { data: rowData, error: rowError } = await supabase
-          .from("prices")
-          .select("ticker, date")
-          .in("ticker", tickers)
-          .gte("date", dateStart ?? "1900-01-01")
-          .lte("date", dateEnd ?? "9999-12-31")
-
-        if (rowError) {
-          console.error("getAllBenchmarkCoverage fallback error:", rowError.message)
-          return null
-        }
-
-        agg = new Map()
-        for (const row of rowData ?? []) {
-          const t = row.ticker as string
-          const d = row.date as string
-          const existing = agg.get(t)
-          if (!existing) {
-            agg.set(t, { actualDays: 1, earliest: d, latest: d })
-          } else {
-            existing.actualDays += 1
-            if (d < (existing.earliest ?? d)) existing.earliest = d
-            if (d > (existing.latest ?? d)) existing.latest = d
-          }
-        }
-      } else {
-        console.error("getAllBenchmarkCoverage RPC error:", rpcError.message)
-        return null
+    if (fastPathOk) {
+      // Build from ticker_stats — zero prices queries.
+      agg = new Map()
+      for (const row of statsData!) {
+        agg.set(row.symbol, {
+          actualDays: Number(row.coverage_window_days ?? 0),
+          earliest: row.first_date ?? null,
+          latest: row.last_date ?? null,
+        })
       }
     } else {
-      agg = new Map()
-      for (const row of rpcData ?? []) {
-        agg.set(row.ticker, {
-          actualDays: Number(row.actual_days),
-          earliest: row.earliest_date,
-          latest: row.latest_date,
-        })
+      // Fallback: DB-side GROUP BY RPC (returns 1 row per ticker, not ~25k rows to JS).
+      if (statsError) {
+        console.warn("getAllBenchmarkCoverage: ticker_stats unavailable, using RPC fallback:", statsError.message)
+      }
+      type AggRow = { ticker: string; actual_days: string | number; earliest_date: string | null; latest_date: string | null }
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data: rpcData, error: rpcError } = await (supabase as any).rpc("get_benchmark_coverage_agg", {
+        p_tickers: tickers,
+        p_start: dateStart ?? "1900-01-01",
+        p_end: dateEnd ?? "9999-12-31",
+      }) as { data: AggRow[] | null; error: { message: string } | null }
+
+      if (rpcError) {
+        if (rpcError.message.includes("Could not find the function")) {
+          // RPC not deployed yet — fall back to row-level fetch
+          const { data: rowData, error: rowError } = await supabase
+            .from("prices")
+            .select("ticker, date")
+            .in("ticker", tickers)
+            .gte("date", dateStart ?? "1900-01-01")
+            .lte("date", dateEnd ?? "9999-12-31")
+
+          if (rowError) {
+            console.error("getAllBenchmarkCoverage fallback error:", rowError.message)
+            return null
+          }
+
+          agg = new Map()
+          for (const row of rowData ?? []) {
+            const t = row.ticker as string
+            const d = row.date as string
+            const existing = agg.get(t)
+            if (!existing) {
+              agg.set(t, { actualDays: 1, earliest: d, latest: d })
+            } else {
+              existing.actualDays += 1
+              if (d < (existing.earliest ?? d)) existing.earliest = d
+              if (d > (existing.latest ?? d)) existing.latest = d
+            }
+          }
+        } else {
+          console.error("getAllBenchmarkCoverage RPC error:", rpcError.message)
+          return null
+        }
+      } else {
+        agg = new Map()
+        for (const row of rpcData ?? []) {
+          agg.set(row.ticker, {
+            actualDays: Number(row.actual_days),
+            earliest: row.earliest_date,
+            latest: row.latest_date,
+          })
+        }
       }
     }
 
@@ -1343,6 +1382,30 @@ export async function getRunsBacktestWindowSummary(): Promise<BacktestWindowSumm
   } catch (err) {
     console.error("getRunsBacktestWindowSummary exception:", err)
     return []
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Active ingest job count (for data-page banner)
+// ---------------------------------------------------------------------------
+
+/**
+ * Returns the number of data_ingest_jobs currently queued or running.
+ * Used by the /data page to show a "background update in progress" banner.
+ * Returns 0 on error (non-fatal).
+ */
+export async function getActiveIngestJobCount(): Promise<number> {
+  try {
+    const admin = createAdminClient()
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { count, error } = await (admin as any)
+      .from("data_ingest_jobs")
+      .select("*", { count: "exact", head: true })
+      .in("status", ["queued", "running"])
+    if (error) return 0
+    return count ?? 0
+  } catch {
+    return 0
   }
 }
 

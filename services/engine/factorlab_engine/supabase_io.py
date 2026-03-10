@@ -8,6 +8,12 @@ from typing import Any, Iterable
 import pandas as pd
 from supabase import Client, create_client
 
+# Maximum wall-clock runtime for a data_ingest_job before it is considered hung.
+# A job that heartbeats normally (updated_at stays fresh) but blocks indefinitely
+# in yfinance will be caught by this secondary check even though the 2-minute
+# heartbeat stall scanner won't trigger.
+_INGEST_MAX_RUNTIME_SECONDS: int = int(os.getenv("INGEST_MAX_RUNTIME_SECONDS", "300"))  # 5 min
+
 
 @dataclass(frozen=True)
 class Job:
@@ -243,16 +249,19 @@ class SupabaseIO:
     )
 
   def heartbeat_job(self, job_id: str) -> None:
-    """Write updated_at=NOW() and refresh locked_at to signal the job is still alive.
+    """Write updated_at=NOW() to signal the job is still alive.
 
     Called by the _Heartbeat background thread every 15 seconds.
+    Does NOT update locked_at — locked_at is the claim timestamp and must stay
+    frozen so the max-runtime stall scanner can compare started_at against it
+    without heartbeat interference.
     Silently ignores all errors — a failed heartbeat must never kill an
     in-progress job, and the columns may not exist on old schemas.
     """
     try:
       now = datetime.now(timezone.utc).isoformat()
       self.client.table("jobs").update(
-        {"updated_at": now, "locked_at": now}
+        {"updated_at": now}
       ).eq("id", job_id).execute()
     except Exception as exc:
       print(f"[supabase_io] heartbeat warning job={job_id}: {exc}")
@@ -928,15 +937,18 @@ class SupabaseIO:
       return False
 
   def heartbeat_data_ingest_job(self, job_id: str) -> None:
-    """Refresh updated_at + locked_at to signal the job is still alive.
+    """Refresh updated_at to signal the job is still alive.
 
     Called by the _Heartbeat background thread every ~10 seconds.
+    Does NOT update locked_at — locked_at is the claim timestamp and must stay
+    frozen so the max-runtime stall scanner can detect jobs that heartbeat
+    normally but hang indefinitely (e.g. blocked yfinance calls).
     Silently ignores all errors — a failed heartbeat must never kill a job.
     """
     try:
       now = datetime.now(timezone.utc).isoformat()
       self.client.table("data_ingest_jobs").update(
-        {"updated_at": now, "locked_at": now}
+        {"updated_at": now}
       ).eq("id", job_id).execute()
     except Exception as exc:
       print(f"[supabase_io] heartbeat warning data_ingest_job={job_id}: {exc}")
@@ -1054,19 +1066,44 @@ class SupabaseIO:
   def scan_stalled_data_ingest_jobs(
     self, stall_minutes: int = 2, max_attempts: int = 5
   ) -> None:
-    """Detect running data_ingest_jobs with stale heartbeats and schedule retries."""
+    """Detect running data_ingest_jobs that are stuck and schedule retries.
+
+    Two detection paths:
+      1. Primary — heartbeat gone silent: updated_at older than stall_minutes.
+      2. Secondary — heartbeat alive but job exceeded max runtime: started_at
+         older than _INGEST_MAX_RUNTIME_SECONDS. This catches yfinance calls that
+         block indefinitely while the heartbeat background thread keeps firing.
+    """
     try:
-      cutoff = (
-        datetime.now(timezone.utc) - timedelta(minutes=stall_minutes)
-      ).isoformat()
-      result = (
+      now_utc = datetime.now(timezone.utc)
+      cutoff_heartbeat = (now_utc - timedelta(minutes=stall_minutes)).isoformat()
+      cutoff_max_runtime = (now_utc - timedelta(seconds=_INGEST_MAX_RUNTIME_SECONDS)).isoformat()
+
+      # Primary: heartbeat gone silent
+      result_silent = (
         self.client.table("data_ingest_jobs")
         .select("id,stage,attempt_count,requested_by_run_id,symbol")
         .eq("status", "running")
-        .lt("updated_at", cutoff)
+        .lt("updated_at", cutoff_heartbeat)
         .execute()
       )
-      stalled = result.data or []
+      # Secondary: heartbeat alive but running too long
+      result_maxtime = (
+        self.client.table("data_ingest_jobs")
+        .select("id,stage,attempt_count,requested_by_run_id,symbol")
+        .eq("status", "running")
+        .lt("started_at", cutoff_max_runtime)
+        .not_.is_("started_at", "null")
+        .execute()
+      )
+      # Deduplicate by id (a single job may appear in both result sets)
+      seen_ids: set[str] = set()
+      stalled: list[dict] = []
+      for row in (result_silent.data or []) + (result_maxtime.data or []):
+        if row["id"] not in seen_ids:
+          seen_ids.add(row["id"])
+          stalled.append(row)
+
       if not stalled:
         return
 
