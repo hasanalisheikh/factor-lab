@@ -11,9 +11,10 @@ export function LoginVisual() {
 
         <svg
           viewBox="0 0 700 440"
+          preserveAspectRatio="xMidYMid meet"
           role="img"
           aria-label="Isometric quant dashboard illustration"
-          className="relative w-full max-h-[46vh] lg:max-h-[52vh]"
+          className="relative h-auto w-full max-w-full max-h-[46vh] lg:max-h-[52vh]"
         >
           <defs>
             <linearGradient id="panelA" x1="0%" y1="0%" x2="100%" y2="100%">
@@ -45,8 +46,32 @@ export function LoginVisual() {
           <rect x="170" y="126" width="120" height="12" rx="6" fill="#2f7d5d" fillOpacity="0.62" />
 
           <rect x="446" y="112" width="122" height="146" rx="14" fill="#101922" stroke="#385245" />
-          <path d="M507 145 L524 159 V183 C524 213 507 233 507 233 C507 233 490 213 490 183 V159 L507 145Z" fill="#1a4535" stroke="#63d8a3" strokeWidth="2" />
-          <path d="M494 192 L503 182 L509 187 L522 173" fill="none" stroke="#89f5c2" strokeWidth="5" strokeLinecap="round" strokeLinejoin="round" />
+          <g transform="translate(460 141) scale(3.9)">
+            <path
+              d="M12 2L4 5.5V11C4 16.25 7.4 21.08 12 22.5C16.6 21.08 20 16.25 20 11V5.5L12 2Z"
+              fill="#1a4535"
+              stroke="#63d8a3"
+              strokeWidth="0.5"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+            <path
+              d="M7.5 15.5L10.5 12L13 14L16.5 8.5"
+              fill="none"
+              stroke="#89f5c2"
+              strokeWidth="1.28"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+            <path
+              d="M14 8.5H16.5V11"
+              fill="none"
+              stroke="#89f5c2"
+              strokeWidth="1.28"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </g>
           <rect x="468" y="118" width="78" height="10" rx="5" fill="#5fcfa0" fillOpacity="0.3" />
         </svg>
 
