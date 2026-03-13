@@ -8,6 +8,7 @@ dependencies = [
   "lightgbm>=4.5.0",
   "numpy>=2.1.0",
   "pandas>=2.2.0",
+  "requests>=2.32.0",
   "scikit-learn>=1.5.0",
   "supabase>=2.4.0",
   "yfinance>=0.2.50",

@@ -7,6 +7,7 @@ Description-Content-Type: text/markdown
 Requires-Dist: lightgbm>=4.5.0
 Requires-Dist: numpy>=2.1.0
 Requires-Dist: pandas>=2.2.0
+Requires-Dist: requests>=2.32.0
 Requires-Dist: scikit-learn>=1.5.0
 Requires-Dist: supabase>=2.4.0
 Requires-Dist: yfinance>=0.2.50

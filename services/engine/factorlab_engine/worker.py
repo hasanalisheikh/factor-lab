@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import hashlib
+import io
 import json
 import os
 import platform
@@ -15,6 +16,7 @@ from typing import Any, Callable
 
 import numpy as np
 import pandas as pd
+import requests
 import yfinance as yf
 
 from .ml import run_walk_forward
@@ -1064,20 +1066,17 @@ def _download_stooq_prices(ticker: str, start_date: str, end_date: str) -> pd.Se
   Stooq symbol convention: lowercase + '.us' suffix; hyphens become dots
   (e.g., BRK-B → brk.b.us). Returns an empty Series on any error.
   """
-  import io as _io
-  import requests as _requests
-
   stooq_sym = ticker.replace("-", ".").lower() + ".us"
   d1 = start_date.replace("-", "")
   d2 = end_date.replace("-", "")
   url = f"https://stooq.com/q/d/l/?s={stooq_sym}&d1={d1}&d2={d2}&i=d"
   try:
-    resp = _requests.get(url, timeout=30, headers={"User-Agent": "Mozilla/5.0"})
+    resp = requests.get(url, timeout=30, headers={"User-Agent": "Mozilla/5.0"})
     resp.raise_for_status()
     text = resp.text.strip()
     if not text or "No data" in text or len(text) < 60:
       return pd.Series(dtype=float)
-    df = pd.read_csv(_io.StringIO(text), parse_dates=["Date"], index_col="Date")
+    df = pd.read_csv(io.StringIO(text), parse_dates=["Date"], index_col="Date")
     if "Close" not in df.columns:
       return pd.Series(dtype=float)
     return df["Close"].sort_index().dropna()
