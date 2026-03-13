@@ -1,30 +1,23 @@
 "use client"
 
-import { useSyncExternalStore } from "react"
-
-const STORAGE_KEY = "factorlab:data:diagnostics"
-const SYNC_EVENT = "factorlab:diagnostics-changed"
-
-function subscribe(callback: () => void) {
-  window.addEventListener(SYNC_EVENT, callback)
-  return () => window.removeEventListener(SYNC_EVENT, callback)
-}
-
-function getSnapshot() {
-  return localStorage.getItem(STORAGE_KEY) === "true"
-}
-
-function getServerSnapshot() {
-  return false
-}
+import { usePathname, useRouter, useSearchParams } from "next/navigation"
 
 export function useDiagnosticsMode() {
-  const enabled = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot)
+  const router = useRouter()
+  const pathname = usePathname()
+  const searchParams = useSearchParams()
+  const enabled = searchParams.get("diagnostics") === "1"
 
   const toggle = () => {
-    const next = !enabled
-    localStorage.setItem(STORAGE_KEY, String(next))
-    window.dispatchEvent(new CustomEvent(SYNC_EVENT))
+    const params = new URLSearchParams(searchParams.toString())
+    if (enabled) {
+      params.delete("diagnostics")
+    } else {
+      params.set("diagnostics", "1")
+    }
+
+    const nextHref = params.toString() ? `${pathname}?${params.toString()}` : pathname
+    router.replace(nextHref, { scroll: false })
   }
 
   return { enabled, toggle }

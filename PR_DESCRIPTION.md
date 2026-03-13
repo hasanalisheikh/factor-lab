@@ -47,3 +47,11 @@
 - `lib/__tests__/data-ingest-jobs.test.ts`
 - `services/engine/tests/test_worker_ingest_windows.py`
 - `services/engine/tests/test_supabase_io.py`
+
+## Quick test plan
+
+- Visit `/data` and confirm Diagnostics is off by default.
+- Click `Diagnostics` and confirm the URL becomes `/data?diagnostics=1` without a full reload.
+- Refresh `/data?diagnostics=1` and confirm diagnostics stays on.
+- Visit `/data` again and confirm diagnostics-only panels are hidden.
+- Switch between `Backtest-ready` and `Advanced` and confirm diagnostics stays off unless the explicit query param is present.

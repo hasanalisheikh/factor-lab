@@ -2,37 +2,41 @@ import { AppShell } from "@/components/layout/app-shell"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import {
   getDataHealthSummary,
-  getTopMissingTickersV2,
+  getDataState,
   getNotIngestedUniverseTickers,
   getAllBenchmarkCoverage,
   getRecentIngestionHistory,
   getLatestDataIngestJobs,
-  autoQueueBenchmarkIngestions,
-  autoQueueUniverseIngestions,
   getAllTickerStats,
+  getActiveIngestJobCount,
 } from "@/lib/supabase/queries"
-import { BENCHMARK_OPTIONS } from "@/lib/benchmark"
+import { BENCHMARK_OPTIONS, normalizeBenchmark } from "@/lib/benchmark"
 import { COVERAGE_WINDOW_START } from "@/lib/supabase/types"
 import {
   formatISODate,
   formatISOTimestamp,
-  daysAgoFromNow,
-  getFreshnessStatus,
+  countBusinessDaysInclusive,
 } from "@/lib/utils/dates"
+import {
+  assessDataHealth,
+  calendarGapToTradingDays,
+  type HealthStatus,
+  summarizeInceptionAwareCoverage,
+} from "@/lib/data-health"
 import { InfoTooltip } from "@/components/data/info-tooltip"
 import { TopMissingTable } from "@/components/data/top-missing-table"
 import { BenchmarkCoverageCard } from "@/components/data/benchmark-coverage-card"
 import { UniverseTierSummary } from "@/components/data/universe-tier-summary"
-import { DiagnosticsSection } from "@/components/data/diagnostics-section"
 import {
   AlertTriangle,
   Calendar,
   CheckCircle2,
-  Clock3,
   Database,
   Info,
   XCircle,
   AlertCircle,
+  Loader2,
+  Search,
 } from "lucide-react"
 import Link from "next/link"
 
@@ -42,53 +46,30 @@ export const dynamic = "force-dynamic"
 // Derived helpers (pure, server-only)
 // ---------------------------------------------------------------------------
 
-function freshnessLabel(status: ReturnType<typeof getFreshnessStatus>) {
-  if (status === "unknown")
-    return { label: "Unknown", className: "text-muted-foreground bg-muted" }
-  if (status === "fresh")
-    return {
-      label: "Fresh",
-      className: "text-emerald-400 bg-emerald-950/40 border border-emerald-800/50",
-    }
-  if (status === "stale")
-    return {
-      label: "Stale",
-      className: "text-amber-400 bg-amber-950/40 border border-amber-800/50",
-    }
-  return {
-    label: "Outdated",
-    className: "text-red-400 bg-red-950/40 border border-red-800/50",
-  }
-}
-
-function healthVerdict(completeness: number | null) {
-  if (completeness === null)
+function healthVerdict(status: HealthStatus) {
+  if (status === "NO_DATA")
     return {
       label: "No Data",
-      desc: "No price data found in the database.",
       Icon: XCircle,
       textCls: "text-muted-foreground",
       borderCls: "border-border",
     }
-  if (completeness >= 99)
+  if (status === "GOOD")
     return {
       label: "Good",
-      desc: `Inception-aware coverage is ${completeness.toFixed(1)}% complete. Backtests should be reliable.`,
       Icon: CheckCircle2,
       textCls: "text-emerald-400",
       borderCls: "border-emerald-800/40",
     }
-  if (completeness >= 95)
+  if (status === "WARNING")
     return {
       label: "Warning",
-      desc: `Inception-aware coverage is ${completeness.toFixed(1)}%. Some tickers have gaps that may affect signal quality.`,
       Icon: AlertCircle,
       textCls: "text-amber-400",
       borderCls: "border-amber-800/40",
     }
   return {
     label: "Degraded",
-    desc: `Inception-aware coverage is only ${completeness.toFixed(1)}%. Significant gaps may bias backtest returns.`,
     Icon: XCircle,
     textCls: "text-red-400",
     borderCls: "border-red-800/40",
@@ -105,117 +86,245 @@ export default async function DataPage({
   searchParams: Promise<Record<string, string | undefined>>
 }) {
   const params = await searchParams
+  const diagnostics = params.diagnostics === "1"
   const mode = params.mode === "full" ? "full" : "backtest"
+  const searchQuery = (params.q ?? "").trim().toUpperCase()
+  const benchmarkParam = normalizeBenchmark(params.benchmark)
+  const benchmarkOptions = new Set<string>(BENCHMARK_OPTIONS)
+  const selectedBenchmark = benchmarkOptions.has(benchmarkParam)
+    ? benchmarkParam
+    : BENCHMARK_OPTIONS[0]
+  const hasExplicitBenchmark = Boolean(params.benchmark && benchmarkOptions.has(benchmarkParam))
 
-  const health = await getDataHealthSummary()
+  const [health, dataState] = await Promise.all([
+    getDataHealthSummary(),
+    getDataState(),
+  ])
 
-  // In backtest mode use the fixed coverage window start; in full mode use DB global min.
+  // In backtest mode use the fixed coverage window start; in full mode use the
+  // earliest visible date. Both modes stop at the global data cutoff.
   const windowStart = mode === "backtest" ? COVERAGE_WINDOW_START : health.dateStart
+  const windowEnd = dataState.dataCutoffDate ?? health.dateEnd
+  const businessDaysInWindow =
+    windowStart && windowEnd && windowStart <= windowEnd
+      ? countBusinessDaysInclusive(
+          new Date(`${windowStart}T00:00:00Z`),
+          new Date(`${windowEnd}T00:00:00Z`)
+        )
+      : 0
 
   // Phase 1: fetch ticker stats ONCE from ticker_stats cache + other data in parallel.
   // getAllTickerStats() reads the cached table (one row/ticker) — no full GROUP BY on prices.
-  // The result is passed into getTopMissingTickersV2 and getNotIngestedUniverseTickers
-  // so neither function makes a second DB call.
-  const [tickerRanges, allBenchmarkCovs, ingestionLog] =
+  // The result is passed into the in-memory completeness/health summary and
+  // getNotIngestedUniverseTickers so neither path makes a second DB call.
+  const [tickerRanges, allBenchmarkCovs, ingestionLog, activeJobCount, allIngestJobs] =
     await Promise.all([
       getAllTickerStats(),
-      getAllBenchmarkCoverage(health.dateStart, health.dateEnd, health.businessDaysInWindow),
-      getRecentIngestionHistory(5),
+      getAllBenchmarkCoverage(windowStart, windowEnd, businessDaysInWindow),
+      diagnostics ? getRecentIngestionHistory(5) : Promise.resolve([]),
+      diagnostics ? getActiveIngestJobCount() : Promise.resolve(0),
+      diagnostics
+        ? getLatestDataIngestJobs(BENCHMARK_OPTIONS)
+        : Promise.resolve({} as Awaited<ReturnType<typeof getLatestDataIngestJobs>>),
     ])
 
-  // Derive in-memory from the pre-fetched stats — no extra DB calls.
-  const topMissingV2 = await getTopMissingTickersV2(50, windowStart, health.dateEnd, tickerRanges)
+  const inceptionAware = summarizeInceptionAwareCoverage({
+    ranges: tickerRanges,
+    globalStart: windowStart,
+    globalEnd: windowEnd,
+  })
+  const topMissingV2Raw = inceptionAware.rows
+    .filter((row) => row.trueMissingDays > 0)
+    .sort((a, b) => b.trueMissingDays - a.trueMissingDays)
+    .slice(0, 50)
   const notIngested = await getNotIngestedUniverseTickers(tickerRanges)
 
-  // Phase 2: auto-queue benchmarks + universe tickers that need ingestion/backfill/incremental.
-  // Both calls are idempotent — safe on every page render.
-  // Skip benchmark queue if coverage query failed (null) — don't queue on stale data.
-  if (allBenchmarkCovs !== null) {
-    await autoQueueBenchmarkIngestions(allBenchmarkCovs, tickerRanges)
-  }
-  await autoQueueUniverseIngestions(tickerRanges)
+  // Apply ticker search filter (server-side, from ?q= param)
+  const topMissingV2 = searchQuery
+    ? topMissingV2Raw.filter((r: { ticker: string }) => r.ticker.includes(searchQuery))
+    : topMissingV2Raw
 
-  // Phase 3: fetch jobs after auto-queue so newly queued jobs appear in initialJob
-  const allIngestJobs = await getLatestDataIngestJobs(BENCHMARK_OPTIONS)
+  const benchmarkRows = diagnostics
+    ? BENCHMARK_OPTIONS.map((ticker) => ({
+        ticker,
+        coverage: (allBenchmarkCovs ?? []).find((c: { ticker: string }) => c.ticker === ticker) ?? null,
+        initialJob: allIngestJobs[ticker] ?? null,
+      }))
+    : []
 
-  const benchmarkRows = BENCHMARK_OPTIONS.map((ticker) => ({
-    ticker,
-    coverage: (allBenchmarkCovs ?? []).find((c: { ticker: string }) => c.ticker === ticker) ?? null,
-    initialJob: allIngestJobs[ticker] ?? null,
-  }))
-
-  const freshnessStatus = getFreshnessStatus(health.lastUpdatedAt)
-  const daysAgo = daysAgoFromNow(health.lastUpdatedAt)
-  const freshness = freshnessLabel(freshnessStatus)
-
-  // Inception-aware completeness: total actual / total expected (within each ticker's own window)
-  const totalExpected = topMissingV2.reduce((s: number, r: { expectedDays: number }) => s + r.expectedDays, 0)
-  const totalActualForMissing = topMissingV2.reduce((s: number, r: { actualDays: number }) => s + r.actualDays, 0)
+  // Inception-aware completeness: total actual / total expected (within each ticker's own window).
+  // Always computed from unfiltered data so search doesn't affect the health metrics.
   const inceptionAwareCompleteness =
-    totalExpected > 0 && topMissingV2.length > 0
-      ? Math.min((totalActualForMissing / totalExpected) * 100, 100)
-      : health.completenessPercent  // fallback to original if V2 not available
+    inceptionAware.completeness ?? health.completenessPercent
 
-  const verdict = healthVerdict(inceptionAwareCompleteness)
+  // Aggregate missingness breakdown (unfiltered)
+  const totalTrueMissing = inceptionAware.totalTrueMissing
+  const totalPreInception = inceptionAware.totalPreInception
+
+  // ── Multi-metric health inputs ───────────────────────────────────────────────
+  const trueMissingRate = inceptionAware.trueMissingRate
+
+  // Convert cached calendar-day gaps into trading-day-equivalent thresholds.
+  const maxGapDays = tickerRanges.reduce(
+    (max, r) => Math.max(max, calendarGapToTradingDays(r.maxGapDays ?? 0)),
+    0
+  )
+
+  const selectedBenchmarkCoverage =
+    (allBenchmarkCovs ?? []).find((coverage) => coverage.ticker === selectedBenchmark) ?? null
+  const selectedBenchmarkRange =
+    tickerRanges.find((range) => range.ticker === selectedBenchmark) ?? null
+  const selectedBenchmarkRow =
+    inceptionAware.rows.find((row) => row.ticker === selectedBenchmark) ?? null
+  const benchmarkTrueMissingRate =
+    selectedBenchmarkRow && selectedBenchmarkRow.expectedDays > 0
+      ? selectedBenchmarkRow.trueMissingDays / selectedBenchmarkRow.expectedDays
+      : selectedBenchmarkCoverage && selectedBenchmarkCoverage.expectedDays > 0
+        ? selectedBenchmarkCoverage.missingDays / selectedBenchmarkCoverage.expectedDays
+        : selectedBenchmarkRange
+          ? 0
+          : 1
+  const benchmarkMaxGapDays = calendarGapToTradingDays(selectedBenchmarkRange?.maxGapDays ?? 0)
+
+  const healthAssessment = assessDataHealth({
+    completeness: inceptionAwareCompleteness,
+    requiredNotIngested: notIngested.length,
+    trueMissingRate,
+    maxGapDays,
+    benchmarkTicker: selectedBenchmark,
+    benchmarkTrueMissingRate,
+    benchmarkMaxGapDays,
+  })
+
+  const healthStatus = healthAssessment.status
+  const verdict = healthVerdict(healthStatus)
   const { Icon: VerdictIcon } = verdict
 
-  // Aggregate missingness breakdown
-  const totalTrueMissing = topMissingV2.reduce((s: number, r: { trueMissingDays: number }) => s + r.trueMissingDays, 0)
-  const totalPreInception = topMissingV2.reduce((s: number, r: { preInceptionDays: number }) => s + r.preInceptionDays, 0)
-
   const isDev = process.env.NODE_ENV !== "production"
+
+  function buildDataHref(nextMode: "backtest" | "full") {
+    const hrefParams = new URLSearchParams()
+    if (nextMode === "full") {
+      hrefParams.set("mode", "full")
+    }
+    if (params.q) {
+      hrefParams.set("q", params.q)
+    }
+    if (diagnostics) {
+      hrefParams.set("diagnostics", "1")
+    }
+    if (hasExplicitBenchmark && params.benchmark) {
+      hrefParams.set("benchmark", params.benchmark)
+    }
+    const queryString = hrefParams.toString()
+    return queryString ? `/data?${queryString}` : "/data"
+  }
 
   return (
     <AppShell title="Data">
       {/* ------------------------------------------------------------------ */}
+      {/* Active-ingestion banner                                             */}
+      {/* ------------------------------------------------------------------ */}
+      {diagnostics && activeJobCount > 0 && (
+        <Card className="mb-3 border-blue-800/40 bg-blue-950/30">
+          <CardContent className="flex items-start gap-3 py-4">
+            <Loader2 className="mt-0.5 h-4 w-4 flex-shrink-0 animate-spin text-blue-400" />
+            <div>
+              <p className="text-sm font-semibold text-foreground">
+                Updating market data ({activeJobCount} job{activeJobCount !== 1 ? "s" : ""})
+              </p>
+              <p className="mt-0.5 text-xs text-blue-300/90">
+                Data cutoff will advance when complete.
+              </p>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* ------------------------------------------------------------------ */}
+      {/* Search bar + mode toggle (inline row)                              */}
+      {/* ------------------------------------------------------------------ */}
+      <div className="flex items-center gap-2 mb-3 flex-wrap">
+        {/* Ticker search — GET form so URL stays shareable */}
+        <form method="GET" action="/data" className="flex items-center gap-1.5 flex-1 min-w-[160px] max-w-xs">
+          {/* Preserve mode param if active */}
+          {mode === "full" && <input type="hidden" name="mode" value="full" />}
+          {diagnostics && <input type="hidden" name="diagnostics" value="1" />}
+          {hasExplicitBenchmark && params.benchmark && (
+            <input type="hidden" name="benchmark" value={params.benchmark} />
+          )}
+          <div className="relative flex-1">
+            <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground pointer-events-none" />
+            <input
+              type="text"
+              name="q"
+              defaultValue={params.q ?? ""}
+              placeholder="Search tickers…"
+              className="w-full pl-7 pr-3 py-1.5 text-xs bg-muted/40 border border-border rounded-md text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+            />
+          </div>
+        </form>
+
+        {/* Mode toggle */}
+        <div className="flex items-center gap-1 p-1 rounded-lg bg-muted/40 border border-border w-fit">
+          <Link
+            href={buildDataHref("backtest")}
+            className={`text-xs px-3 py-1.5 rounded-md font-medium transition-colors ${
+              mode === "backtest"
+                ? "bg-card text-foreground shadow-sm"
+                : "text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            Backtest-ready
+          </Link>
+          <Link
+            href={buildDataHref("full")}
+            className={`text-xs px-3 py-1.5 rounded-md font-medium transition-colors ${
+              mode === "full"
+                ? "bg-card text-foreground shadow-sm"
+                : "text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            Advanced
+          </Link>
+        </div>
+      </div>
+
+      {/* ------------------------------------------------------------------ */}
       {/* Product copy                                                        */}
       {/* ------------------------------------------------------------------ */}
-      <div className="mb-1">
-        <p className="text-sm text-foreground">
-          Monitor price coverage, detect gaps that bias signals, and ingest/backfill
-          tickers and benchmarks so backtests remain reliable.
-        </p>
-        <p className="text-xs text-muted-foreground mt-0.5">
-          Backtest-ready focuses on your recommended research window; Full history
-          shows DB-wide earliest coverage and pre-inception counts.
+      <div className="mb-3">
+        <p className="text-xs text-muted-foreground">
+          FactorLab now runs against a fixed dataset cutoff instead of chasing the newest rows all day. Coverage and missingness are measured only through{" "}
+          <span className="font-mono text-foreground">{formatISODate(windowEnd)}</span>.
+          {mode === "full" && (
+            <> Advanced mode shows the wider visible history while keeping the same cutoff.</>
+          )}
         </p>
       </div>
 
       {/* ------------------------------------------------------------------ */}
-      {/* Mode toggle                                                         */}
+      {/* Data explainer callout                                              */}
       {/* ------------------------------------------------------------------ */}
-      <div className="flex items-center gap-1 mb-4 p-1 rounded-lg bg-muted/40 border border-border w-fit">
-        <Link
-          href="/data"
-          className={`text-xs px-3 py-1.5 rounded-md font-medium transition-colors ${
-            mode === "backtest"
-              ? "bg-card text-foreground shadow-sm"
-              : "text-muted-foreground hover:text-foreground"
-          }`}
-        >
-          Backtest-ready
-        </Link>
-        <Link
-          href="/data?mode=full"
-          className={`text-xs px-3 py-1.5 rounded-md font-medium transition-colors ${
-            mode === "full"
-              ? "bg-card text-foreground shadow-sm"
-              : "text-muted-foreground hover:text-foreground"
-          }`}
-        >
-          Full history
-        </Link>
-      </div>
-
-      {mode === "full" && (
-        <div className="flex items-start gap-2 mb-4 px-3 py-2 rounded-md bg-amber-950/30 border border-amber-800/40">
-          <AlertTriangle className="w-3.5 h-3.5 text-amber-400 flex-shrink-0 mt-0.5" />
-          <p className="text-xs text-amber-300/80">
-            <strong>Full history mode:</strong> Coverage window starts at the DB global minimum. Pre-inception
-            counts are large because tickers like TSLA, META, AVGO did not exist yet — this is expected.
-          </p>
+      <div className="mb-4 rounded-lg border border-border bg-muted/40 px-4 py-3">
+        <div className="flex gap-2">
+          <Info className="w-4 h-4 mt-0.5 flex-shrink-0 text-muted-foreground" />
+          <dl className="text-xs text-muted-foreground space-y-2">
+            <div>
+              <dt className="font-medium text-foreground">Why data can be incomplete</dt>
+              <dd className="mt-0.5">Market data isn&apos;t always perfectly continuous. Some assets didn&apos;t exist in earlier years, providers occasionally miss days, and newly fetched rows should not immediately change the effective backtest window.</dd>
+            </div>
+            <div>
+              <dt className="font-medium text-foreground">What FactorLab does</dt>
+              <dd className="mt-0.5">FactorLab is inception-aware, caps the visible dataset at a global cutoff date, and advances that cutoff on scheduled refreshes. If missing data would bias a run inside that cutoff, FactorLab will surface it in diagnostics and preflight checks.</dd>
+            </div>
+            <div>
+              <dt className="font-medium text-foreground">How to interpret the score</dt>
+              <dd className="mt-0.5">&ldquo;Completeness&rdquo; reflects true gaps within each ticker&apos;s available history up to the current cutoff. It does not penalize periods before a ticker existed or dates after the cutoff.</dd>
+            </div>
+          </dl>
         </div>
-      )}
+      </div>
 
       {/* ------------------------------------------------------------------ */}
       {/* Health verdict banner                                               */}
@@ -228,7 +337,7 @@ export default async function DataPage({
               Data Health:{" "}
               <span className={verdict.textCls}>{verdict.label}</span>
             </p>
-            <p className="text-xs text-muted-foreground mt-0.5">{verdict.desc}</p>
+            <p className="mt-0.5 text-xs text-muted-foreground">{healthAssessment.reason}</p>
           </div>
         </CardContent>
       </Card>
@@ -236,7 +345,7 @@ export default async function DataPage({
       {/* ------------------------------------------------------------------ */}
       {/* Metrics grid                                                        */}
       {/* ------------------------------------------------------------------ */}
-      <div className="grid gap-4 grid-cols-2 md:grid-cols-3 xl:grid-cols-5 mb-4">
+      <div className="grid gap-4 grid-cols-2 md:grid-cols-3 xl:grid-cols-6 mb-4">
         {/* Tickers Ingested */}
         <Card className="bg-card border-border">
           <CardHeader className="pb-2">
@@ -253,28 +362,61 @@ export default async function DataPage({
           </CardContent>
         </Card>
 
-        {/* Coverage Window */}
+        {/* Current Through */}
         <Card className="bg-card border-border">
           <CardHeader className="pb-2">
             <CardTitle className="text-xs font-medium text-muted-foreground flex items-center">
-              Coverage Window
-              <InfoTooltip text="Earliest and latest trading date present across all tickers in the database." />
+              Current Through
+              <InfoTooltip text="The fixed maximum date used for coverage, diagnostics, and backtest end dates." />
             </CardTitle>
           </CardHeader>
           <CardContent className="flex items-center justify-between gap-2">
             <p className="text-xs font-medium text-foreground font-mono leading-snug">
-              {health.dateStart && health.dateEnd ? (
+              {windowEnd ? (
                 <>
-                  {formatISODate(health.dateStart)}
+                  {formatISODate(windowEnd)}
                   <br />
-                  <span className="text-muted-foreground">→ </span>
-                  {formatISODate(health.dateEnd)}
+                  <span className="text-muted-foreground">Last complete trading day</span>
                 </>
               ) : (
                 "—"
               )}
             </p>
             <Calendar className="w-5 h-5 text-muted-foreground flex-shrink-0" />
+          </CardContent>
+        </Card>
+
+        {/* Update schedule */}
+        <Card className="bg-card border-border">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-xs font-medium text-muted-foreground flex items-center">
+              Update Schedule
+              <InfoTooltip text="Required monthly refresh cadence for all supported universe and benchmark tickers." />
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-1">
+            <p className="text-sm font-semibold text-foreground">Monthly</p>
+            <p className="text-xs text-muted-foreground">
+              next run: <span className="font-mono text-foreground">{dataState.nextMonthlyRefresh}</span> UTC
+            </p>
+          </CardContent>
+        </Card>
+
+        {/* Daily patch */}
+        <Card className="bg-card border-border">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-xs font-medium text-muted-foreground flex items-center">
+              Daily Patch
+              <InfoTooltip text="Optional daily gap-repair pass for required tickers. Disabled keeps the dataset on monthly-only updates." />
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-1">
+            <p className={`text-sm font-semibold ${dataState.dailyUpdatesEnabled ? "text-emerald-400" : "text-muted-foreground"}`}>
+              {dataState.dailyUpdatesEnabled ? "Enabled" : "Disabled"}
+            </p>
+            <p className="text-xs text-muted-foreground">
+              Last refresh: <span className="font-mono text-foreground">{formatISOTimestamp(dataState.lastUpdateAt)}</span>
+            </p>
           </CardContent>
         </Card>
 
@@ -319,11 +461,11 @@ export default async function DataPage({
           <CardContent className="flex items-center justify-between">
             <p
               className={`text-2xl font-semibold ${
-                inceptionAwareCompleteness === null
+                healthStatus === "NO_DATA"
                   ? "text-muted-foreground"
-                  : inceptionAwareCompleteness >= 99
+                  : healthStatus === "GOOD"
                     ? "text-emerald-400"
-                    : inceptionAwareCompleteness >= 95
+                    : healthStatus === "WARNING"
                       ? "text-amber-400"
                       : "text-red-400"
               }`}
@@ -334,41 +476,9 @@ export default async function DataPage({
             </p>
             <CheckCircle2
               className={`w-5 h-5 ${
-                inceptionAwareCompleteness !== null && inceptionAwareCompleteness >= 99
-                  ? "text-emerald-400"
-                  : "text-muted-foreground"
+                healthStatus === "GOOD" ? "text-emerald-400" : "text-muted-foreground"
               }`}
             />
-          </CardContent>
-        </Card>
-
-        {/* Last Updated + freshness badge */}
-        <Card className="bg-card border-border">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-xs font-medium text-muted-foreground flex items-center">
-              Last Updated
-              <InfoTooltip text="Timestamp of the most recent data ingestion run recorded in data_last_updated." />
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="flex flex-col gap-1.5">
-            <div className="flex items-start justify-between gap-2">
-              <p className="text-xs font-mono text-foreground leading-snug">
-                {formatISOTimestamp(health.lastUpdatedAt)}
-              </p>
-              <Clock3 className="w-4 h-4 text-muted-foreground flex-shrink-0 mt-0.5" />
-            </div>
-            <div className="flex items-center gap-2">
-              <span
-                className={`text-[10px] font-medium px-1.5 py-0.5 rounded-full ${freshness.className}`}
-              >
-                {freshness.label}
-              </span>
-              {daysAgo !== null && (
-                <span className="text-[10px] text-muted-foreground">
-                  {daysAgo === 0 ? "today" : `${daysAgo}d ago`}
-                </span>
-              )}
-            </div>
           </CardContent>
         </Card>
       </div>
@@ -387,9 +497,8 @@ export default async function DataPage({
         <div className="flex items-start gap-2 mb-4 px-3 py-2 rounded-md bg-amber-950/30 border border-amber-800/40">
           <AlertTriangle className="w-3.5 h-3.5 text-amber-400 flex-shrink-0 mt-0.5" />
           <p className="text-xs text-amber-300/80">
-            <strong>Auto-ingesting universe tickers:</strong>{" "}
-            <span className="font-mono">{notIngested.join(", ")}</span>. These tickers are being
-            downloaded — runs will include them once ingestion completes.
+            <strong>Missing from the current cutoff dataset:</strong>{" "}
+            <span className="font-mono">{notIngested.join(", ")}</span>. These symbols stay visible in Diagnostics and are picked up by scheduled refreshes or run preflight when needed.
           </p>
         </div>
       )}
@@ -397,10 +506,88 @@ export default async function DataPage({
       {/* ------------------------------------------------------------------ */}
       {/* Two-column: top-missing + benchmark/ingestion (diagnostics only)   */}
       {/* ------------------------------------------------------------------ */}
-      <DiagnosticsSection>
-      <div className="grid gap-4 md:grid-cols-7 mb-4">
-        {/* Most Missing Tickers (inception-aware) */}
-        <Card className="bg-card border-border md:col-span-4">
+      {diagnostics ? (
+        <div className="grid gap-4 md:grid-cols-7 mb-4">
+          {/* Most Missing Tickers (inception-aware) */}
+          <Card className="bg-card border-border md:col-span-4">
+            <CardHeader className="pb-3">
+              <CardTitle className="text-sm font-semibold text-foreground">
+                Tickers with True Gaps
+              </CardTitle>
+              <p className="text-xs text-muted-foreground">
+                Ranked by true missing days (gaps within each ticker&apos;s own trading window).
+                Pre-inception dates are shown separately and are not errors.
+              </p>
+            </CardHeader>
+            <CardContent>
+              <TopMissingTable rows={topMissingV2} />
+            </CardContent>
+          </Card>
+
+          {/* Right column */}
+          <div className="md:col-span-3 flex flex-col gap-4">
+            {/* Benchmark coverage */}
+            <BenchmarkCoverageCard
+              benchmarks={allBenchmarkCovs === null ? null : benchmarkRows}
+              isDev={isDev}
+            />
+
+            {/* Ingestion history */}
+            <Card className="bg-card border-border flex-1">
+              <CardHeader className="pb-3">
+                <CardTitle className="text-sm font-semibold text-foreground">
+                  Recent Ingestion Activity
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                {ingestionLog.length === 0 ? (
+                  <p className="text-xs text-muted-foreground">
+                    No ingestion history yet. Records appear here after the first
+                    data ingestion run writes to{" "}
+                    <span className="font-mono">data_ingestion_log</span>.
+                  </p>
+                ) : (
+                  <div className="space-y-2">
+                    {ingestionLog.map((entry) => (
+                      <div
+                        key={entry.id}
+                        className="flex items-start justify-between gap-2 text-xs border-b border-border/50 last:border-0 pb-2 last:pb-0"
+                      >
+                        <div className="min-w-0">
+                          <p className="font-mono text-muted-foreground truncate">
+                            {formatISOTimestamp(entry.ingested_at)}
+                          </p>
+                          <p className="text-muted-foreground/70 mt-0.5">
+                            {entry.tickers_updated} tickers ·{" "}
+                            {entry.rows_upserted.toLocaleString()} rows
+                          </p>
+                          {entry.note && (
+                            <p className="text-muted-foreground/60 mt-0.5 truncate">
+                              {entry.note}
+                            </p>
+                          )}
+                        </div>
+                        <span
+                          className={`flex-shrink-0 font-medium capitalize ${
+                            entry.status === "success"
+                              ? "text-emerald-400"
+                              : entry.status === "partial"
+                                ? "text-amber-400"
+                                : "text-red-400"
+                          }`}
+                        >
+                          {entry.status}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </div>
+        </div>
+      ) : (
+        <Card className="bg-card border-border mb-4">
           <CardHeader className="pb-3">
             <CardTitle className="text-sm font-semibold text-foreground">
               Tickers with True Gaps
@@ -414,70 +601,7 @@ export default async function DataPage({
             <TopMissingTable rows={topMissingV2} />
           </CardContent>
         </Card>
-
-        {/* Right column */}
-        <div className="md:col-span-3 flex flex-col gap-4">
-          {/* Benchmark coverage */}
-          <BenchmarkCoverageCard
-            benchmarks={allBenchmarkCovs === null ? null : benchmarkRows}
-            isDev={isDev}
-          />
-
-          {/* Ingestion history */}
-          <Card className="bg-card border-border flex-1">
-            <CardHeader className="pb-3">
-              <CardTitle className="text-sm font-semibold text-foreground">
-                Recent Ingestion Activity
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              {ingestionLog.length === 0 ? (
-                <p className="text-xs text-muted-foreground">
-                  No ingestion history yet. Records appear here after the first
-                  data ingestion run writes to{" "}
-                  <span className="font-mono">data_ingestion_log</span>.
-                </p>
-              ) : (
-                <div className="space-y-2">
-                  {ingestionLog.map((entry) => (
-                    <div
-                      key={entry.id}
-                      className="flex items-start justify-between gap-2 text-xs border-b border-border/50 last:border-0 pb-2 last:pb-0"
-                    >
-                      <div className="min-w-0">
-                        <p className="font-mono text-muted-foreground truncate">
-                          {formatISOTimestamp(entry.ingested_at)}
-                        </p>
-                        <p className="text-muted-foreground/70 mt-0.5">
-                          {entry.tickers_updated} tickers ·{" "}
-                          {entry.rows_upserted.toLocaleString()} rows
-                        </p>
-                        {entry.note && (
-                          <p className="text-muted-foreground/60 mt-0.5 truncate">
-                            {entry.note}
-                          </p>
-                        )}
-                      </div>
-                      <span
-                        className={`flex-shrink-0 font-medium capitalize ${
-                          entry.status === "success"
-                            ? "text-emerald-400"
-                            : entry.status === "partial"
-                              ? "text-amber-400"
-                              : "text-red-400"
-                        }`}
-                      >
-                        {entry.status}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        </div>
-      </div>
-      </DiagnosticsSection>
+      )}
 
       {/* ------------------------------------------------------------------ */}
       {/* "What this affects" callout                                         */}
