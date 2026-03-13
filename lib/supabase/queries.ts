@@ -2,6 +2,13 @@ import "server-only"
 import { createClient } from "./server"
 import { createAdminClient } from "./admin"
 import {
+  DATA_STATE_SINGLETON_ID,
+  getLastCompleteTradingDayUtc,
+  getNextMonthStartUtc,
+  isDailyUpdatesEnabled,
+  type DataUpdateMode,
+} from "@/lib/data-cutoff"
+import {
   BENCHMARK_OPTIONS,
   getRunBenchmark,
   inferPossibleOverlapFromUniverse,
@@ -16,6 +23,7 @@ import type {
   JobRow,
   PriceRow,
   DataLastUpdatedRow,
+  DataStateRow,
   ModelMetadataRow,
   ModelPredictionRow,
   PositionRow,
@@ -29,6 +37,10 @@ import type {
   DataIngestJobStatus,
 } from "./types"
 import { COVERAGE_WINDOW_START, TICKER_INCEPTION_DATES } from "./types"
+import {
+  isMissingDataIngestExtendedColumnError,
+  normalizeDataIngestStatus,
+} from "@/lib/data-ingest-jobs"
 import { UNIVERSE_PRESETS } from "@/lib/universe-config"
 
 // Re-export for server-side consumers that import types from this module
@@ -40,6 +52,7 @@ export type {
   JobRow,
   PriceRow,
   DataLastUpdatedRow,
+  DataStateRow,
   ModelMetadataRow,
   ModelPredictionRow,
   PositionRow,
@@ -64,6 +77,15 @@ export type DataHealthSummary = {
   lastUpdatedAt: string | null
 }
 
+export type DataStateSummary = {
+  dataCutoffDate: string | null
+  lastUpdateAt: string | null
+  updateMode: DataUpdateMode | null
+  updatedBy: string | null
+  nextMonthlyRefresh: string
+  dailyUpdatesEnabled: boolean
+}
+
 
 export type IngestionLogEntry = {
   id: string
@@ -86,6 +108,39 @@ type GetRunsOptions = {
   status?: string
   strategy?: string
   universe?: string
+}
+
+function getErrorMessage(error: unknown): string | undefined {
+  if (typeof error === "string") return error
+  if (error && typeof error === "object" && "message" in error) {
+    const { message } = error as { message?: unknown }
+    return typeof message === "string" ? message : undefined
+  }
+  return undefined
+}
+
+function isAbortLikeError(error: unknown): boolean {
+  const message = getErrorMessage(error)?.toLowerCase()
+  if (message && (message.includes("aborterror") || message.includes("operation was aborted"))) {
+    return true
+  }
+
+  if (error && typeof error === "object" && "name" in error) {
+    const { name } = error as { name?: unknown }
+    return name === "AbortError" || name === "TimeoutError"
+  }
+
+  return false
+}
+
+function logQueryError(scope: string, error: unknown): void {
+  if (isAbortLikeError(error)) return
+  console.error(`${scope} error:`, getErrorMessage(error) ?? error)
+}
+
+function logQueryException(scope: string, error: unknown): void {
+  if (isAbortLikeError(error)) return
+  console.error(`${scope} exception:`, error)
 }
 
 function isMissingBenchmarkColumnError(message?: string): boolean {
@@ -174,13 +229,13 @@ export async function getRuns(options: GetRunsOptions = {}): Promise<RunWithMetr
     }
 
     if (error) {
-      console.error("getRuns error:", error.message)
+      logQueryError("getRuns", error)
       return []
     }
 
     return (data ?? []) as RunWithMetrics[]
   } catch (err) {
-    console.error("getRuns exception:", err)
+    logQueryException("getRuns", err)
     return []
   }
 }
@@ -207,12 +262,12 @@ export async function getRunsCount(options: Omit<GetRunsOptions, "limit"> = {}):
     const { count, error } = await query
 
     if (error) {
-      console.error("getRunsCount error:", error.message)
+      logQueryError("getRunsCount", error)
       return 0
     }
     return count ?? 0
   } catch (err) {
-    console.error("getRunsCount exception:", err)
+    logQueryException("getRunsCount", err)
     return 0
   }
 }
@@ -479,29 +534,98 @@ export async function getCompareRunBundles(limit = 30): Promise<CompareRunBundle
 export type DataCoverage = {
   minDate: string | null
   maxDate: string | null
+  lastUpdatedAt?: string | null
+}
+
+export async function getDataState(): Promise<DataStateSummary> {
+  try {
+    const supabase = createAdminClient()
+    const { data, error } = await supabase
+      .from("data_state")
+      .select("data_cutoff_date, last_update_at, update_mode, updated_by")
+      .eq("id", DATA_STATE_SINGLETON_ID)
+      .maybeSingle() as {
+        data: Pick<DataStateRow, "data_cutoff_date" | "last_update_at" | "update_mode" | "updated_by"> | null
+        error: { message: string } | null
+      }
+
+    if (!error && data) {
+      return {
+        dataCutoffDate: data.data_cutoff_date,
+        lastUpdateAt: data.last_update_at,
+        updateMode: data.update_mode,
+        updatedBy: data.updated_by,
+        nextMonthlyRefresh: getNextMonthStartUtc(),
+        dailyUpdatesEnabled: isDailyUpdatesEnabled(),
+      }
+    }
+
+    const safeCutoff = getLastCompleteTradingDayUtc()
+    const { data: maxRow } = await supabase
+      .from("prices")
+      .select("date")
+      .order("date", { ascending: false })
+      .limit(1)
+      .maybeSingle()
+
+    const fallbackMaxDate = (maxRow as { date?: string } | null)?.date ?? null
+    const fallbackCutoff =
+      fallbackMaxDate && fallbackMaxDate < safeCutoff ? fallbackMaxDate : safeCutoff
+
+    return {
+      dataCutoffDate: fallbackCutoff,
+      lastUpdateAt: null,
+      updateMode: null,
+      updatedBy: null,
+      nextMonthlyRefresh: getNextMonthStartUtc(),
+      dailyUpdatesEnabled: isDailyUpdatesEnabled(),
+    }
+  } catch {
+    return {
+      dataCutoffDate: getLastCompleteTradingDayUtc(),
+      lastUpdateAt: null,
+      updateMode: null,
+      updatedBy: null,
+      nextMonthlyRefresh: getNextMonthStartUtc(),
+      dailyUpdatesEnabled: isDailyUpdatesEnabled(),
+    }
+  }
 }
 
 export async function getDataCoverage(): Promise<DataCoverage> {
   try {
     const supabase = createAdminClient()
-    type AggRow = { ticker_count: number; min_date: string | null; max_date: string | null; actual_rows: number }
-    const { data, error } = await supabase.rpc("get_data_health_agg") as unknown as {
-      data: AggRow | null
-      error: { message: string } | null
-    }
-    if (!error && data) {
-      return { minDate: data.min_date, maxDate: data.max_date }
-    }
-    const [minRes, maxRes] = await Promise.all([
-      supabase.from("prices").select("date").order("date", { ascending: true }).limit(1),
-      supabase.from("prices").select("date").order("date", { ascending: false }).limit(1),
+    const [dataState, firstStatsRes] = await Promise.all([
+      getDataState(),
+      supabase
+        .from("ticker_stats")
+        .select("first_date")
+        .order("first_date", { ascending: true })
+        .limit(1) as unknown as Promise<{
+          data: Array<{ first_date: string }> | null
+          error: { message: string } | null
+        }>,
     ])
+
+    let minDate = firstStatsRes.data?.[0]?.first_date ?? null
+    if (!minDate && dataState.dataCutoffDate) {
+      const { data: minRow } = await supabase
+        .from("prices")
+        .select("date")
+        .lte("date", dataState.dataCutoffDate)
+        .order("date", { ascending: true })
+        .limit(1)
+        .maybeSingle()
+      minDate = (minRow as { date?: string } | null)?.date ?? null
+    }
+
     return {
-      minDate: minRes.data?.[0]?.date ?? null,
-      maxDate: maxRes.data?.[0]?.date ?? null,
+      minDate,
+      maxDate: dataState.dataCutoffDate,
+      lastUpdatedAt: dataState.lastUpdateAt,
     }
   } catch {
-    return { minDate: null, maxDate: null }
+    return { minDate: null, maxDate: null, lastUpdatedAt: null }
   }
 }
 
@@ -535,53 +659,51 @@ export async function getDataHealthSummary(): Promise<DataHealthSummary> {
 
   try {
     const supabase = createAdminClient()
+    type StatsRow = {
+      symbol: string
+      first_date: string
+      distinct_days: string | number
+    }
+    const [dataState, statsRes] = await Promise.all([
+      getDataState(),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (supabase as any)
+        .from("ticker_stats")
+        .select("symbol, first_date, distinct_days") as Promise<{
+          data: StatsRow[] | null
+          error: { message: string } | null
+        }>,
+    ])
 
-    // Try the efficient RPC aggregate first (requires migration 20260305_data_enhancements.sql).
-    // Fall back to individual queries if the function isn't deployed yet.
-    // Note: both promises are started before either is awaited, so they run in parallel.
-    // Cast the RPC promise — the function isn't in the generated schema types yet
-    // (requires migration 20260305_data_enhancements.sql to be applied first).
-    type AggRow = { ticker_count: number; min_date: string | null; max_date: string | null; actual_rows: number }
-    const aggResPromise = supabase.rpc("get_data_health_agg") as unknown as Promise<{
-      data: AggRow | null
-      error: { message: string } | null
-    }>
-    const lastUpdatedResPromise = supabase
-      .from("data_last_updated")
-      .select("last_updated_at, tickers_ingested")
-      .eq("source", "yfinance_sp100")
-      .maybeSingle()
-    const aggRes = await aggResPromise
-    const lastUpdatedRes = await lastUpdatedResPromise
+    let tickersCount = 0
+    let dateStart: string | null = null
+    const dateEnd = dataState.dataCutoffDate
+    let actualTickerDays = 0
 
-    let tickersCount: number
-    let dateStart: string | null
-    let dateEnd: string | null
-    let actualTickerDays: number
-
-    if (!aggRes.error && aggRes.data) {
-      const agg = aggRes.data as {
+    if (!statsRes.error && statsRes.data) {
+      tickersCount = statsRes.data.length
+      dateStart = statsRes.data.reduce<string | null>(
+        (min, row) => (!min || row.first_date < min ? row.first_date : min),
+        null
+      )
+      actualTickerDays = statsRes.data.reduce(
+        (sum, row) => sum + Number(row.distinct_days ?? 0),
+        0
+      )
+    } else if (dateEnd) {
+      type AggRow = {
         ticker_count: number
         min_date: string | null
         max_date: string | null
         actual_rows: number
       }
-      tickersCount = agg.ticker_count ?? 0
-      dateStart = agg.min_date ?? null
-      dateEnd = agg.max_date ?? null
-      actualTickerDays = agg.actual_rows ?? 0
-    } else {
-      // Fallback: use data_last_updated.tickers_ingested for count,
-      // and separate lightweight queries for dates and row count.
-      const [minDateRes, maxDateRes, rowsCountRes] = await Promise.all([
-        supabase.from("prices").select("date").order("date", { ascending: true }).limit(1),
-        supabase.from("prices").select("date").order("date", { ascending: false }).limit(1),
-        supabase.from("prices").select("*", { count: "exact", head: true }),
-      ])
-      tickersCount = lastUpdatedRes.data?.tickers_ingested ?? 0
-      dateStart = minDateRes.data?.[0]?.date ?? null
-      dateEnd = maxDateRes.data?.[0]?.date ?? null
-      actualTickerDays = rowsCountRes.count ?? 0
+      const { data: aggData } = await supabase.rpc("get_data_health_agg") as unknown as {
+        data: AggRow | null
+        error: { message: string } | null
+      }
+      tickersCount = aggData?.ticker_count ?? 0
+      dateStart = aggData?.min_date ?? null
+      actualTickerDays = aggData?.actual_rows ?? 0
     }
 
     let businessDaysInWindow = 0
@@ -608,7 +730,7 @@ export async function getDataHealthSummary(): Promise<DataHealthSummary> {
       actualTickerDays,
       missingTickerDays,
       completenessPercent,
-      lastUpdatedAt: lastUpdatedRes.data?.last_updated_at ?? null,
+      lastUpdatedAt: dataState.lastUpdateAt,
     }
   } catch (err) {
     console.error("getDataHealthSummary exception:", err)
@@ -836,10 +958,11 @@ export async function getAllBenchmarkCoverage(
       statsData !== null &&
       statsData.length > 0 &&
       statsData.some((r) => r.coverage_window_days !== null)
+    const useTickerStatsFastPath = fastPathOk && dateStart === COVERAGE_WINDOW_START
 
     let agg: Map<string, { actualDays: number; earliest: string | null; latest: string | null }>
 
-    if (fastPathOk) {
+    if (useTickerStatsFastPath) {
       // Build from ticker_stats — zero prices queries.
       agg = new Map()
       for (const row of statsData!) {
@@ -972,17 +1095,22 @@ export async function getLatestDataIngestJobs(
         if (!normalized.includes(t)) continue
         result[t] = {
           id: j.id,
-          status: j.status,
+          status: normalizeDataIngestStatus(j.status),
           stage: j.stage ?? null,
           progress: j.progress ?? 0,
           symbol: j.symbol ?? null,
           start_date: j.start_date ?? null,
           end_date: j.end_date ?? null,
+          request_mode: j.request_mode ?? null,
+          batch_id: j.batch_id ?? null,
+          target_cutoff_date: j.target_cutoff_date ?? null,
+          requested_by: j.requested_by ?? null,
           error: j.error ?? null,
           error_message: j.error ?? null,
           created_at: j.created_at ?? null,
           started_at: j.started_at ?? null,
           updated_at: j.updated_at ?? null,
+          last_heartbeat_at: j.last_heartbeat_at ?? null,
           next_retry_at: j.next_retry_at ?? null,
           attempt_count: j.attempt_count ?? null,
         }
@@ -991,14 +1119,23 @@ export async function getLatestDataIngestJobs(
     }
 
     // Fallback: direct scan of data_ingest_jobs (all rows per symbol, pick latest in JS)
-    const { data, error } = await supabase
+    let { data, error } = await supabase
       .from("data_ingest_jobs")
-      .select("id, symbol, status, stage, progress, error, created_at, started_at, updated_at, next_retry_at, attempt_count, start_date, end_date")
+      .select("id, symbol, status, stage, progress, error, created_at, started_at, updated_at, next_retry_at, attempt_count, start_date, end_date, request_mode, batch_id, target_cutoff_date, requested_by, last_heartbeat_at")
       .in("symbol", normalized)
       .order("created_at", { ascending: false })
 
+    if (error && isMissingDataIngestExtendedColumnError(error.message)) {
+      const legacyFallback = await supabase
+        .from("data_ingest_jobs")
+        .select("id, symbol, status, stage, progress, error, created_at, started_at, updated_at, next_retry_at, attempt_count, start_date, end_date")
+        .in("symbol", normalized)
+        .order("created_at", { ascending: false })
+      data = legacyFallback.data
+      error = legacyFallback.error
+    }
+
     if (error) {
-      if (String(error.message).includes("does not exist")) return result
       console.error("getLatestDataIngestJobs fallback error:", error.message)
       return result
     }
@@ -1009,17 +1146,22 @@ export async function getLatestDataIngestJobs(
       if (result[t] !== null) continue // already have a newer row
       result[t] = {
         id: j.id,
-        status: j.status,
+        status: normalizeDataIngestStatus(j.status),
         stage: j.stage ?? null,
         progress: j.progress ?? 0,
         symbol: j.symbol ?? null,
         start_date: j.start_date ?? null,
         end_date: j.end_date ?? null,
+        request_mode: j.request_mode ?? null,
+        batch_id: j.batch_id ?? null,
+        target_cutoff_date: j.target_cutoff_date ?? null,
+        requested_by: j.requested_by ?? null,
         error: j.error ?? null,
         error_message: j.error ?? null,
         created_at: j.created_at ?? null,
         started_at: j.started_at ?? null,
         updated_at: j.updated_at ?? null,
+        last_heartbeat_at: j.last_heartbeat_at ?? null,
         next_retry_at: j.next_retry_at ?? null,
         attempt_count: j.attempt_count ?? null,
       }
@@ -1061,19 +1203,19 @@ export async function getRecentIngestionHistory(limit = 5): Promise<IngestionLog
  * Server-side: enqueue data_ingest_jobs for benchmark tickers that need action:
  *   - not_ingested (no price data at all)
  *   - needsHistoricalBackfill (earliestDate > inception date)
- *   - stale (latestDate < yesterday — incremental update needed)
+ *   - behind the current data cutoff (latestDate < data_cutoff_date)
  *
- * Skips tickers that already have an active (queued/running) job.
+ * Skips tickers that already have an active (queued/running/retrying) job.
  * Inserts into data_ingest_jobs (explicit-schema table).
- * Idempotent — safe to call on every page render.
+ * Deprecated for page-load use; retained for server-side repair flows.
  */
 export async function autoQueueBenchmarkIngestions(
   coverages: BenchmarkCoverage[],
   tickerStats?: TickerDateRange[]
 ): Promise<void> {
   try {
-    const today = new Date().toISOString().slice(0, 10)
-    const yesterday = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10)
+    const dataState = await getDataState()
+    const cutoffDate = dataState.dataCutoffDate ?? getLastCompleteTradingDayUtc()
 
     // Build a map of ticker → lastDate from ticker_stats for staleness check
     const lastDateMap = new Map<string, string>()
@@ -1086,7 +1228,7 @@ export async function autoQueueBenchmarkIngestions(
       if (c.status === "not_ingested") return true
       if (c.needsHistoricalBackfill) return true
       const lastDate = lastDateMap.get(c.ticker.toUpperCase()) ?? c.latestDate
-      if (lastDate && lastDate < yesterday) return true
+      if (lastDate && lastDate < cutoffDate) return true
       return false
     })
     if (needsAction.length === 0) return
@@ -1099,14 +1241,24 @@ export async function autoQueueBenchmarkIngestions(
       .from("data_ingest_jobs")
       .select("symbol, status, start_date, end_date, id")
       .in("symbol", needsAction.map((c) => c.ticker))
-      .in("status", ["queued", "running"])
+      .in("status", ["queued", "running", "retrying"])
 
     const activeBySymbol = new Map<string, { id: string; status: string; start_date: string; end_date: string }>()
     for (const j of activeJobs ?? []) {
       if (!activeBySymbol.has(j.symbol)) activeBySymbol.set(j.symbol, j)
     }
 
-    const toInsert: { symbol: string; start_date: string; end_date: string; status: string; stage: string; progress: number }[] = []
+    const toInsert: {
+      symbol: string
+      start_date: string
+      end_date: string
+      status: string
+      stage: string
+      progress: number
+      request_mode: string
+      target_cutoff_date: string
+      requested_by: string
+    }[] = []
     const toWiden: { id: string; start_date: string; end_date: string }[] = []
 
     for (const c of needsAction) {
@@ -1125,7 +1277,7 @@ export async function autoQueueBenchmarkIngestions(
           const next = new Date(lastDate)
           next.setDate(next.getDate() + 1)
           desiredStart = next.toISOString().slice(0, 10)
-          if (desiredStart > today) continue // Already current
+          if (desiredStart > cutoffDate) continue // Already current through the cutoff
         }
       }
 
@@ -1133,7 +1285,7 @@ export async function autoQueueBenchmarkIngestions(
         if (existing.status === "queued") {
           // Widen range if needed
           const newStart = desiredStart < existing.start_date ? desiredStart : existing.start_date
-          const newEnd = today > existing.end_date ? today : existing.end_date
+          const newEnd = cutoffDate > existing.end_date ? cutoffDate : existing.end_date
           if (newStart !== existing.start_date || newEnd !== existing.end_date) {
             toWiden.push({ id: existing.id, start_date: newStart, end_date: newEnd })
           }
@@ -1145,10 +1297,13 @@ export async function autoQueueBenchmarkIngestions(
       toInsert.push({
         symbol: c.ticker,
         start_date: desiredStart,
-        end_date: today,
+        end_date: cutoffDate,
         status: "queued",
         stage: "download",
         progress: 0,
+        request_mode: "manual",
+        target_cutoff_date: cutoffDate,
+        requested_by: "auto-queue:benchmark",
       })
     }
 
@@ -1177,16 +1332,16 @@ export async function autoQueueBenchmarkIngestions(
 
 /**
  * Idempotently queues data_ingest_jobs for all universe preset tickers that are
- * not yet ingested or are stale (last_date < yesterday). Safe to call on every
- * page render — duplicates are widened or skipped, not created.
+ * not yet ingested or are behind the current data cutoff. Deprecated for
+ * page-load use; duplicates are widened or skipped, not created.
  */
 export async function autoQueueUniverseIngestions(
   tickerRanges: TickerDateRange[]
 ): Promise<{ queued: string[]; widened: string[]; skipped: string[] }> {
   const result = { queued: [] as string[], widened: [] as string[], skipped: [] as string[] }
   try {
-    const today = new Date().toISOString().slice(0, 10)
-    const yesterday = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10)
+    const dataState = await getDataState()
+    const cutoffDate = dataState.dataCutoffDate ?? getLastCompleteTradingDayUtc()
 
     // All unique tickers from every universe preset
     const allUniverseTickers = [...new Set(Object.values(UNIVERSE_PRESETS).flat())]
@@ -1205,11 +1360,11 @@ export async function autoQueueUniverseIngestions(
 
       if (!stats || stats.actualDays === 0) {
         needsAction.push({ ticker, needsFullIngest: true, desiredStart: inceptionDate })
-      } else if (stats.lastDate && stats.lastDate < yesterday) {
+      } else if (stats.lastDate && stats.lastDate < cutoffDate) {
         const next = new Date(stats.lastDate)
         next.setDate(next.getDate() + 1)
         const nextStr = next.toISOString().slice(0, 10)
-        if (nextStr <= today) {
+        if (nextStr <= cutoffDate) {
           needsAction.push({ ticker, needsFullIngest: false, desiredStart: nextStr })
         } else {
           result.skipped.push(ticker)
@@ -1229,21 +1384,31 @@ export async function autoQueueUniverseIngestions(
       .from("data_ingest_jobs")
       .select("symbol, status, start_date, end_date, id")
       .in("symbol", needsAction.map((n) => n.ticker))
-      .in("status", ["queued", "running"])
+      .in("status", ["queued", "running", "retrying"])
 
     const activeBySymbol = new Map<string, { id: string; status: string; start_date: string; end_date: string }>()
     for (const j of activeJobs ?? []) {
       if (!activeBySymbol.has(j.symbol)) activeBySymbol.set(j.symbol, j)
     }
 
-    const toInsert: { symbol: string; start_date: string; end_date: string; status: string; stage: string; progress: number }[] = []
+    const toInsert: {
+      symbol: string
+      start_date: string
+      end_date: string
+      status: string
+      stage: string
+      progress: number
+      request_mode: string
+      target_cutoff_date: string
+      requested_by: string
+    }[] = []
 
     for (const { ticker, desiredStart } of needsAction) {
       const existing = activeBySymbol.get(ticker)
       if (existing) {
         if (existing.status === "queued") {
           const newStart = desiredStart < existing.start_date ? desiredStart : existing.start_date
-          const newEnd = today > existing.end_date ? today : existing.end_date
+          const newEnd = cutoffDate > existing.end_date ? cutoffDate : existing.end_date
           if (newStart !== existing.start_date || newEnd !== existing.end_date) {
             await admin
               .from("data_ingest_jobs")
@@ -1263,10 +1428,13 @@ export async function autoQueueUniverseIngestions(
       toInsert.push({
         symbol: ticker,
         start_date: desiredStart,
-        end_date: today,
+        end_date: cutoffDate,
         status: "queued",
         stage: "download",
         progress: 0,
+        request_mode: "manual",
+        target_cutoff_date: cutoffDate,
+        requested_by: "auto-queue:universe",
       })
     }
 
@@ -1386,12 +1554,13 @@ export async function getRunsBacktestWindowSummary(): Promise<BacktestWindowSumm
 }
 
 // ---------------------------------------------------------------------------
-// Active ingest job count (for data-page banner)
+// Active scheduled-refresh job count (for data-page banner)
 // ---------------------------------------------------------------------------
 
 /**
- * Returns the number of data_ingest_jobs currently queued or running.
- * Used by the /data page to show a "background update in progress" banner.
+ * Returns the number of scheduled-refresh data_ingest_jobs currently queued,
+ * running, or retrying. Manual/preflight jobs are excluded so the banner only
+ * reflects cutoff-advancing refresh batches.
  * Returns 0 on error (non-fatal).
  */
 export async function getActiveIngestJobCount(): Promise<number> {
@@ -1401,7 +1570,8 @@ export async function getActiveIngestJobCount(): Promise<number> {
     const { count, error } = await (admin as any)
       .from("data_ingest_jobs")
       .select("*", { count: "exact", head: true })
-      .in("status", ["queued", "running"])
+      .in("status", ["queued", "running", "retrying"])
+      .not("batch_id", "is", null)
     if (error) return 0
     return count ?? 0
   } catch {
@@ -1518,11 +1688,18 @@ export async function getBenchmarkOverlapStateForRun(
 export async function getAllTickerStats(): Promise<TickerDateRange[]> {
   try {
     const supabase = createAdminClient()
-    type StatsRow = { symbol: string; first_date: string; last_date: string; distinct_days: string | number }
+    type StatsRow = {
+      symbol: string
+      first_date: string
+      last_date: string
+      distinct_days: string | number
+      max_gap_days_window: string | number | null
+      updated_at: string | null
+    }
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { data, error } = await (supabase as any)
       .from("ticker_stats")
-      .select("symbol, first_date, last_date, distinct_days") as { data: StatsRow[] | null; error: { message: string } | null }
+      .select("symbol, first_date, last_date, distinct_days, max_gap_days_window, updated_at") as { data: StatsRow[] | null; error: { message: string } | null }
     if (error) {
       if (
         error.message.includes("does not exist") ||
@@ -1545,6 +1722,8 @@ export async function getAllTickerStats(): Promise<TickerDateRange[]> {
       firstDate: r.first_date,
       lastDate: r.last_date,
       actualDays: Number(r.distinct_days),
+      maxGapDays: r.max_gap_days_window != null ? Number(r.max_gap_days_window) : undefined,
+      updatedAt: r.updated_at ?? undefined,
     }))
   } catch (err) {
     console.error("getAllTickerStats exception:", err)
@@ -1662,4 +1841,145 @@ export async function getNotIngestedUniverseTickers(
     for (const t of tickers) allTickers.add(t)
   }
   return [...allTickers].filter((t) => !ingested.has(t)).sort()
+}
+
+function getEffectiveIngestProgress(status: string, progress: number | null | undefined): number {
+  const normalized = normalizeDataIngestStatus(status)
+  if (normalized === "succeeded") return 100
+  if (normalized === "retrying") return Math.min(progress ?? 0, 95)
+  return progress ?? 0
+}
+
+// ---------------------------------------------------------------------------
+// Ingest progress for waiting_for_data runs
+// ---------------------------------------------------------------------------
+
+export type IngestProgress = {
+  /** Total data_ingest_jobs linked to this run via requested_by_run_id. */
+  totalJobs: number
+  /** Jobs with status = 'succeeded'. */
+  completedJobs: number
+  /**
+   * Weighted average of progress (0–100) across all ingest jobs.
+   * Succeeded jobs contribute 100. Used for the aggregated progress bar.
+   */
+  avgProgress: number
+  /**
+   * Earliest started_at across all ingest jobs, for ETA computation.
+   * Null until at least one job has started.
+   */
+  minStartedAt: string | null
+  /** Per-symbol detail for tooltip / diagnostics. */
+  symbols: Array<{ symbol: string; status: string; progress: number }>
+}
+
+/**
+ * Returns aggregated ingest progress for a waiting_for_data run.
+ * Queries data_ingest_jobs WHERE requested_by_run_id = runId.
+ * Returns null if there are no ingest jobs (e.g. run was already READY).
+ */
+export async function getIngestProgressForRun(
+  runId: string
+): Promise<IngestProgress | null> {
+  const admin = createAdminClient()
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data, error } = await (admin as any)
+    .from("data_ingest_jobs")
+    .select("symbol, status, progress, started_at")
+    .eq("requested_by_run_id", runId)
+
+  if (error) {
+    console.error("[getIngestProgressForRun] query error:", error.message)
+    return null
+  }
+  if (!data || data.length === 0) return null
+
+  type Row = { symbol: string; status: string; progress: number; started_at: string | null }
+  const rows = data as Row[]
+  const totalJobs = rows.length
+  const completedJobs = rows.filter((r) => normalizeDataIngestStatus(r.status) === "succeeded").length
+
+  // Succeeded jobs contribute 100 to the average even if they stored 100 already.
+  const totalProgress = rows.reduce((sum, r) => sum + getEffectiveIngestProgress(r.status, r.progress), 0)
+  const avgProgress = Math.round(totalProgress / totalJobs)
+
+  const startedAts = rows.map((r) => r.started_at).filter(Boolean) as string[]
+  const minStartedAt = startedAts.length > 0
+    ? startedAts.reduce((a, b) => (a < b ? a : b))
+    : null
+
+  return {
+    totalJobs,
+    completedJobs,
+    avgProgress,
+    minStartedAt,
+    symbols: rows.map((r) => ({ symbol: r.symbol, status: r.status, progress: r.progress ?? 0 })),
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Active-runs progress: lightweight batch query for the runs list
+// ---------------------------------------------------------------------------
+
+export type RunProgressMap = Map<string, number> // runId → progress 0-100
+
+/**
+ * Returns a progress percentage (0-100) for each provided run ID that is
+ * currently active (running or waiting_for_data).
+ *
+ * For 'running' runs: uses the latest backtest job's progress from the jobs table.
+ * For 'waiting_for_data' runs: uses averaged ingest progress from data_ingest_jobs.
+ *
+ * Designed for the runs list page — one call instead of N per-run queries.
+ */
+export async function getActiveRunsProgress(
+  runIds: string[]
+): Promise<RunProgressMap> {
+  if (runIds.length === 0) return new Map()
+  const admin = createAdminClient()
+
+  const [jobsResult, ingestResult] = await Promise.all([
+    // Backtest jobs: latest job per run_id
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (admin as any)
+      .from("jobs")
+      .select("run_id, progress")
+      .in("run_id", runIds)
+      .in("status", ["running", "queued"])
+      .order("created_at", { ascending: false }),
+    // Ingest jobs: all linked jobs so we can average per run
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (admin as any)
+      .from("data_ingest_jobs")
+      .select("requested_by_run_id, status, progress")
+      .in("requested_by_run_id", runIds),
+  ])
+
+  const result: RunProgressMap = new Map()
+
+  // Build backtest progress map (first row per run_id = latest job)
+  const seenBacktest = new Set<string>()
+  for (const row of (jobsResult.data ?? []) as Array<{ run_id: string; progress: number }>) {
+    if (!seenBacktest.has(row.run_id)) {
+      seenBacktest.add(row.run_id)
+      result.set(row.run_id, row.progress ?? 0)
+    }
+  }
+
+  // Build ingest progress map (avg per requested_by_run_id)
+  const ingestByRun = new Map<string, number[]>()
+  for (const row of (ingestResult.data ?? []) as Array<{ requested_by_run_id: string; status: string; progress: number }>) {
+    const rid = row.requested_by_run_id
+    if (!rid) continue
+    if (!ingestByRun.has(rid)) ingestByRun.set(rid, [])
+    ingestByRun.get(rid)!.push(getEffectiveIngestProgress(row.status, row.progress))
+  }
+  for (const [rid, progresses] of ingestByRun) {
+    if (!result.has(rid)) {
+      const avg = Math.round(progresses.reduce((a, b) => a + b, 0) / progresses.length)
+      result.set(rid, avg)
+    }
+  }
+
+  return result
 }

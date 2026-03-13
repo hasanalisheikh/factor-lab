@@ -3,14 +3,17 @@
 import { redirect } from "next/navigation"
 import { z } from "zod"
 import { createAdminClient } from "@/lib/supabase/admin"
+import {
+  isActiveDataIngestStatus,
+  isMissingDataIngestExtendedColumnError,
+  normalizeDataIngestStatus,
+  stripExtendedDataIngestFields,
+} from "@/lib/data-ingest-jobs"
 import { createClient } from "@/lib/supabase/server"
 import { BENCHMARK_OPTIONS } from "@/lib/benchmark"
 import { getDataCoverage } from "@/lib/supabase/queries"
 import { UNIVERSE_PRESETS } from "@/lib/universe-config"
-import {
-  runPreflightCoverageCheck,
-  getActiveIngestTickers,
-} from "@/lib/coverage-check"
+import { runPreflightCoverageCheck } from "@/lib/coverage-check"
 
 function triggerWorker(): void {
   const url = process.env.WORKER_TRIGGER_URL
@@ -98,6 +101,114 @@ function isMissingBenchmarkColumnError(message?: string): boolean {
   return m.includes("benchmark") && m.includes("does not exist")
 }
 
+type ActiveIngestJobRow = {
+  id: string
+  symbol: string
+  status: string
+  next_retry_at?: string | null
+  requested_by_run_id?: string | null
+}
+
+async function getActiveIngestJobsForSymbols(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  supabase: any,
+  symbols: string[],
+): Promise<ActiveIngestJobRow[]> {
+  if (symbols.length === 0) return []
+
+  const { data, error } = await supabase
+    .from("data_ingest_jobs")
+    .select("id, symbol, status, next_retry_at, requested_by_run_id")
+    .in("symbol", symbols)
+    .in("status", ["queued", "running", "retrying", "failed"])
+
+  if (error) {
+    console.error("createRun active-ingest query error:", error.message)
+    return []
+  }
+
+  return ((data ?? []) as ActiveIngestJobRow[]).filter((job) =>
+    isActiveDataIngestStatus(job.status, job.next_retry_at ?? null)
+  )
+}
+
+async function adoptExistingActiveIngestJobs(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  supabase: any,
+  runId: string,
+  symbols: string[],
+): Promise<Set<string>> {
+  const activeJobs = await getActiveIngestJobsForSymbols(supabase, symbols)
+  if (activeJobs.length === 0) return new Set()
+
+  const inProgressJobs = activeJobs.filter((job) => {
+    const status = normalizeDataIngestStatus(job.status)
+    return status === "queued" || status === "running"
+  })
+
+  const linkedSymbols = new Set<string>()
+  const adoptableIds = inProgressJobs
+    .filter((job) => !job.requested_by_run_id)
+    .map((job) => {
+      linkedSymbols.add(job.symbol.toUpperCase())
+      return job.id
+    })
+
+  for (const job of inProgressJobs) {
+    if (job.requested_by_run_id === runId) {
+      linkedSymbols.add(job.symbol.toUpperCase())
+    }
+  }
+
+  if (adoptableIds.length === 0) return linkedSymbols
+
+  let { error } = await supabase
+    .from("data_ingest_jobs")
+    .update({
+      requested_by_run_id: runId,
+      requested_by: `run-preflight:${runId}`,
+    })
+    .in("id", adoptableIds)
+    .is("requested_by_run_id", null)
+
+  if (error && isMissingDataIngestExtendedColumnError(error.message)) {
+    error = (
+      await supabase
+        .from("data_ingest_jobs")
+        .update({ requested_by_run_id: runId })
+        .in("id", adoptableIds)
+        .is("requested_by_run_id", null)
+    ).error
+  }
+
+  if (error) {
+    console.error("createRun active-ingest adopt error:", error.message)
+    return new Set()
+  }
+
+  return linkedSymbols
+}
+
+async function insertPreflightIngestJobs(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  supabase: any,
+  rows: Array<Record<string, unknown>>,
+): Promise<string | null> {
+  if (rows.length === 0) return null
+
+  let { error } = await supabase.from("data_ingest_jobs").insert(rows)
+
+  if (error && isMissingDataIngestExtendedColumnError(error.message)) {
+    error = (
+      await supabase
+        .from("data_ingest_jobs")
+        .insert(rows.map((row) => stripExtendedDataIngestFields(row)))
+    ).error
+  }
+
+  return error?.message ?? null
+}
+
 export async function createRun(
   _prev: CreateRunState,
   formData: FormData
@@ -143,7 +254,7 @@ export async function createRun(
   if (coverage.minDate && coverage.maxDate) {
     if (start_date < coverage.minDate || end_date > coverage.maxDate) {
       return {
-        error: `Date range outside available data coverage (${coverage.minDate} → ${coverage.maxDate}).`,
+        error: `Date range outside the current dataset cutoff (${coverage.minDate} → ${coverage.maxDate}). Backtests are based on data current through ${coverage.maxDate}.`,
       }
     }
   }
@@ -163,6 +274,7 @@ export async function createRun(
     endDate: end_date,
     universeSymbols,
     benchmark,
+    dataCutoffDate: coverage.maxDate,
   })
 
   const supabase = createAdminClient()
@@ -191,7 +303,14 @@ export async function createRun(
     },
   }
 
-  if (preflight.allHealthy) {
+  // ── Preflight status gate ────────────────────────────────────────────────────
+  // USER_ACTION_REQUIRED: coverage is permanently unachievable (e.g. ticker
+  // started after requiredStart). Return a plain-English error — no run created.
+  if (preflight.status === "USER_ACTION_REQUIRED") {
+    return { error: preflight.reasons.join(" ") }
+  }
+
+  if (preflight.status === "READY") {
     // ── Fast path: all coverage healthy — enqueue backtest immediately ────────
     let { data: run, error: runError } = await supabase
       .from("runs")
@@ -254,41 +373,38 @@ export async function createRun(
     return { error: "Failed to create run. Check server env + database config." }
   }
 
-  // Deduplicate: skip tickers already being actively ingested by another job.
-  const activeTickers = await getActiveIngestTickers()
-  const today = new Date().toISOString().slice(0, 10)
+  const cutoffDate = coverage.maxDate ?? preflight.requiredEnd
 
-  // Insert preflight ingest jobs into data_ingest_jobs (explicit-schema table).
-  const toIngest = preflight.unhealthy.filter((c) => !activeTickers.has(c.symbol.toUpperCase()))
+  // Link any already-active ingest jobs to this run when possible so the
+  // waiting run shows progress instead of failing with a retry-later message.
+  const linkedSymbols = await adoptExistingActiveIngestJobs(
+    supabase,
+    run.id,
+    preflight.unhealthy.map((c) => c.symbol.toUpperCase()),
+  )
+
+  // Insert preflight ingest jobs only for symbols not already linked to this run.
+  const toIngest = preflight.unhealthy.filter((c) => !linkedSymbols.has(c.symbol.toUpperCase()))
   const ingestRows = toIngest.map((c) => ({
     symbol: c.symbol,
     start_date: preflight.requiredStart,
-    end_date: today,
+    end_date: cutoffDate,
     status: "queued",
     stage: "download",
     progress: 0,
+    request_mode: "preflight",
+    target_cutoff_date: cutoffDate,
+    requested_by: `run-preflight:${run!.id}`,
     requested_by_run_id: run!.id,
   }))
 
   if (ingestRows.length > 0) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { error: ingestError } = await (supabase as any).from("data_ingest_jobs").insert(ingestRows)
+    const ingestError = await insertPreflightIngestJobs(supabase, ingestRows)
     if (ingestError) {
-      console.error("createRun preflight ingest insert error:", ingestError.message)
+      console.error("createRun preflight ingest insert error:", ingestError)
       // Clean up the run so it doesn't sit stuck in waiting_for_data with no jobs
       await supabase.from("runs").delete().eq("id", run.id)
       return { error: "Failed to queue data ingestion. Please try again." }
-    }
-  } else {
-    // All unhealthy symbols already have active ingest jobs. The worker's
-    // try_chain_preflight_backtest won't fire because those jobs lack
-    // preflight_run_id. Re-evaluate once they finish by immediately checking
-    // coverage again — for simplicity, fail fast with a helpful message.
-    // Users can retry run creation once the active ingest jobs complete.
-    await supabase.from("runs").delete().eq("id", run.id)
-    const symbols = preflight.unhealthy.map((c) => c.symbol).join(", ")
-    return {
-      error: `Data for ${symbols} is already being ingested. Please wait a few minutes and try again — coverage will be complete shortly.`,
     }
   }
 

@@ -9,7 +9,7 @@ import signal
 import threading
 import time
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any, Callable
 
@@ -28,6 +28,14 @@ _JOB_TIMEOUT_SECONDS: int = int(os.getenv("JOB_TIMEOUT_SECONDS", "600"))  # 10 m
 ProgressCallback = Callable[[str, int], None]
 
 DEFAULT_ETF8_UNIVERSE = ["SPY", "QQQ", "IWM", "EFA", "EEM", "TLT", "GLD", "VNQ"]
+
+
+def _utcnow() -> datetime:
+  return datetime.now(timezone.utc)
+
+
+def _utc_today_str() -> str:
+  return _utcnow().strftime("%Y-%m-%d")
 
 # ---------------------------------------------------------------------------
 # Backtest window requirements
@@ -61,7 +69,7 @@ UNIVERSE_PRESETS: dict[str, list[str]] = {
     "GOOG",
     "META",
     "NVDA",
-    "BRK.B",
+    "BRK-B",
     "JPM",
     "XOM",
     "UNH",
@@ -961,9 +969,112 @@ def _download_data_ingest_with_retry(
   ) from last_exc
 
 
+def _download_stooq_prices(ticker: str, start_date: str, end_date: str) -> pd.Series:
+  """Fallback price download from stooq.com via direct CSV fetch.
+
+  Only called when FACTORLAB_FALLBACK_PROVIDER=stooq and the primary yfinance
+  download returns sparse data (<50% of expected business days).
+
+  Stooq symbol convention: lowercase + '.us' suffix; hyphens become dots
+  (e.g., BRK-B → brk.b.us). Returns an empty Series on any error.
+  """
+  import io as _io
+  import requests as _requests
+
+  stooq_sym = ticker.replace("-", ".").lower() + ".us"
+  d1 = start_date.replace("-", "")
+  d2 = end_date.replace("-", "")
+  url = f"https://stooq.com/q/d/l/?s={stooq_sym}&d1={d1}&d2={d2}&i=d"
+  try:
+    resp = _requests.get(url, timeout=30, headers={"User-Agent": "Mozilla/5.0"})
+    resp.raise_for_status()
+    text = resp.text.strip()
+    if not text or "No data" in text or len(text) < 60:
+      return pd.Series(dtype=float)
+    df = pd.read_csv(_io.StringIO(text), parse_dates=["Date"], index_col="Date")
+    if "Close" not in df.columns:
+      return pd.Series(dtype=float)
+    return df["Close"].sort_index().dropna()
+  except Exception as exc:
+    print(f"[engine] stooq fallback failed for {ticker}: {exc}")
+    return pd.Series(dtype=float)
+
+
+def _fetch_existing_price_bounds(io: SupabaseIO, ticker: str) -> tuple[str | None, str | None]:
+  """Return the earliest/latest stored price dates for a ticker."""
+  try:
+    latest_result = (
+      io.client.table("prices")
+      .select("date")
+      .eq("ticker", ticker)
+      .order("date", desc=True)
+      .limit(1)
+      .execute()
+    )
+    existing_latest = latest_result.data[0]["date"] if latest_result.data else None
+  except Exception:
+    existing_latest = None
+
+  try:
+    earliest_result = (
+      io.client.table("prices")
+      .select("date")
+      .eq("ticker", ticker)
+      .order("date")
+      .limit(1)
+      .execute()
+    )
+    existing_earliest = earliest_result.data[0]["date"] if earliest_result.data else None
+  except Exception:
+    existing_earliest = None
+
+  return existing_earliest, existing_latest
+
+
+def _resolve_incremental_ingest_window(
+  requested_start: str,
+  requested_end: str,
+  *,
+  existing_earliest: str | None,
+  existing_latest: str | None,
+) -> tuple[str, str, bool]:
+  """Resolve the effective download window for an incremental ingest request."""
+  requested_start_ts = pd.Timestamp(requested_start)
+  requested_end_ts = pd.Timestamp(requested_end)
+
+  if existing_latest:
+    existing_latest_ts = pd.Timestamp(existing_latest)
+    next_day_ts = existing_latest_ts + pd.Timedelta(days=1)
+
+    historical_gap_end_ts: pd.Timestamp | None = None
+    if existing_earliest:
+      existing_earliest_ts = pd.Timestamp(existing_earliest)
+      if existing_earliest_ts > requested_start_ts:
+        historical_gap_end_ts = min(
+          requested_end_ts,
+          existing_earliest_ts - pd.Timedelta(days=1),
+        )
+        if historical_gap_end_ts < requested_start_ts:
+          historical_gap_end_ts = None
+
+    if next_day_ts > requested_end_ts:
+      if historical_gap_end_ts is not None:
+        return (
+          requested_start,
+          historical_gap_end_ts.strftime("%Y-%m-%d"),
+          False,
+        )
+      return existing_latest, existing_latest, True
+
+    if requested_start_ts > existing_latest_ts:
+      return next_day_ts.strftime("%Y-%m-%d"), requested_end, False
+
+  return requested_start, requested_end, False
+
+
 def _process_data_ingest_job(io: SupabaseIO, job: Job) -> None:
   """Download and upsert historical prices for a single benchmark ticker."""
-  started = datetime.utcnow()
+  started = _utcnow()
   payload = job.payload or {}
   ticker = str(payload.get("ticker", "")).strip().upper()
   if not ticker:
@@ -977,48 +1088,30 @@ def _process_data_ingest_job(io: SupabaseIO, job: Job) -> None:
 
   default_start = "1993-01-01"
   start_date = str(payload.get("start_date", default_start))
-  end_date = str(payload.get("end_date", datetime.utcnow().strftime("%Y-%m-%d")))
+  end_date = str(payload.get("end_date", _utc_today_str()))
 
   # Wrap all blocking work in a heartbeat context so the stall scanner can
   # distinguish an alive job from a crashed one (heartbeat fires every 10 s).
   with _Heartbeat(lambda: io.heartbeat_job(job.id), interval=10, job_id=job.id):
-    # Incremental: only download rows that aren't already stored.
-    try:
-      latest_result = (
-        io.client.table("prices")
-        .select("date")
-        .eq("ticker", ticker)
-        .order("date", desc=True)
-        .limit(1)
-        .execute()
+    existing_earliest, existing_latest = _fetch_existing_price_bounds(io, ticker)
+    start_date, end_date, is_fully_covered = _resolve_incremental_ingest_window(
+      start_date,
+      end_date,
+      existing_earliest=existing_earliest,
+      existing_latest=existing_latest,
+    )
+    if is_fully_covered:
+      duration = int((_utcnow() - started).total_seconds())
+      io.save_data_ingest_success(
+        job=job,
+        duration_seconds=duration,
+        tickers_updated=1,
+        rows_upserted=0,
+        start_date=existing_latest,
+        end_date=existing_latest,
       )
-      existing_latest: str | None = (
-        latest_result.data[0]["date"] if latest_result.data else None
-      )
-    except Exception:
-      existing_latest = None
-
-    if existing_latest:
-      next_day = (
-        pd.Timestamp(existing_latest) + pd.Timedelta(days=1)
-      ).strftime("%Y-%m-%d")
-      if next_day > end_date:
-        # Already up to date — nothing to download.
-        duration = int((datetime.utcnow() - started).total_seconds())
-        io.save_data_ingest_success(
-          job=job,
-          duration_seconds=duration,
-          tickers_updated=1,
-          rows_upserted=0,
-          start_date=existing_latest,
-          end_date=existing_latest,
-        )
-        print(f"[engine] data_ingest skipped job={job.id} {ticker} already current ({existing_latest})")
-        return
-      # Only advance start_date if it is already past existing_latest.
-      # If start_date < existing_latest, this is a force backfill — preserve it.
-      if start_date > existing_latest:
-        start_date = next_day
+      print(f"[engine] data_ingest skipped job={job.id} {ticker} already current ({existing_latest})")
+      return
 
     print(f"[engine] data_ingest job={job.id} ticker={ticker} {start_date}→{end_date}")
     stage = "download"
@@ -1030,7 +1123,7 @@ def _process_data_ingest_job(io: SupabaseIO, job: Job) -> None:
       raw = _download_data_ingest_with_retry(ticker, start_date, end_date)
       if raw.empty:
         # No new trading days in range (e.g. weekend/holiday at end of window).
-        duration = int((datetime.utcnow() - started).total_seconds())
+        duration = int((_utcnow() - started).total_seconds())
         actual = existing_latest or start_date
         io.update_job_progress(job.id, stage="finalize", progress=95)
         io.save_data_ingest_success(
@@ -1078,7 +1171,7 @@ def _process_data_ingest_job(io: SupabaseIO, job: Job) -> None:
       stage = "finalize"
       io.update_job_progress(job.id, stage=stage, progress=95)
 
-      duration = int((datetime.utcnow() - started).total_seconds())
+      duration = int((_utcnow() - started).total_seconds())
       actual_start = price_rows[0]["date"] if price_rows else start_date
       actual_end = price_rows[-1]["date"] if price_rows else end_date
       io.save_data_ingest_success(
@@ -1091,7 +1184,7 @@ def _process_data_ingest_job(io: SupabaseIO, job: Job) -> None:
       )
       print(f"[engine] data_ingest completed job={job.id} {len(price_rows)} rows in {duration}s")
     except Exception as exc:
-      duration = int((datetime.utcnow() - started).total_seconds())
+      duration = int((_utcnow() - started).total_seconds())
       err_str = f"[stage={stage}] {exc}"
       # Log first so the error is always visible even if the DB write fails.
       print(f"[engine] data_ingest failed job={job.id} in {duration}s: {exc}")
@@ -1103,65 +1196,128 @@ def _process_data_ingest_job(io: SupabaseIO, job: Job) -> None:
         io.save_data_ingest_failure_with_retry(job, duration, err_str, stage=stage)
 
 
+def _make_year_chunks(start_date: str, end_date: str) -> list[tuple[str, str]]:
+  """Split a date range into year-sized chunks.
+
+  Prevents yfinance from hanging on 10+ year requests by downloading year by
+  year. Returns a list of (chunk_start, chunk_end) YYYY-MM-DD tuples.
+  Single-year or shorter ranges return one chunk (no overhead).
+  """
+  chunks: list[tuple[str, str]] = []
+  chunk_start = pd.Timestamp(start_date)
+  end_ts = pd.Timestamp(end_date)
+  while chunk_start <= end_ts:
+    # Advance by one year, then back one day to avoid overlap
+    chunk_end = min(
+      chunk_start + pd.DateOffset(years=1) - pd.Timedelta(days=1),
+      end_ts,
+    )
+    chunks.append((chunk_start.strftime("%Y-%m-%d"), chunk_end.strftime("%Y-%m-%d")))
+    chunk_start = chunk_end + pd.Timedelta(days=1)
+  return chunks if chunks else [(start_date, end_date)]
+
+
+def _extract_close_series(raw: "pd.DataFrame") -> "pd.Series":
+  """Extract and clean the close price series from a yfinance DataFrame."""
+  if isinstance(raw.columns, pd.MultiIndex):
+    level0 = raw.columns.get_level_values(0)
+    key = "Close" if "Close" in level0 else "Adj Close"
+    close_raw = raw[key]
+    close_series = close_raw.iloc[:, 0] if isinstance(close_raw, pd.DataFrame) else close_raw
+  else:
+    close_series = raw.iloc[:, 0]
+  return close_series.sort_index().ffill().dropna()
+
+
 def _process_data_ingest_job_v2(io: SupabaseIO, job: DataIngestJob) -> None:
   """Download and upsert historical prices for a data_ingest_jobs row.
 
   Uses the dedicated data_ingest_jobs table (explicit schema) rather than the
   generic jobs table. Heartbeat fires every 10 s via heartbeat_data_ingest_job.
+  Large date ranges (> 1 year) are downloaded in year-sized chunks to prevent
+  yfinance timeouts.
   """
-  started = datetime.utcnow()
+  started = _utcnow()
 
   with _Heartbeat(lambda: io.heartbeat_data_ingest_job(job.id), interval=10, job_id=job.id):
-    # Incremental: only download rows not already stored.
-    try:
-      latest_result = (
-        io.client.table("prices")
-        .select("date")
-        .eq("ticker", job.symbol)
-        .order("date", desc=True)
-        .limit(1)
-        .execute()
-      )
-      existing_latest: str | None = (
-        latest_result.data[0]["date"] if latest_result.data else None
-      )
-    except Exception:
-      existing_latest = None
-
     start_date = job.start_date
     end_date = job.end_date
-
-    if existing_latest:
-      next_day = (
-        pd.Timestamp(existing_latest) + pd.Timedelta(days=1)
-      ).strftime("%Y-%m-%d")
-      if next_day > end_date:
-        duration = int((datetime.utcnow() - started).total_seconds())
-        io.update_data_ingest_progress(job.id, stage="finalize", progress=95)
-        io.save_data_ingest_job_success(
-          job=job,
-          duration_seconds=duration,
-          tickers_updated=1,
-          rows_upserted=0,
-          start_date=existing_latest,
-          end_date=existing_latest,
-        )
-        print(
-          f"[engine] data_ingest_v2 skipped job={job.id} "
-          f"{job.symbol} already current ({existing_latest})"
-        )
-        return
-      if start_date > existing_latest:
-        start_date = next_day
+    existing_earliest, existing_latest = _fetch_existing_price_bounds(io, job.symbol)
+    start_date, end_date, is_fully_covered = _resolve_incremental_ingest_window(
+      start_date,
+      end_date,
+      existing_earliest=existing_earliest,
+      existing_latest=existing_latest,
+    )
+    if is_fully_covered:
+      duration = int((_utcnow() - started).total_seconds())
+      io.update_data_ingest_progress(job.id, stage="finalize", progress=95)
+      io.save_data_ingest_job_success(
+        job=job,
+        duration_seconds=duration,
+        tickers_updated=1,
+        rows_upserted=0,
+        start_date=existing_latest,
+        end_date=existing_latest,
+      )
+      print(
+        f"[engine] data_ingest_v2 skipped job={job.id} "
+        f"{job.symbol} already current ({existing_latest})"
+      )
+      return
 
     print(f"[engine] data_ingest_v2 job={job.id} symbol={job.symbol} {start_date}→{end_date}")
     stage = "download"
     try:
-      io.update_data_ingest_progress(job.id, stage=stage, progress=15)
+      io.update_data_ingest_progress(job.id, stage=stage, progress=10)
 
-      raw = _download_data_ingest_with_retry(job.symbol, start_date, end_date)
-      if raw.empty:
-        duration = int((datetime.utcnow() - started).total_seconds())
+      # Split into year-sized chunks so yfinance never hangs on 10+ year requests.
+      year_chunks = _make_year_chunks(start_date, end_date)
+      total_chunks = len(year_chunks)
+      _fallback_provider = os.getenv("FACTORLAB_FALLBACK_PROVIDER", "").strip().lower()
+
+      all_close_series: list["pd.Series"] = []
+      for chunk_idx, (c_start, c_end) in enumerate(year_chunks):
+        # Progress: 10% base + up to 55% across all chunks (download phase)
+        chunk_pct = 10 + int((chunk_idx / total_chunks) * 55)
+        io.update_data_ingest_progress(job.id, stage=stage, progress=chunk_pct)
+
+        raw = _download_data_ingest_with_retry(job.symbol, c_start, c_end)
+
+        # Fallback provider: if primary data is absent/sparse, try stooq.
+        # Controlled by FACTORLAB_FALLBACK_PROVIDER=stooq env var.
+        if _fallback_provider == "stooq":
+          primary_rows = 0 if raw.empty else (
+            len(raw[raw.columns[0]].dropna()) if isinstance(raw.columns, pd.MultiIndex)
+            else len(raw.dropna())
+          )
+          expected_bdays = max(1, int(
+            (pd.to_datetime(c_end) - pd.to_datetime(c_start)).days * 5 / 7
+          ))
+          if primary_rows < expected_bdays * 0.5:
+            print(
+              f"[engine] primary sparse ({primary_rows}/{expected_bdays} rows), "
+              f"trying stooq fallback for {job.symbol} {c_start}→{c_end}"
+            )
+            fallback_series = _download_stooq_prices(job.symbol, c_start, c_end)
+            if not fallback_series.empty:
+              if raw.empty:
+                primary_series = pd.Series(dtype=float)
+              else:
+                primary_series = _extract_close_series(raw)
+              merged = primary_series.combine_first(fallback_series)
+              raw = pd.DataFrame({"Close": merged})
+              print(
+                f"[engine] stooq merge: {len(primary_series)} primary + "
+                f"{len(fallback_series) - len(primary_series.reindex(fallback_series.index).dropna())} "
+                f"fallback = {len(raw)} total"
+              )
+
+        if not raw.empty:
+          all_close_series.append(_extract_close_series(raw))
+
+      if not all_close_series:
+        duration = int((_utcnow() - started).total_seconds())
         actual = existing_latest or start_date
         io.update_data_ingest_progress(job.id, stage="finalize", progress=95)
         io.save_data_ingest_job_success(
@@ -1176,18 +1332,13 @@ def _process_data_ingest_job_v2(io: SupabaseIO, job: DataIngestJob) -> None:
         return
 
       stage = "transform"
-      io.update_data_ingest_progress(job.id, stage=stage, progress=45)
-      if isinstance(raw.columns, pd.MultiIndex):
-        level0 = raw.columns.get_level_values(0)
-        key = "Close" if "Close" in level0 else "Adj Close"
-        close_raw = raw[key]
-        close_series = close_raw.iloc[:, 0] if isinstance(close_raw, pd.DataFrame) else close_raw
-      else:
-        close_series = raw.iloc[:, 0]
-      close_series = close_series.sort_index().ffill().dropna()
+      io.update_data_ingest_progress(job.id, stage=stage, progress=70)
+      # Concatenate all year-chunk series, de-duplicate dates, forward-fill
+      close_series = pd.concat(all_close_series).sort_index()
+      close_series = close_series[~close_series.index.duplicated(keep="last")].ffill().dropna()
 
       stage = "upsert"
-      io.update_data_ingest_progress(job.id, stage=stage, progress=70)
+      io.update_data_ingest_progress(job.id, stage=stage, progress=80)
       price_rows: list[dict[str, Any]] = []
       for dt, val in close_series.items():
         if pd.isna(val):
@@ -1206,7 +1357,7 @@ def _process_data_ingest_job_v2(io: SupabaseIO, job: DataIngestJob) -> None:
       stage = "finalize"
       io.update_data_ingest_progress(job.id, stage=stage, progress=95)
 
-      duration = int((datetime.utcnow() - started).total_seconds())
+      duration = int((_utcnow() - started).total_seconds())
       actual_start = price_rows[0]["date"] if price_rows else start_date
       actual_end = price_rows[-1]["date"] if price_rows else end_date
       io.save_data_ingest_job_success(
@@ -1222,7 +1373,7 @@ def _process_data_ingest_job_v2(io: SupabaseIO, job: DataIngestJob) -> None:
         f"{len(price_rows)} rows in {duration}s"
       )
     except Exception as exc:
-      duration = int((datetime.utcnow() - started).total_seconds())
+      duration = int((_utcnow() - started).total_seconds())
       err_str = f"[stage={stage}] {exc}"
       print(f"[engine] data_ingest_v2 failed job={job.id} in {duration}s: {exc}")
       classification = _classify_ingest_error(str(exc))
@@ -1308,7 +1459,7 @@ def _process_job(io: SupabaseIO, job: Job) -> None:
     io.try_chain_preflight_backtest(job)
     return
 
-  started = datetime.utcnow()
+  started = _utcnow()
   print(f"[engine] running job={job.id} run={job.run_id} timeout={_JOB_TIMEOUT_SECONDS}s")
   _install_job_timeout(_JOB_TIMEOUT_SECONDS)
   try:
@@ -1348,7 +1499,7 @@ def _process_job(io: SupabaseIO, job: Job) -> None:
     io.update_run_metadata(job.run_id, _build_run_metadata(run, result))
 
     io.update_job_progress(job.id, stage="report", progress=95)
-    duration = int((datetime.utcnow() - started).total_seconds())
+    duration = int((_utcnow() - started).total_seconds())
     io.save_success(
       job=job,
       duration_seconds=duration,
@@ -1366,7 +1517,7 @@ def _process_job(io: SupabaseIO, job: Job) -> None:
     print(f"[engine] completed job={job.id} in {duration}s")
   except Exception as exc:
     _cancel_job_timeout()
-    duration = int((datetime.utcnow() - started).total_seconds())
+    duration = int((_utcnow() - started).total_seconds())
     err_str = str(exc)
     # Print first — so the error is always visible in logs even if the DB write fails.
     print(f"[engine] failed job={job.id} in {duration}s: {err_str}")
