@@ -19,5 +19,18 @@ vi.mock("next/link", () => {
 vi.mock("next/navigation", () => {
   return {
     usePathname: () => "/runs",
+    useRouter: () => ({
+      push: vi.fn(),
+      replace: vi.fn(),
+      refresh: vi.fn(),
+    }),
   }
 })
+
+class ResizeObserverMock {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+}
+
+vi.stubGlobal("ResizeObserver", ResizeObserverMock)

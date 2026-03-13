@@ -1,3 +1,4 @@
+import Link from "next/link"
 import { AppShell } from "@/components/layout/app-shell"
 import { PageContainer } from "@/components/layout/page-container"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -30,8 +31,14 @@ const sections = [
     content: (
       <div className="space-y-4 text-[13px] text-muted-foreground leading-relaxed">
         <p>
-          Navigate to <span className="font-medium text-foreground">New Run</span> in the
-          sidebar. Each field controls an aspect of the simulation:
+          Navigate to{" "}
+          <Link
+            href="/runs/new"
+            className="font-medium text-foreground underline underline-offset-2 transition-colors hover:text-primary"
+          >
+            New Run
+          </Link>{" "}
+          in the sidebar. Each field controls an aspect of the simulation:
         </p>
         <div className="space-y-2.5">
           {[
@@ -72,8 +79,14 @@ const sections = [
         </div>
         <div className="rounded-lg border border-border bg-secondary/30 px-3 py-2.5 text-[12px]">
           <span className="font-medium text-foreground">Tip:</span> Your default settings are
-          saved in <span className="font-medium text-foreground">Settings → Backtest</span> so
-          you don&apos;t have to re-enter them every time.
+          saved in{" "}
+          <Link
+            href="/settings?tab=backtest"
+            className="font-medium text-foreground underline underline-offset-2 transition-colors hover:text-primary"
+          >
+            Settings → Backtest
+          </Link>{" "}
+          so you don&apos;t have to re-enter them every time.
         </div>
       </div>
     ),
@@ -101,8 +114,14 @@ const sections = [
         </div>
         <p>
           You can monitor all active jobs on the{" "}
-          <span className="font-medium text-foreground">Jobs</span> page. The run detail page
-          also shows a live status panel that auto-updates without a manual refresh.
+          <Link
+            href="/jobs"
+            className="font-medium text-foreground underline underline-offset-2 transition-colors hover:text-primary"
+          >
+            Jobs
+          </Link>{" "}
+          page. The run detail page also shows a live status panel that auto-updates without a
+          manual refresh.
         </p>
       </div>
     ),
@@ -198,9 +217,15 @@ const sections = [
     content: (
       <div className="space-y-3 text-[13px] text-muted-foreground leading-relaxed">
         <p>
-          The <span className="font-medium text-foreground">Compare</span> page lets you
-          overlay two completed runs on the same equity curve and KPI table. Select Run A
-          and Run B using the dropdowns, then review the side-by-side metrics.
+          The{" "}
+          <Link
+            href="/compare"
+            className="font-medium text-foreground underline underline-offset-2 transition-colors hover:text-primary"
+          >
+            Compare
+          </Link>{" "}
+          page lets you overlay two completed runs on the same equity curve and KPI table.
+          Select Run A and Run B using the dropdowns, then review the side-by-side metrics.
         </p>
         <p>
           Use Compare to evaluate strategy variants (e.g. different Top N or cost

@@ -2,7 +2,41 @@ import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
 import type { Database } from './types'
 
-const SUPABASE_FETCH_TIMEOUT_MS = 5000
+const DEFAULT_SUPABASE_FETCH_TIMEOUT_MS = 15000
+
+function getSupabaseFetchTimeoutMs(): number {
+  const raw = process.env.SUPABASE_FETCH_TIMEOUT_MS
+  if (!raw) return DEFAULT_SUPABASE_FETCH_TIMEOUT_MS
+
+  const parsed = Number.parseInt(raw, 10)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_SUPABASE_FETCH_TIMEOUT_MS
+}
+
+function combineAbortSignals(signals: Array<AbortSignal | null | undefined>): AbortSignal | undefined {
+  const activeSignals = signals.filter((signal): signal is AbortSignal => signal != null)
+
+  if (activeSignals.length === 0) return undefined
+  if (activeSignals.length === 1) return activeSignals[0]
+
+  if (typeof AbortSignal.any === "function") {
+    return AbortSignal.any(activeSignals)
+  }
+
+  const controller = new AbortController()
+  const forwardAbort = (signal: AbortSignal) => {
+    if (!controller.signal.aborted) controller.abort(signal.reason)
+  }
+
+  for (const signal of activeSignals) {
+    if (signal.aborted) {
+      forwardAbort(signal)
+      break
+    }
+    signal.addEventListener("abort", () => forwardAbort(signal), { once: true })
+  }
+
+  return controller.signal
+}
 
 export async function createClient() {
   const cookieStore = await cookies()
@@ -19,10 +53,14 @@ export async function createClient() {
     {
       global: {
         fetch: async (input, init) => {
-          const controller = new AbortController()
-          const timeoutId = setTimeout(() => controller.abort(), SUPABASE_FETCH_TIMEOUT_MS)
+          const timeoutController = new AbortController()
+          const timeoutMs = getSupabaseFetchTimeoutMs()
+          const timeoutId = setTimeout(() => timeoutController.abort(), timeoutMs)
           try {
-            return await fetch(input, { ...init, signal: controller.signal })
+            return await fetch(input, {
+              ...init,
+              signal: combineAbortSignals([init?.signal, timeoutController.signal]),
+            })
           } finally {
             clearTimeout(timeoutId)
           }

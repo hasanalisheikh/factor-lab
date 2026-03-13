@@ -19,6 +19,7 @@ import {
   getModelPredictionsByRunId,
   getPositionsByRunId,
   getBenchmarkOverlapStateForRun,
+  getIngestProgressForRun,
   type RunMetricsRow,
 } from "@/lib/supabase/queries"
 import { STRATEGY_LABELS, type StrategyId, type RunStatus } from "@/lib/types"
@@ -54,6 +55,45 @@ function getUniversePreset(run: {
   return "ETF8"
 }
 
+function getRunPreflightSnapshot(run: { run_params?: unknown }): {
+  dataCutoffUsed: string | null
+  universeEarliestStart: string | null
+  benchmarkCoverageHealth: { status: string; reason: string | null } | null
+} {
+  const params =
+    run.run_params && typeof run.run_params === "object" && !Array.isArray(run.run_params)
+      ? (run.run_params as Record<string, unknown>)
+      : null
+  const preflight =
+    params?.preflight && typeof params.preflight === "object" && !Array.isArray(params.preflight)
+      ? (params.preflight as Record<string, unknown>)
+      : null
+  const benchmarkHealth =
+    preflight?.benchmark_coverage_health &&
+    typeof preflight.benchmark_coverage_health === "object" &&
+    !Array.isArray(preflight.benchmark_coverage_health)
+      ? (preflight.benchmark_coverage_health as Record<string, unknown>)
+      : null
+
+  return {
+    dataCutoffUsed:
+      typeof preflight?.data_cutoff_date === "string" ? preflight.data_cutoff_date : null,
+    universeEarliestStart:
+      typeof preflight?.universe_earliest_start === "string"
+        ? preflight.universe_earliest_start
+        : null,
+    benchmarkCoverageHealth: benchmarkHealth
+      ? {
+        status:
+          typeof benchmarkHealth.status === "string"
+            ? benchmarkHealth.status.charAt(0).toUpperCase() + benchmarkHealth.status.slice(1)
+            : "—",
+        reason: typeof benchmarkHealth.reason === "string" ? benchmarkHealth.reason : null,
+      }
+      : null,
+  }
+}
+
 export default async function RunDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
   if (!isUuid(id)) {
@@ -66,7 +106,7 @@ export default async function RunDetailPage({ params }: { params: Promise<{ id: 
     notFound()
   }
 
-  const [equityCurve, job, report, modelMetadata, modelPredictions, positions, benchmarkOverlap] = await Promise.all([
+  const [equityCurve, job, report, modelMetadata, modelPredictions, positions, benchmarkOverlap, ingestProgress] = await Promise.all([
     getEquityCurve(id),
     getJobByRunId(id),
     getReportByRunId(id),
@@ -74,6 +114,8 @@ export default async function RunDetailPage({ params }: { params: Promise<{ id: 
     getModelPredictionsByRunId(id),
     getPositionsByRunId(id),
     getBenchmarkOverlapStateForRun(run),
+    // Only needed while waiting for data ingestion to complete.
+    run.status === "waiting_for_data" ? getIngestProgressForRun(id) : Promise.resolve(null),
   ])
 
   const metrics = getMetrics(run.run_metrics)
@@ -98,6 +140,7 @@ export default async function RunDetailPage({ params }: { params: Promise<{ id: 
   const costsBps = run.costs_bps ?? 10
   const benchmarkTicker = getRunBenchmark(run)
   const isMlRun = run.strategy_id === "ml_ridge" || run.strategy_id === "ml_lightgbm"
+  const preflightSnapshot = getRunPreflightSnapshot(run)
 
   const runConfig: RunConfig = {
     strategyLabel,
@@ -109,6 +152,9 @@ export default async function RunDetailPage({ params }: { params: Promise<{ id: 
     costsBps,
     topN: run.top_n ?? null,
     rebalanceFreq: isMlRun ? "Daily" : "Monthly",
+    dataCutoffUsed: preflightSnapshot.dataCutoffUsed,
+    universeEarliestStart: preflightSnapshot.universeEarliestStart,
+    benchmarkCoverageHealth: preflightSnapshot.benchmarkCoverageHealth,
   }
 
   return (
@@ -193,8 +239,8 @@ export default async function RunDetailPage({ params }: { params: Promise<{ id: 
         )}
       </div>
 
-      {/* Job status panel — visible for queued / running runs */}
-      <JobStatusPanel job={job} runStatus={status} />
+      {/* Job status panel — visible for queued / running / waiting_for_data runs */}
+      <JobStatusPanel job={job} runStatus={status} ingestProgress={ingestProgress} />
       <RunStatusPoller status={status} />
       {benchmarkOverlap.confirmed ? (
         <BenchmarkOverlapWarning benchmark={benchmarkTicker} />

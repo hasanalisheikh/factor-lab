@@ -229,6 +229,24 @@ export type Database = {
         Update: Partial<Database['public']['Tables']['data_last_updated']['Insert']>
         Relationships: []
       }
+      data_state: {
+        Row: {
+          id: number
+          data_cutoff_date: string
+          last_update_at: string
+          update_mode: "monthly" | "daily" | "manual"
+          updated_by: string | null
+        }
+        Insert: {
+          id?: number
+          data_cutoff_date: string
+          last_update_at?: string
+          update_mode?: "monthly" | "daily" | "manual"
+          updated_by?: string | null
+        }
+        Update: Partial<Database["public"]["Tables"]["data_state"]["Insert"]>
+        Relationships: []
+      }
       features_monthly: {
         Row: {
           id: string
@@ -369,6 +387,7 @@ export type ReportRow = Database["public"]["Tables"]["reports"]["Row"]
 export type JobRow = Database["public"]["Tables"]["jobs"]["Row"]
 export type PriceRow = Database["public"]["Tables"]["prices"]["Row"]
 export type DataLastUpdatedRow = Database["public"]["Tables"]["data_last_updated"]["Row"]
+export type DataStateRow = Database["public"]["Tables"]["data_state"]["Row"]
 export type ModelMetadataRow = Database["public"]["Tables"]["model_metadata"]["Row"]
 export type ModelPredictionRow = Database["public"]["Tables"]["model_predictions"]["Row"]
 export type PositionRow = Database["public"]["Tables"]["positions"]["Row"]
@@ -405,7 +424,7 @@ export type BenchmarkCoverage = {
 
 export type DataIngestJobStatus = {
   id: string
-  /** "queued" | "running" | "completed" | "failed" | "blocked" */
+  /** "queued" | "running" | "succeeded" | "failed" | "retrying" | "blocked" */
   status: string
   /** "download" | "transform" | "upsert" | "finalize" */
   stage: string | null
@@ -415,6 +434,10 @@ export type DataIngestJobStatus = {
   /** Start/end dates explicitly stored (replaces payload->start_date/end_date) */
   start_date?: string | null
   end_date?: string | null
+  request_mode?: string | null
+  batch_id?: string | null
+  target_cutoff_date?: string | null
+  requested_by?: string | null
   /** Error message from data_ingest_jobs.error column */
   error?: string | null
   /** Legacy field from jobs.error_message (for backward compat) */
@@ -422,6 +445,9 @@ export type DataIngestJobStatus = {
   created_at: string | null
   started_at: string | null
   updated_at: string | null
+  finished_at?: string | null
+  last_heartbeat_at?: string | null
+  rows_inserted?: number | null
   /** When set, the retry scheduler will requeue this failed job at this time. */
   next_retry_at: string | null
   /** Number of times this job has been attempted (claimed by a worker). */
@@ -455,6 +481,10 @@ export type TickerDateRange = {
   firstDate: string  // YYYY-MM-DD — first price row for this ticker
   lastDate: string   // YYYY-MM-DD — last price row for this ticker
   actualDays: number // total rows ingested for this ticker
+  /** Max calendar-day gap between consecutive price rows within coverage window (> 7 = real gap) */
+  maxGapDays?: number
+  /** ISO timestamp of last ticker_stats upsert */
+  updatedAt?: string
 }
 
 /** Inception-aware missingness for a single ticker */

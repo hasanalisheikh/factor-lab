@@ -6,7 +6,7 @@
 export const UNIVERSE_PRESETS = {
   ETF8: ["SPY", "QQQ", "IWM", "EFA", "EEM", "TLT", "GLD", "VNQ"],
   SP100: [
-    "AAPL", "MSFT", "AMZN", "GOOGL", "GOOG", "META", "NVDA", "BRK.B",
+    "AAPL", "MSFT", "AMZN", "GOOGL", "GOOG", "META", "NVDA", "BRK-B",
     "JPM", "XOM", "UNH", "JNJ", "PG", "V", "MA", "HD", "COST", "ABBV",
     "PEP", "MRK",
   ],
@@ -40,20 +40,58 @@ export type TickerDateRangeLike = {
 }
 
 /**
- * Pure function: returns max(firstDate) among tickers in the given universe
- * that appear in the provided ranges array. Returns null if none matched.
- * Lives here (not in queries.ts) so it can be imported by client components and tests.
+ * Shared universe-readiness snapshot derived from cached ticker stats.
+ * earliestStart/validFrom are only authoritative when every preset member
+ * has ingested stats. Partial universes must return null plus missing tickers.
+ */
+export type UniverseConstraintSummary = {
+  universe: UniverseId
+  earliestStart: string | null
+  validFrom: string | null
+  missingTickers: string[]
+  ingestedCount: number
+  totalCount: number
+  ready: boolean
+}
+
+export function summarizeUniverseConstraints(
+  universe: UniverseId,
+  ranges: TickerDateRangeLike[]
+): UniverseConstraintSummary {
+  const tickers = UNIVERSE_PRESETS[universe] as readonly string[]
+  const rangeMap = new Map(ranges.map((r) => [r.ticker, r.firstDate]))
+  let latest: string | null = null
+  const missingTickers: string[] = []
+
+  for (const t of tickers) {
+    const d = rangeMap.get(t)
+    if (!d) {
+      missingTickers.push(t)
+      continue
+    }
+    if (!latest || d > latest) latest = d
+  }
+
+  const ready = missingTickers.length === 0
+  const authoritativeDate = ready ? latest : null
+
+  return {
+    universe,
+    earliestStart: authoritativeDate,
+    validFrom: authoritativeDate,
+    missingTickers,
+    ingestedCount: tickers.length - missingTickers.length,
+    totalCount: tickers.length,
+    ready,
+  }
+}
+
+/**
+ * Backward-compatible helper used across the app and tests.
  */
 export function computeUniverseValidFrom(
   universe: UniverseId,
   ranges: TickerDateRangeLike[]
 ): string | null {
-  const tickers = UNIVERSE_PRESETS[universe] as readonly string[]
-  const rangeMap = new Map(ranges.map((r) => [r.ticker, r.firstDate]))
-  let latest: string | null = null
-  for (const t of tickers) {
-    const d = rangeMap.get(t)
-    if (d && (!latest || d > latest)) latest = d
-  }
-  return latest
+  return summarizeUniverseConstraints(universe, ranges).validFrom
 }

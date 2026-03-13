@@ -1,3 +1,4 @@
+import type { CSSProperties } from "react"
 import { cn } from "@/lib/utils"
 
 interface LogoMarkProps {
@@ -12,9 +13,10 @@ export function LogoMark({ size = 24, className }: LogoMarkProps) {
       width={size}
       height={size}
       viewBox="0 0 24 24"
+      preserveAspectRatio="xMidYMid meet"
       fill="none"
       xmlns="http://www.w3.org/2000/svg"
-      className={className}
+      className={cn("shrink-0", className)}
       aria-hidden="true"
     >
       {/* Shield outline */}
@@ -54,18 +56,40 @@ interface LogoProps {
   /** Icon pixel size */
   size?: number
   className?: string
+  wordmarkClassName?: string
 }
 
 /** Full FactorLab logo with icon mark + split-color wordmark. */
-export function Logo({ variant = "default", size = 24, className }: LogoProps) {
+export function Logo({
+  variant = "default",
+  size = 24,
+  className,
+  wordmarkClassName,
+}: LogoProps) {
+  const markStyle = {
+    width: `${size}px`,
+    height: `${size}px`,
+  } satisfies CSSProperties
+
   if (variant === "mark") {
     return <LogoMark size={size} className={className} />
   }
 
   return (
-    <span className={cn("flex items-center gap-2", className)}>
-      <LogoMark size={size} />
-      <span className="text-[20px] font-semibold tracking-tight leading-none">
+    <span className={cn("inline-flex items-center gap-2 leading-none", className)}>
+      <span
+        className="flex aspect-square shrink-0 items-center justify-center"
+        style={markStyle}
+        aria-hidden="true"
+      >
+        <LogoMark size={size} className="h-full w-full" />
+      </span>
+      <span
+        className={cn(
+          "text-[20px] font-semibold tracking-tight leading-none whitespace-nowrap",
+          wordmarkClassName
+        )}
+      >
         <span className="text-foreground">Factor</span>
         <span className="text-primary">Lab</span>
       </span>

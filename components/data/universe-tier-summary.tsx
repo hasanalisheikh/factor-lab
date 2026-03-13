@@ -4,7 +4,7 @@ import {
   UNIVERSE_PRESETS,
   UNIVERSE_LABELS,
   type UniverseId,
-  computeUniverseValidFrom,
+  summarizeUniverseConstraints,
 } from "@/lib/universe-config"
 import { type TickerDateRange, COVERAGE_WINDOW_START } from "@/lib/supabase/types"
 import { formatISODate } from "@/lib/utils/dates"
@@ -31,12 +31,14 @@ export function UniverseTierSummary({ ranges, notIngested, mode }: Props) {
   const summaries: UniverseSummary[] = (
     Object.entries(UNIVERSE_PRESETS) as [UniverseId, readonly string[]][]
   ).map(([id, tickers]) => {
-    const validFrom = computeUniverseValidFrom(id, ranges)
-    const missing = tickers.filter((t) => notIngestedSet.has(t) || !ingestedSet.has(t))
+    const summary = summarizeUniverseConstraints(id, ranges)
+    const missing = summary.missingTickers.filter((ticker) =>
+      notIngestedSet.has(ticker) || !ingestedSet.has(ticker)
+    )
     return {
       id,
       label: UNIVERSE_LABELS[id],
-      validFrom,
+      validFrom: summary.validFrom,
       ingestedCount: tickers.length - missing.length,
       totalCount: tickers.length,
       missingTickers: missing,
@@ -66,7 +68,7 @@ export function UniverseTierSummary({ ranges, notIngested, mode }: Props) {
         </CardTitle>
         <p className="text-xs text-muted-foreground">
           A universe&apos;s earliest start is the latest inception date among its tickers.
-          Starting earlier would exclude some tickers until they begin trading.
+          We only show that date after every ticker in the preset has been ingested.
         </p>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -98,7 +100,7 @@ export function UniverseTierSummary({ ranges, notIngested, mode }: Props) {
                     <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
                       <span className="text-muted-foreground/60">Earliest start:</span>
                       <span className="font-mono text-foreground/80">
-                        {s.validFrom ? formatISODate(s.validFrom) : "—"}
+                        {s.validFrom ? formatISODate(s.validFrom) : "Pending ingest"}
                       </span>
                     </div>
 

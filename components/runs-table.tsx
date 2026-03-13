@@ -36,9 +36,11 @@ function SortHeader({ label, sort, onToggle }: { label: string; sort: SortKey; o
 interface RunsTableProps {
   runs: RunWithMetrics[]
   searchQuery?: string
+  /** runId → progress % (0-100) for active runs. Populated by the server page. */
+  progressMap?: Record<string, number>
 }
 
-export function RunsTable({ runs, searchQuery }: RunsTableProps) {
+export function RunsTable({ runs, searchQuery, progressMap = {} }: RunsTableProps) {
   const [sortKey, setSortKey] = useState<SortKey>("start_date")
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc")
 
@@ -122,6 +124,9 @@ export function RunsTable({ runs, searchQuery }: RunsTableProps) {
                 const metrics = getMetrics(run.run_metrics)
                 const status = run.status as RunStatus
                 const hasMetrics = metrics !== null && (status === "completed" || status === "failed")
+                const activeProgress = (status === "running" || status === "waiting_for_data")
+                  ? (progressMap[run.id] ?? null)
+                  : null
                 const startPeriod = run.start_date ? run.start_date.slice(0, 7) : "--"
                 const endPeriod = run.end_date ? run.end_date.slice(0, 7) : "--"
                 return (
@@ -142,6 +147,21 @@ export function RunsTable({ runs, searchQuery }: RunsTableProps) {
                     </TableCell>
                     <TableCell className="py-2.5">
                       <StatusBadge status={status} />
+                      {activeProgress !== null && (
+                        <div className="mt-1 flex items-center gap-1.5">
+                          <div className="w-12 h-1 rounded-full bg-secondary overflow-hidden">
+                            <div
+                              className={`h-full rounded-full transition-all duration-500 ${
+                                status === "waiting_for_data" ? "bg-blue-500" : "bg-warning"
+                              }`}
+                              style={{ width: `${activeProgress}%` }}
+                            />
+                          </div>
+                          <span className="text-[10px] font-mono text-muted-foreground tabular-nums">
+                            {activeProgress}%
+                          </span>
+                        </div>
+                      )}
                     </TableCell>
                     <TableCell
                       className={cn(

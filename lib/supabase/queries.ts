@@ -5,6 +5,7 @@ import {
   DATA_STATE_SINGLETON_ID,
   getLastCompleteTradingDayUtc,
   getNextMonthStartUtc,
+  getRequiredTickers,
   isDailyUpdatesEnabled,
   type DataUpdateMode,
 } from "@/lib/data-cutoff"
@@ -38,10 +39,17 @@ import type {
 } from "./types"
 import { COVERAGE_WINDOW_START, TICKER_INCEPTION_DATES } from "./types"
 import {
+  getDataIngestTriggerLabel,
+  isActiveDataIngestStatus,
   isMissingDataIngestExtendedColumnError,
   normalizeDataIngestStatus,
 } from "@/lib/data-ingest-jobs"
-import { UNIVERSE_PRESETS } from "@/lib/universe-config"
+import {
+  UNIVERSE_PRESETS,
+  computeUniverseValidFrom,
+  summarizeUniverseConstraints,
+  type UniverseId,
+} from "@/lib/universe-config"
 
 // Re-export for server-side consumers that import types from this module
 export type {
@@ -84,6 +92,106 @@ export type DataStateSummary = {
   updatedBy: string | null
   nextMonthlyRefresh: string
   dailyUpdatesEnabled: boolean
+}
+
+export type ScheduledRefreshActivity = {
+  monthlyActiveJobs: number
+  dailyActiveJobs: number
+}
+
+export type UniverseBatchStatus = "pending" | "running" | "succeeded" | "blocked"
+
+export type UniverseBatchStatusSummary = {
+  batchId: string
+  status: UniverseBatchStatus
+  totalJobs: number
+  completedJobs: number
+  avgProgress: number
+  symbols: Array<{ symbol: string; status: string; progress: number }>
+}
+
+export function classifyUniverseBatchStatus(rows: Array<{
+  status: string
+  progress: number | null
+  next_retry_at: string | null
+}>): Pick<UniverseBatchStatusSummary, "status" | "completedJobs" | "avgProgress"> {
+  const totalJobs = rows.length
+  const completedJobs = rows.filter((row) => normalizeDataIngestStatus(row.status) === "succeeded").length
+  const avgProgress = totalJobs === 0
+    ? 0
+    : Math.round(
+      rows.reduce((sum, row) => sum + getEffectiveIngestProgress(row.status, row.progress), 0) / totalJobs
+    )
+
+  const hasRunning = rows.some((row) => normalizeDataIngestStatus(row.status) === "running")
+  const hasActive = rows.some((row) => isActiveDataIngestStatus(row.status, row.next_retry_at))
+  const hasTerminalFailure = rows.some((row) => {
+    const normalized = normalizeDataIngestStatus(row.status)
+    return normalized === "blocked" || (normalized === "failed" && !row.next_retry_at)
+  })
+
+  return {
+    status: hasActive ? (hasRunning ? "running" : "pending") : hasTerminalFailure ? "blocked" : "succeeded",
+    completedJobs,
+    avgProgress,
+  }
+}
+
+export type UniverseConstraintsSnapshot = {
+  universe: UniverseId
+  universeEarliestStart: string | null
+  universeValidFrom: string | null
+  missingTickers: string[]
+  ingestedCount: number
+  totalCount: number
+  ready: boolean
+  dataCutoffDate: string | null
+}
+
+export type DataIngestJobHistoryEntry = {
+  id: string
+  symbol: string
+  status: string
+  stage: string | null
+  requestMode: string | null
+  requestedBy: string | null
+  triggerLabel: string
+  createdAt: string | null
+  startedAt: string | null
+  finishedAt: string | null
+  nextRetryAt: string | null
+  attemptCount: number | null
+  rowsInserted: number
+  targetCutoffDate: string | null
+  error: string | null
+}
+
+export type RequiredTickerResearchRow = {
+  ticker: string
+  researchStart: string
+  researchEnd: string
+  expectedDays: number
+  actualDays: number
+  trueMissingDays: number
+  coveragePercent: number
+  maxGapDays: number
+  firstObservedDate: string | null
+  lastObservedDate: string | null
+  isBenchmark: boolean
+  isIngested: boolean
+}
+
+export type RequiredTickerResearchSummary = {
+  rows: RequiredTickerResearchRow[]
+  requiredTickers: string[]
+  notIngestedTickers: string[]
+  ingestedTickers: number
+  completeness: number | null
+  totalExpected: number
+  totalActual: number
+  totalTrueMissing: number
+  trueMissingRate: number
+  marketCalendarDays: number
 }
 
 
@@ -629,6 +737,212 @@ export async function getDataCoverage(): Promise<DataCoverage> {
   }
 }
 
+export async function getActiveScheduledRefreshActivity(): Promise<ScheduledRefreshActivity> {
+  try {
+    const admin = createAdminClient()
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data, error } = await (admin as any)
+      .from("data_ingest_jobs")
+      .select("request_mode, status, next_retry_at, batch_id")
+      .in("request_mode", ["monthly", "daily"])
+      .not("batch_id", "is", null)
+      .in("status", ["queued", "running"])
+
+    if (error) {
+      return {
+        monthlyActiveJobs: 0,
+        dailyActiveJobs: 0,
+      }
+    }
+
+    let monthlyActiveJobs = 0
+    let dailyActiveJobs = 0
+
+    for (const row of (data ?? []) as Array<{
+      request_mode?: string | null
+      status?: string | null
+      next_retry_at?: string | null
+    }>) {
+      if (!isActiveDataIngestStatus(row.status, row.next_retry_at ?? null)) continue
+      if (row.request_mode === "monthly") monthlyActiveJobs += 1
+      if (row.request_mode === "daily") dailyActiveJobs += 1
+    }
+
+    return { monthlyActiveJobs, dailyActiveJobs }
+  } catch {
+    return {
+      monthlyActiveJobs: 0,
+      dailyActiveJobs: 0,
+    }
+  }
+}
+
+export async function getRecentDataIngestJobHistory(
+  limit = 15
+): Promise<DataIngestJobHistoryEntry[]> {
+  try {
+    const admin = createAdminClient()
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let { data, error } = await (admin as any)
+      .from("data_ingest_jobs")
+      .select("id, symbol, status, stage, request_mode, requested_by, created_at, started_at, finished_at, next_retry_at, attempt_count, rows_inserted, target_cutoff_date, error")
+      .order("created_at", { ascending: false })
+      .limit(limit)
+
+    if (error && isMissingDataIngestExtendedColumnError(error.message)) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const legacyFallback = await (admin as any)
+        .from("data_ingest_jobs")
+        .select("id, symbol, status, stage, created_at, started_at, finished_at, next_retry_at, attempt_count, target_cutoff_date, error")
+        .order("created_at", { ascending: false })
+        .limit(limit)
+      data = legacyFallback.data
+      error = legacyFallback.error
+    }
+
+    if (error) {
+      console.warn("getRecentDataIngestJobHistory:", error.message)
+      return []
+    }
+
+    return ((data ?? []) as Array<Record<string, unknown>>).map((row) => ({
+      id: String(row.id),
+      symbol: String(row.symbol ?? ""),
+      status: normalizeDataIngestStatus(String(row.status ?? "queued")),
+      stage: typeof row.stage === "string" ? row.stage : null,
+      requestMode: typeof row.request_mode === "string" ? row.request_mode : null,
+      requestedBy: typeof row.requested_by === "string" ? row.requested_by : null,
+      triggerLabel: getDataIngestTriggerLabel(
+        typeof row.request_mode === "string" ? row.request_mode : null,
+        typeof row.requested_by === "string" ? row.requested_by : null,
+      ),
+      createdAt: typeof row.created_at === "string" ? row.created_at : null,
+      startedAt: typeof row.started_at === "string" ? row.started_at : null,
+      finishedAt: typeof row.finished_at === "string" ? row.finished_at : null,
+      nextRetryAt: typeof row.next_retry_at === "string" ? row.next_retry_at : null,
+      attemptCount: typeof row.attempt_count === "number" ? row.attempt_count : Number(row.attempt_count ?? 0),
+      rowsInserted: typeof row.rows_inserted === "number" ? row.rows_inserted : Number(row.rows_inserted ?? 0),
+      targetCutoffDate: typeof row.target_cutoff_date === "string" ? row.target_cutoff_date : null,
+      error: typeof row.error === "string" ? row.error : null,
+    }))
+  } catch (err) {
+    console.error("getRecentDataIngestJobHistory exception:", err)
+    return []
+  }
+}
+
+export async function getRequiredTickerResearchSummary(
+  dataCutoffDate: string | null,
+  prefetchedRanges?: TickerDateRange[]
+): Promise<RequiredTickerResearchSummary> {
+  const empty: RequiredTickerResearchSummary = {
+    rows: [],
+    requiredTickers: getRequiredTickers(),
+    notIngestedTickers: [],
+    ingestedTickers: 0,
+    completeness: null,
+    totalExpected: 0,
+    totalActual: 0,
+    totalTrueMissing: 0,
+    trueMissingRate: 0,
+    marketCalendarDays: 0,
+  }
+
+  const researchEnd = dataCutoffDate ?? getLastCompleteTradingDayUtc()
+  const requiredTickers = getRequiredTickers()
+  const ranges = prefetchedRanges ?? await getAllTickerStats()
+  const researchStarts = buildRequiredTickerResearchStarts(ranges)
+  const minResearchStart = [...researchStarts.values()].sort()[0] ?? COVERAGE_WINDOW_START
+
+  try {
+    const admin = createAdminClient()
+    const { data, error } = await admin
+      .from("prices")
+      .select("ticker, date")
+      .in("ticker", requiredTickers)
+      .gte("date", minResearchStart)
+      .lte("date", researchEnd)
+      .order("date", { ascending: true })
+
+    if (error) {
+      console.error("getRequiredTickerResearchSummary error:", error.message)
+      return empty
+    }
+
+    const observedByTicker = new Map<string, string[]>()
+    const marketCalendarSet = new Set<string>()
+
+    for (const ticker of requiredTickers) {
+      observedByTicker.set(ticker, [])
+    }
+
+    for (const row of data ?? []) {
+      const ticker = String(row.ticker ?? "").toUpperCase()
+      const date = String(row.date ?? "")
+      const researchStart = researchStarts.get(ticker) ?? COVERAGE_WINDOW_START
+
+      if (date < researchStart || date > researchEnd) continue
+
+      marketCalendarSet.add(date)
+      const bucket = observedByTicker.get(ticker)
+      if (bucket) {
+        bucket.push(date)
+      } else {
+        observedByTicker.set(ticker, [date])
+      }
+    }
+
+    let marketCalendar = [...marketCalendarSet].sort()
+    if (marketCalendar.length === 0) {
+      const weekdayCalendar: string[] = []
+      const cursor = new Date(`${minResearchStart}T00:00:00Z`)
+      const end = new Date(`${researchEnd}T00:00:00Z`)
+      while (cursor <= end) {
+        const day = cursor.getUTCDay()
+        if (day !== 0 && day !== 6) {
+          weekdayCalendar.push(cursor.toISOString().slice(0, 10))
+        }
+        cursor.setUTCDate(cursor.getUTCDate() + 1)
+      }
+      marketCalendar = weekdayCalendar
+    }
+
+    const rows = requiredTickers.map((ticker) =>
+      summarizeTickerAgainstCalendar({
+        ticker,
+        researchStart: researchStarts.get(ticker) ?? COVERAGE_WINDOW_START,
+        researchEnd,
+        marketCalendar,
+        observedDates: observedByTicker.get(ticker) ?? [],
+      })
+    )
+
+    const totalExpected = rows.reduce((sum, row) => sum + row.expectedDays, 0)
+    const totalActual = rows.reduce((sum, row) => sum + row.actualDays, 0)
+    const totalTrueMissing = rows.reduce((sum, row) => sum + row.trueMissingDays, 0)
+    const notIngestedTickers = rows
+      .filter((row) => !row.isIngested)
+      .map((row) => row.ticker)
+      .sort()
+
+    return {
+      rows,
+      requiredTickers,
+      notIngestedTickers,
+      ingestedTickers: rows.filter((row) => row.isIngested).length,
+      completeness: totalExpected > 0 ? Math.min((totalActual / totalExpected) * 100, 100) : null,
+      totalExpected,
+      totalActual,
+      totalTrueMissing,
+      trueMissingRate: totalExpected > 0 ? totalTrueMissing / totalExpected : 0,
+      marketCalendarDays: marketCalendar.length,
+    }
+  } catch (err) {
+    console.error("getRequiredTickerResearchSummary exception:", err)
+    return empty
+  }
+}
+
 /** Count Mon–Fri business days between two inclusive YYYY-MM-DD date strings. */
 function countBusinessDays(startStr: string, endStr: string): number {
   if (!startStr || !endStr || startStr > endStr) return 0
@@ -642,6 +956,81 @@ function countBusinessDays(startStr: string, endStr: string): number {
     cur.setUTCDate(cur.getUTCDate() + 1)
   }
   return count
+}
+
+function maxIsoDateNullable(a: string | null, b: string | null): string | null {
+  if (!a) return b
+  if (!b) return a
+  return a >= b ? a : b
+}
+
+function buildRequiredTickerResearchStarts(
+  ranges: TickerDateRange[]
+): Map<string, string> {
+  const requiredTickers = getRequiredTickers()
+  const starts = new Map<string, string>()
+
+  for (const ticker of requiredTickers) {
+    starts.set(ticker, COVERAGE_WINDOW_START)
+  }
+
+  for (const [universeId, tickers] of Object.entries(UNIVERSE_PRESETS) as [UniverseId, readonly string[]][]) {
+    const validFrom = computeUniverseValidFrom(universeId, ranges)
+    const researchStart = maxIsoDateNullable(validFrom, COVERAGE_WINDOW_START) ?? COVERAGE_WINDOW_START
+
+    for (const ticker of tickers) {
+      const existing = starts.get(ticker)
+      starts.set(ticker, existing && existing <= researchStart ? existing : researchStart)
+    }
+  }
+
+  return starts
+}
+
+function summarizeTickerAgainstCalendar(params: {
+  ticker: string
+  researchStart: string
+  researchEnd: string
+  marketCalendar: readonly string[]
+  observedDates: readonly string[]
+}): RequiredTickerResearchRow {
+  const { ticker, researchStart, researchEnd, marketCalendar, observedDates } = params
+  const relevantCalendar = marketCalendar.filter((date) => date >= researchStart && date <= researchEnd)
+  const observedSet = new Set(observedDates.filter((date) => date >= researchStart && date <= researchEnd))
+
+  let trueMissingDays = 0
+  let maxGapDays = 0
+  let currentGap = 0
+
+  for (const date of relevantCalendar) {
+    if (observedSet.has(date)) {
+      if (currentGap > maxGapDays) maxGapDays = currentGap
+      currentGap = 0
+      continue
+    }
+    trueMissingDays += 1
+    currentGap += 1
+  }
+
+  if (currentGap > maxGapDays) maxGapDays = currentGap
+
+  const expectedDays = relevantCalendar.length
+  const actualDays = observedSet.size
+
+  return {
+    ticker,
+    researchStart,
+    researchEnd,
+    expectedDays,
+    actualDays,
+    trueMissingDays,
+    coveragePercent: expectedDays > 0 ? Math.min((actualDays / expectedDays) * 100, 100) : 100,
+    maxGapDays,
+    firstObservedDate: observedDates[0] ?? null,
+    lastObservedDate: observedDates[observedDates.length - 1] ?? null,
+    isBenchmark: BENCHMARK_OPTIONS.includes(ticker as (typeof BENCHMARK_OPTIONS)[number]),
+    isIngested: observedDates.length > 0,
+  }
 }
 
 export async function getDataHealthSummary(): Promise<DataHealthSummary> {
@@ -1110,7 +1499,9 @@ export async function getLatestDataIngestJobs(
           created_at: j.created_at ?? null,
           started_at: j.started_at ?? null,
           updated_at: j.updated_at ?? null,
+          finished_at: j.finished_at ?? null,
           last_heartbeat_at: j.last_heartbeat_at ?? null,
+          rows_inserted: j.rows_inserted ?? null,
           next_retry_at: j.next_retry_at ?? null,
           attempt_count: j.attempt_count ?? null,
         }
@@ -1121,7 +1512,7 @@ export async function getLatestDataIngestJobs(
     // Fallback: direct scan of data_ingest_jobs (all rows per symbol, pick latest in JS)
     let { data, error } = await supabase
       .from("data_ingest_jobs")
-      .select("id, symbol, status, stage, progress, error, created_at, started_at, updated_at, next_retry_at, attempt_count, start_date, end_date, request_mode, batch_id, target_cutoff_date, requested_by, last_heartbeat_at")
+      .select("id, symbol, status, stage, progress, error, created_at, started_at, updated_at, finished_at, next_retry_at, attempt_count, start_date, end_date, request_mode, batch_id, target_cutoff_date, requested_by, last_heartbeat_at, rows_inserted")
       .in("symbol", normalized)
       .order("created_at", { ascending: false })
 
@@ -1161,7 +1552,9 @@ export async function getLatestDataIngestJobs(
         created_at: j.created_at ?? null,
         started_at: j.started_at ?? null,
         updated_at: j.updated_at ?? null,
+        finished_at: j.finished_at ?? null,
         last_heartbeat_at: j.last_heartbeat_at ?? null,
+        rows_inserted: j.rows_inserted ?? null,
         next_retry_at: j.next_retry_at ?? null,
         attempt_count: j.attempt_count ?? null,
       }
@@ -1768,6 +2161,28 @@ export async function getTickerDateRanges(): Promise<TickerDateRange[]> {
 // without hitting the server-only constraint.
 export { computeUniverseValidFrom } from "@/lib/universe-config"
 
+export async function getUniverseConstraintsSnapshot(
+  universe: UniverseId,
+  prefetchedRanges?: TickerDateRange[]
+): Promise<UniverseConstraintsSnapshot> {
+  const [ranges, dataState] = await Promise.all([
+    prefetchedRanges ? Promise.resolve(prefetchedRanges) : getAllTickerStats(),
+    getDataState(),
+  ])
+
+  const summary = summarizeUniverseConstraints(universe, ranges)
+  return {
+    universe,
+    universeEarliestStart: summary.earliestStart,
+    universeValidFrom: summary.validFrom,
+    missingTickers: summary.missingTickers,
+    ingestedCount: summary.ingestedCount,
+    totalCount: summary.totalCount,
+    ready: summary.ready,
+    dataCutoffDate: dataState.dataCutoffDate,
+  }
+}
+
 /**
  * Returns inception-aware missingness for each ticker that has data.
  * "True missing" = gaps within the ticker's own [firstDate, lastDate] window.
@@ -1914,6 +2329,50 @@ export async function getIngestProgressForRun(
     avgProgress,
     minStartedAt,
     symbols: rows.map((r) => ({ symbol: r.symbol, status: r.status, progress: r.progress ?? 0 })),
+  }
+}
+
+export async function getUniverseBatchStatus(
+  batchId: string
+): Promise<UniverseBatchStatusSummary | null> {
+  if (!batchId) return null
+
+  const admin = createAdminClient()
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data, error } = await (admin as any)
+    .from("data_ingest_jobs")
+    .select("symbol, status, progress, next_retry_at")
+    .eq("batch_id", batchId)
+
+  if (error) {
+    console.error("[getUniverseBatchStatus] query error:", error.message)
+    return null
+  }
+
+  type Row = {
+    symbol: string
+    status: string
+    progress: number | null
+    next_retry_at: string | null
+  }
+
+  const rows = (data ?? []) as Row[]
+  if (rows.length === 0) return null
+
+  const totalJobs = rows.length
+  const { status, completedJobs, avgProgress } = classifyUniverseBatchStatus(rows)
+
+  return {
+    batchId,
+    status,
+    totalJobs,
+    completedJobs,
+    avgProgress,
+    symbols: rows.map((row) => ({
+      symbol: row.symbol,
+      status: normalizeDataIngestStatus(row.status),
+      progress: row.progress ?? 0,
+    })),
   }
 }
 

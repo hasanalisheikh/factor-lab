@@ -348,6 +348,10 @@ Sign Up → signUpAction → Supabase signUp (emailRedirectTo: /auth/callback)
    NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJ...
    SUPABASE_SERVICE_ROLE_KEY=eyJ...
    SUPABASE_REPORTS_BUCKET=reports
+   CRON_SECRET=change-me
+   WORKER_TRIGGER_URL=https://your-worker-host
+   WORKER_TRIGGER_SECRET=change-me
+   ENABLE_DAILY_UPDATES=false
    # Optional but recommended for rate limiting:
    UPSTASH_REDIS_REST_URL=https://xxx.upstash.io
    UPSTASH_REDIS_REST_TOKEN=AXxx...
@@ -439,6 +443,53 @@ Render restarts the process automatically if it crashes. Jobs are claimed atomic
 ### Alternative: GitHub Actions (polling cron)
 
 If you prefer zero infrastructure cost, you can run the worker as a scheduled GitHub Actions job that polls once per invocation and exits. Add `NEXT_PUBLIC_SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` to GitHub Secrets and create a workflow with `schedule: [{cron: "*/10 * * * *"}]` calling `factorlab-engine-worker --once`. The trade-off is higher latency (up to 10 minutes between queue and execution) and GitHub Actions minute consumption.
+
+---
+
+## Data Pipeline
+
+### Data Cutoff Mode (Monthly refresh)
+FactorLab uses a singleton `data_state` row to define the effective dataset boundary:
+
+- `data_cutoff_date`: the global "Current through" date shown in the UI.
+- `last_update_at`: when the cutoff was last advanced.
+- `update_mode`: `monthly`, `daily`, or `manual`.
+- `updated_by`: the actor that last moved the cutoff.
+
+Coverage, missingness, benchmark diagnostics, run gating, and run end-date selection all cap at `data_cutoff_date`. Dates after the cutoff are ignored rather than treated as missing.
+
+### Scheduled refreshes
+- Monthly refresh is required and runs via Vercel Cron on `/api/cron/monthly-refresh` at `0 0 1 * *` (start of month UTC).
+- Daily patch is optional and runs via `/api/cron/daily-refresh` at `0 1 * * *`. Set `ENABLE_DAILY_UPDATES=true` to enable it; when `false`, the route exits without queuing jobs.
+- Required tickers = every universe preset ticker plus every supported benchmark.
+- Refresh windows are overlap-based:
+  - Monthly: replay the last ~10 trading days plus a ~30 trading day gap-repair window.
+  - Daily: replay the last ~5 trading days plus a ~10 trading day gap-repair window.
+- The cutoff only advances after every job in the scheduled batch succeeds.
+
+### How auto-ingestion avoids stuck states
+- Every 10 s the worker writes a heartbeat (`updated_at`) to the running job.
+- Every 10 s the worker also writes `last_heartbeat_at` on `data_ingest_jobs`.
+- If the heartbeat goes stale for 2 min the stall scanner moves the job to `retrying` and schedules a retry.
+- Exponential backoff: 60 s → 300 s → 900 s → 3600 s (up to 5 attempts).
+- Permanent errors (invalid ticker, delisted symbol) go to `blocked` — no retry, run fails with a diagnostic message.
+- Legacy `/api/data/auto-maintain` now delegates to the cutoff-aware daily refresh route for backward compatibility.
+
+### How run gating works
+On `createRun()`:
+1. Preflight check queries coverage for all universe symbols + benchmark over the warmup-adjusted window.
+2. If all symbols meet their threshold (benchmark ≥ 99%, universe ≥ 98%/99%) → run is `queued` immediately.
+3. Otherwise → run is `waiting_for_data`; data ingest jobs are auto-queued with `preflight_run_id` linking them to the run.
+4. When every preflight ingest job settles, the worker chains to the backtest automatically — no user action required.
+
+### How to add a new benchmark or universe ticker
+1. Add the ticker to `lib/universe-config.ts` (`UNIVERSE_PRESETS`) and/or `BENCHMARK_OPTIONS` in `lib/benchmark.ts`.
+2. Add its inception date to `TICKER_INCEPTION_DATES` in `lib/supabase/types.ts`.
+3. Mirror the change in `services/engine/factorlab_engine/worker.py` (`UNIVERSE_PRESETS`).
+4. The next scheduled refresh (or a run preflight that needs the ticker) will queue the required ingest automatically.
+
+### Fallback data provider
+Set `FACTORLAB_FALLBACK_PROVIDER=stooq` on the worker to enable a Stooq.com fallback. When the primary yfinance download returns fewer than 50% of expected business days, the worker fetches the same range from Stooq and merges the results (primary preferred, fallback fills gaps). No additional packages required beyond `requests`.
 
 ---
 

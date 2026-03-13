@@ -16,7 +16,7 @@ export const maxDuration = 60
 const ALLOWED_TICKERS = new Set(["SPY", "QQQ", "IWM", "VTI", "EFA", "EEM", "TLT", "GLD", "VNQ"])
 // Python worker handles real stall recovery at 2 min; this is a last-resort
 // backstop for when the worker isn't running at all.
-const STUCK_JOB_MINUTES = 10
+const STUCK_JOB_MINUTES = 2
 const STUCK_JOB_MS = STUCK_JOB_MINUTES * 60 * 1000
 
 // Local type for data_ingest_jobs rows (table not yet in generated Supabase types)
@@ -38,6 +38,7 @@ type DataIngestJobRow = {
   updated_at: string | null
   last_heartbeat_at: string | null
   finished_at: string | null
+  rows_inserted: number | null
   next_retry_at: string | null
   attempt_count: number | null
   requested_by_run_id: string | null
@@ -107,11 +108,11 @@ async function runDataIngestWriteCompat<T>(
 }
 
 async function selectDataIngestJobsCompat(
-  admin: SupabaseClient<any, any, any>,
+  admin: SupabaseClient,
   buildQuery: (selectColumns: string) => Promise<{ data: DataIngestJobRow[] | null; error: { message: string } | null }>,
 ): Promise<{ data: DataIngestJobRow[] | null; error: { message: string } | null }> {
   let result = await buildQuery(
-    "id, symbol, status, stage, progress, error, created_at, started_at, updated_at, last_heartbeat_at, finished_at, next_retry_at, attempt_count, request_mode, batch_id, target_cutoff_date, requested_by, requested_by_run_id, requested_by_user_id, start_date, end_date"
+    "id, symbol, status, stage, progress, error, created_at, started_at, updated_at, last_heartbeat_at, finished_at, rows_inserted, next_retry_at, attempt_count, request_mode, batch_id, target_cutoff_date, requested_by, requested_by_run_id, requested_by_user_id, start_date, end_date"
   )
 
   if (result.error && isMissingDataIngestExtendedColumnError(result.error.message)) {
@@ -127,7 +128,7 @@ async function selectDataIngestJobsCompat(
 }
 
 async function resolveCurrentCutoffDate(
-  admin: SupabaseClient<any, any, any>
+  admin: SupabaseClient
 ): Promise<string> {
   const { data } = await admin
     .from("data_state")
@@ -351,6 +352,7 @@ export async function POST(request: NextRequest) {
               status: "succeeded",
               stage: "finalize",
               progress: 100,
+              rows_inserted: 0,
               finished_at: new Date().toISOString(),
               request_mode: "manual",
               target_cutoff_date: cutoffDate,
@@ -386,6 +388,7 @@ export async function POST(request: NextRequest) {
         status: "queued",
         stage: "download",
         progress: 0,
+        rows_inserted: 0,
         request_mode: "manual",
         target_cutoff_date: cutoffDate,
         requested_by: requestedBy,

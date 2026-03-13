@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import argparse
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import pandas as pd
@@ -25,6 +25,10 @@ SP100_TICKERS = [
 # Common benchmarks always ingested regardless of --tickers, so the /data page
 # benchmark coverage section always shows real data.
 BENCHMARK_TICKERS = ["SPY", "QQQ", "IWM"]
+
+
+def _utcnow() -> datetime:
+  return datetime.now(timezone.utc)
 
 
 def _normalize_close_frame(raw: pd.DataFrame, tickers: list[str]) -> pd.DataFrame:
@@ -93,7 +97,7 @@ def _upsert_data_log(
     "rows_upserted": rows_upserted,
     "start_date": start_date,
     "end_date": end_date,
-    "last_updated_at": datetime.utcnow().isoformat(),
+    "last_updated_at": _utcnow().isoformat(),
   }
   io.client.table("data_last_updated").upsert(payload, on_conflict="source").execute()
 
@@ -125,12 +129,12 @@ def parse_args() -> argparse.Namespace:
   parser = argparse.ArgumentParser(description="Ingest adjusted close prices into Supabase")
   parser.add_argument(
     "--start-date",
-    default=(datetime.utcnow() - timedelta(days=3650)).strftime("%Y-%m-%d"),
+    default=(_utcnow() - timedelta(days=3650)).strftime("%Y-%m-%d"),
     help="Start date (YYYY-MM-DD). Defaults to ~10 years ago.",
   )
   parser.add_argument(
     "--end-date",
-    default=datetime.utcnow().strftime("%Y-%m-%d"),
+    default=_utcnow().strftime("%Y-%m-%d"),
     help="End date (YYYY-MM-DD). Defaults to today (UTC).",
   )
   parser.add_argument(

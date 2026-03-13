@@ -79,6 +79,9 @@ export type RunConfig = {
   costsBps: number
   topN: number | null
   rebalanceFreq?: string
+  dataCutoffUsed?: string | null
+  universeEarliestStart?: string | null
+  benchmarkCoverageHealth?: { status: string; reason: string | null } | null
 }
 
 interface OverviewTabProps {
@@ -206,7 +209,24 @@ export function OverviewTab({ metrics, equityCurve, benchmarkTicker, runConfig }
                 { label: "Costs", value: `${runConfig.costsBps} bps per rebalance` },
                 { label: "Rebalance", value: runConfig.rebalanceFreq ?? "Monthly" },
                 { label: "Construction", value: "Equal weight" },
-                { label: "Data Handling", value: "Inception-aware (pre-launch tickers excluded at each rebalance)" },
+                {
+                  label: "Data Handling",
+                  value: "Inception-aware constraints enforced before queueing",
+                },
+                {
+                  label: "Data Cutoff Used",
+                  value: runConfig.dataCutoffUsed ?? "—",
+                },
+                {
+                  label: "Universe Earliest Start",
+                  value: runConfig.universeEarliestStart ?? "—",
+                },
+                {
+                  label: "Benchmark Coverage Health",
+                  value: runConfig.benchmarkCoverageHealth
+                    ? `${runConfig.benchmarkCoverageHealth.status}${runConfig.benchmarkCoverageHealth.reason ? ` — ${runConfig.benchmarkCoverageHealth.reason}` : ""}`
+                    : "—",
+                },
                 ...(runConfig.topN != null ? [{ label: "Top N", value: String(runConfig.topN) }] : []),
               ].map(({ label, value }) => (
                 <div key={label} className="flex flex-col gap-0.5">

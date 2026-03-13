@@ -1,5 +1,8 @@
 import { describe, it, expect } from "vitest"
-import { computeUniverseValidFrom } from "@/lib/universe-config"
+import {
+  computeUniverseValidFrom,
+  summarizeUniverseConstraints,
+} from "@/lib/universe-config"
 import type { TickerDateRange } from "@/lib/supabase/types"
 
 // ETF8 tickers: SPY, QQQ, IWM, EFA, EEM, TLT, GLD, VNQ
@@ -42,9 +45,10 @@ describe("computeUniverseValidFrom", () => {
       { ticker: "SPY", firstDate: "1993-01-29", lastDate: "2026-01-02", actualDays: 8300 },
       { ticker: "GLD", firstDate: "2004-11-18", lastDate: "2026-01-02", actualDays: 5400 },
     ]
-    // Only SPY + GLD present — should still return max of these two
-    const result = computeUniverseValidFrom("ETF8", partial)
-    expect(result).toBe("2004-11-18")
+    const result = summarizeUniverseConstraints("ETF8", partial)
+    expect(result.validFrom).toBeNull()
+    expect(result.ready).toBe(false)
+    expect(result.missingTickers).toContain("QQQ")
   })
 
   it("returns correct valid_from for NASDAQ100 (TSLA launched 2010-06-29)", () => {

@@ -12,6 +12,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import type { BenchmarkCoverage, DataIngestJobStatus } from "@/lib/supabase/types"
 import { TICKER_INCEPTION_DATES, getIngestJobError } from "@/lib/supabase/types"
+import { isPollingDataIngestStatus } from "@/lib/data-ingest-jobs"
 import { useDiagnosticsMode } from "./diagnostics-toggle"
 
 // ---------------------------------------------------------------------------
@@ -55,54 +56,35 @@ function BenchmarkRow({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialJob?.id, initialJob?.status, initialJob?.progress])
 
-  // When a job reaches "completed" but ticker_stats hasn't refreshed yet,
-  // show "Refreshing…" briefly and trigger a server re-render.
-  useEffect(() => {
-    if (job?.status === "completed" && coverage?.status !== "ok") {
-      // Small delay so the DB has time to update ticker_stats via the RPC
-      const t = setTimeout(() => router.refresh(), 2000)
-      return () => clearTimeout(t)
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [job?.status, coverage?.status])
-
-  // Active = still polling: queued/running, or failed-but-will-retry
-  const isActive =
-    job?.status === "queued" ||
-    job?.status === "running" ||
-    (job?.status === "failed" && !!job?.next_retry_at)
+  const isPolling = isPollingDataIngestStatus(job?.status, job?.finished_at)
 
   // A running job is "stalled" when its heartbeat (updated_at) is older than 2 min.
   // This mirrors the Python stall_minutes=2 threshold.
   // Falls back gracefully: if updated_at is null (old schema or queued job), never stalled.
   const STALL_MS = 2 * 60 * 1000
   const isStalled =
-    job?.status === "running" && !!job?.updated_at
-      ? Date.now() - new Date(job.updated_at).getTime() > STALL_MS
+    job?.status === "running" && isPolling && !!(job?.last_heartbeat_at ?? job?.updated_at)
+      ? Date.now() - new Date(job.last_heartbeat_at ?? job.updated_at ?? "").getTime() > STALL_MS
       : false
 
   // Poll every 3 s while active
   useEffect(() => {
-    if (!isActive || !job?.id) return
+    if (!isPolling || !job?.id) return
     const poll = async () => {
       try {
         const res = await fetch(`/api/data/ingest-benchmark?jobId=${job.id}`)
         if (!res.ok) return
         const data = (await res.json()) as DataIngestJobStatus
         setJob(data)
-        // Stop polling on terminal states
-        if (
-          data.status === "completed" ||
-          data.status === "blocked" ||
-          (data.status === "failed" && !data.next_retry_at)
-        ) {
+        if (data.finished_at || data.status === "blocked") {
           router.refresh()
         }
       } catch { /* ignore transient errors */ }
     }
+    poll()
     const id = setInterval(poll, 3000)
     return () => clearInterval(id)
-  }, [isActive, job?.id, router])
+  }, [isPolling, job?.id, router])
 
   const handleAction = async (forceStart?: string) => {
     setIsSubmitting(true)
@@ -120,6 +102,14 @@ function BenchmarkRow({
         setSubmitError(data.error ?? "Failed to start ingestion.")
         return
       }
+      if (data.already_active && data.jobId) {
+        const statusRes = await fetch(`/api/data/ingest-benchmark?jobId=${data.jobId}`)
+        if (statusRes.ok) {
+          const activeJob = await statusRes.json() as DataIngestJobStatus
+          setJob(activeJob)
+          return
+        }
+      }
       setJob({
         id: data.jobId,
         status: "queued",
@@ -129,6 +119,8 @@ function BenchmarkRow({
         created_at: new Date().toISOString(),
         started_at: null,
         updated_at: null,
+        finished_at: null,
+        rows_inserted: null,
         next_retry_at: null,
         attempt_count: 0,
       })
@@ -147,7 +139,14 @@ function BenchmarkRow({
       await fetch(`/api/data/ingest-benchmark?jobId=${job.id}`, { method: "DELETE" })
       setJob((prev) =>
         prev
-          ? { ...prev, status: "failed", error: "Cancelled by user.", error_message: "Cancelled by user.", next_retry_at: null }
+          ? {
+              ...prev,
+              status: "failed",
+              error: "Cancelled by user.",
+              error_message: "Cancelled by user.",
+              finished_at: new Date().toISOString(),
+              next_retry_at: null,
+            }
           : prev
       )
     } catch {
@@ -166,9 +165,11 @@ function BenchmarkRow({
   const coveragePct = coverage?.coveragePercent ?? 0
 
   const isBlocked = job?.status === "blocked"
-  const hasScheduledRetry = job?.status === "failed" && !!job?.next_retry_at
-  const isRetrying = (job?.status === "queued" || job?.status === "running") &&
-    (job?.attempt_count ?? 0) > 0
+  const hasScheduledRetry =
+    job?.status === "retrying" || (job?.status === "failed" && !!job?.next_retry_at)
+  const isRetrying =
+    job?.status === "retrying" ||
+    ((job?.status === "queued" || job?.status === "running") && (job?.attempt_count ?? 0) > 0)
 
   const pctColor =
     status === "ok"
@@ -197,20 +198,22 @@ function BenchmarkRow({
           ? "text-red-400"
           : "text-amber-400"
 
-  const showBackfillBtn = !isActive && !isBlocked && (needsBackfill || status === "missing")
-  const showIngestBtn = !isActive && !isBlocked && status === "not_ingested"
+  const showBackfillBtn = !isPolling && !hasScheduledRetry && !isBlocked && (needsBackfill || status === "missing")
+  const showIngestBtn = !isPolling && !hasScheduledRetry && !isBlocked && status === "not_ingested"
   const isFailed = job?.status === "failed" && !job?.next_retry_at
   // "Retry" for permanently-failed or stalled jobs
-  const showRetryBtn = (isFailed && !isBlocked) || (isActive && isStalled)
+  const showRetryBtn = (isFailed && !isBlocked) || isStalled
   // "Retry now" for blocked jobs or scheduled retries (skip the wait)
   const showRetryNowBtn = isBlocked || hasScheduledRetry
   // "Cancel" for queued or running jobs (not stalled — stalled already shows Retry)
-  const showCancelBtn = isActive && !isStalled && !hasScheduledRetry
+  const showCancelBtn = isPolling && !isStalled
 
-  // Simple status for non-diagnostics mode
-  const isNeedsAttention = isBlocked || (isFailed && !hasScheduledRetry)
-  const isAutoFixing = isActive || isStalled || hasScheduledRetry ||
-    (!isNeedsAttention && status !== "ok" && job?.status === "completed" && coverage?.status !== "ok")
+  const canEnableDiagnostics = !diagnosticsEnabled && (
+    showBackfillBtn ||
+    showIngestBtn ||
+    showRetryBtn ||
+    showRetryNowBtn
+  )
 
   return (
     <div className="py-2 border-b border-border/50 last:border-0 last:pb-0 first:pt-0">
@@ -223,103 +226,65 @@ function BenchmarkRow({
           {status === "not_ingested" ? "—" : `${coveragePct.toFixed(1)}%`}
         </span>
 
-        {/* Status area */}
-        {diagnosticsEnabled ? (
-          /* Full technical status (diagnostics ON) */
-          <span className={`text-[11px] flex-1 min-w-0 ${statusColor}`}>
-            {isActive && isStalled ? (
-              <span className="flex items-center gap-1 text-amber-400">
-                <AlertTriangle className="w-3 h-3 flex-shrink-0" />
-                <span className="truncate">Stalled</span>
+        <span className={`text-[11px] flex-1 min-w-0 ${statusColor}`}>
+          {isStalled ? (
+            <span className="flex items-center gap-1 text-amber-400">
+              <AlertTriangle className="w-3 h-3 flex-shrink-0" />
+              <span className="truncate">Stalled</span>
+            </span>
+          ) : hasScheduledRetry && job?.next_retry_at ? (
+            <span className="flex items-center gap-1 text-amber-400">
+              <AlertTriangle className="w-3 h-3 flex-shrink-0" />
+              <span className="truncate">
+                Retrying at {new Date(job.next_retry_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
               </span>
-            ) : hasScheduledRetry && job?.next_retry_at ? (
-              <span className="flex items-center gap-1 text-amber-400">
-                <AlertTriangle className="w-3 h-3 flex-shrink-0" />
-                <span className="truncate">
-                  Will retry at {new Date(job.next_retry_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+            </span>
+          ) : isPolling ? (
+            <span className="flex items-center gap-1 text-blue-400">
+              <Loader2 className="w-3 h-3 animate-spin flex-shrink-0" />
+              <span className="truncate">
+                {isRetrying
+                  ? "Retrying…"
+                  : job?.status === "queued"
+                    ? "Queued…"
+                    : job?.stage === "download"
+                      ? "Downloading…"
+                      : "Ingesting…"}
+                {job && job.progress > 0 ? ` ${job.progress}%` : ""}
+                {job?.status === "running" && (job?.last_heartbeat_at ?? job?.updated_at)
+                  ? ` · ${Math.round((Date.now() - new Date(job.last_heartbeat_at ?? job.updated_at ?? "").getTime()) / 1000)}s ago`
+                  : ""}
+              </span>
+            </span>
+          ) : isBlocked ? (
+            <span className="flex items-center gap-1 text-red-400">
+              <XCircle className="w-3 h-3 flex-shrink-0" />
+              <span className="truncate" title={getIngestJobError(job) ?? undefined}>
+                Blocked
+              </span>
+            </span>
+          ) : isFailed ? (
+            <span className="flex items-center gap-1 text-red-400">
+              <XCircle className="w-3 h-3 flex-shrink-0" />
+              Failed
+            </span>
+          ) : status === "ok" ? (
+            <span className="flex items-center gap-1">
+              <CheckCircle2 className="w-3 h-3 flex-shrink-0" />
+              Healthy
+              {job?.status === "succeeded" && job.rows_inserted !== undefined && (
+                <span className="text-muted-foreground">
+                  · {job.rows_inserted ?? 0} rows
                 </span>
-              </span>
-            ) : job?.status === "completed" && coverage?.status !== "ok" ? (
-              <span className="flex items-center gap-1 text-blue-400">
-                <Loader2 className="w-3 h-3 animate-spin flex-shrink-0" />
-                <span className="truncate">Refreshing…</span>
-              </span>
-            ) : isActive ? (
-              <span className="flex items-center gap-1 text-blue-400">
-                <Loader2 className="w-3 h-3 animate-spin flex-shrink-0" />
-                <span className="truncate">
-                  {isRetrying
-                    ? "Retrying…"
-                    : job?.status === "queued"
-                      ? "Queued…"
-                      : job?.stage === "download"
-                        ? "Downloading…"
-                        : "Ingesting…"}
-                  {job && job.progress > 0 ? ` ${job.progress}%` : ""}
-                  {job?.status === "running" && job?.updated_at
-                    ? ` · ${Math.round((Date.now() - new Date(job.updated_at).getTime()) / 1000)}s ago`
-                    : ""}
-                </span>
-              </span>
-            ) : isBlocked ? (
-              <span className="flex items-center gap-1 text-red-400">
-                <XCircle className="w-3 h-3 flex-shrink-0" />
-                <span className="truncate" title={getIngestJobError(job) ?? undefined}>
-                  Blocked
-                </span>
-              </span>
-            ) : isFailed ? (
-              <span className="flex items-center gap-1 text-red-400">
-                <XCircle className="w-3 h-3 flex-shrink-0" />
-                Failed
-              </span>
-            ) : status === "ok" ? (
-              <span className="flex items-center gap-1">
-                <CheckCircle2 className="w-3 h-3 flex-shrink-0" />
-                {statusLabel}
-              </span>
-            ) : (
-              <span className="flex items-center gap-1">
-                {status !== "not_ingested" && <AlertTriangle className="w-3 h-3 flex-shrink-0" />}
-                {statusLabel}
-              </span>
-            )}
-          </span>
-        ) : (
-          /* Simplified status (diagnostics OFF) */
-          <span className="text-[11px] flex-1 min-w-0">
-            {isNeedsAttention ? (
-              <span className="flex items-center gap-2">
-                <span className="flex items-center gap-1 text-red-400">
-                  <XCircle className="w-3 h-3 flex-shrink-0" />
-                  Needs attention
-                </span>
-                <button
-                  onClick={toggle}
-                  className="text-[10px] text-muted-foreground underline underline-offset-2 hover:text-foreground transition-colors"
-                >
-                  View diagnostics
-                </button>
-              </span>
-            ) : isAutoFixing ? (
-              <span className="flex items-center gap-1 text-blue-400">
-                <Loader2 className="w-3 h-3 animate-spin flex-shrink-0" />
-                <span className="truncate">Auto-fixing…</span>
-              </span>
-            ) : status === "ok" ? (
-              <span className="flex items-center gap-1 text-emerald-400">
-                <CheckCircle2 className="w-3 h-3 flex-shrink-0" />
-                Ready
-              </span>
-            ) : (
-              /* Not yet auto-queued or pending — system will handle */
-              <span className="flex items-center gap-1 text-blue-400">
-                <Loader2 className="w-3 h-3 animate-spin flex-shrink-0" />
-                <span className="truncate">Auto-fixing…</span>
-              </span>
-            )}
-          </span>
-        )}
+              )}
+            </span>
+          ) : (
+            <span className="flex items-center gap-1">
+              {status !== "not_ingested" && <AlertTriangle className="w-3 h-3 flex-shrink-0" />}
+              {statusLabel}
+            </span>
+          )}
+        </span>
 
         {/* Action buttons — diagnostics mode only */}
         {diagnosticsEnabled && (
@@ -389,6 +354,15 @@ function BenchmarkRow({
             )}
           </>
         )}
+
+        {canEnableDiagnostics && (
+          <button
+            onClick={toggle}
+            className="text-[10px] text-muted-foreground underline underline-offset-2 hover:text-foreground transition-colors"
+          >
+            Enable diagnostics
+          </button>
+        )}
       </div>
 
       {submitError && (
@@ -408,10 +382,13 @@ export function BenchmarkCoverageCard({ benchmarks, isDev: _isDev = false }: Pro
   const [isCancellingAll, setIsCancellingAll] = useState(false)
 
   const anyNeedsBackfill = (benchmarks ?? []).some(
-    (b) => b.coverage?.needsHistoricalBackfill || b.coverage?.status === "missing"
+    (b) =>
+      b.coverage?.needsHistoricalBackfill ||
+      b.coverage?.status === "missing" ||
+      b.coverage?.status === "not_ingested"
   )
   const queuedCount = (benchmarks ?? []).filter(
-    (b) => b.initialJob?.status === "queued" || b.initialJob?.status === "running"
+    (b) => isPollingDataIngestStatus(b.initialJob?.status, b.initialJob?.finished_at)
   ).length
 
   const handleCancelAll = async () => {
@@ -444,7 +421,7 @@ export function BenchmarkCoverageCard({ benchmarks, isDev: _isDev = false }: Pro
           )}
         </div>
         <p className="text-xs text-muted-foreground">
-          Coverage from ticker inception to today across all supported benchmarks.
+          Coverage inside the monitored research window, plus inception-based historical backfill detection.
         </p>
       </CardHeader>
 
@@ -468,7 +445,7 @@ export function BenchmarkCoverageCard({ benchmarks, isDev: _isDev = false }: Pro
                 <p className="text-[11px] text-amber-300/80 leading-snug">
                   {diagnosticsEnabled
                     ? <>Some benchmarks have incomplete history. Click <strong>Backfill</strong> on any affected row to download full history from ticker inception.</>
-                    : "Auto-backfilling benchmark history from inception. This may take a few minutes."}
+                    : "Automatic repairs run in the background. Enable diagnostics to inspect or intervene."}
                 </p>
               </div>
             )}

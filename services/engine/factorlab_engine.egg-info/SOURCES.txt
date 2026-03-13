@@ -7,7 +7,12 @@ pyproject.toml
 ./factorlab_engine/worker.py
 ./tests/test_backtest_core.py
 ./tests/test_ml.py
+./tests/test_smoke.py
+./tests/test_strategies.py
+./tests/test_supabase_io.py
 ./tests/test_universe_resolution.py
+./tests/test_validation.py
+./tests/test_worker_ml_dispatch.py
 factorlab_engine/__init__.py
 factorlab_engine/ingest.py
 factorlab_engine/ml.py
@@ -21,4 +26,9 @@ factorlab_engine.egg-info/requires.txt
 factorlab_engine.egg-info/top_level.txt
 tests/test_backtest_core.py
 tests/test_ml.py
+tests/test_smoke.py
+tests/test_strategies.py
+tests/test_supabase_io.py
 tests/test_universe_resolution.py
+tests/test_validation.py
+tests/test_worker_ml_dispatch.py

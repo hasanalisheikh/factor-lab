@@ -5,7 +5,7 @@ import { redirect } from "next/navigation"
 import { z } from "zod"
 import { createClient } from "@/lib/supabase/server"
 import { createAdminClient } from "@/lib/supabase/admin"
-import { checkAccountCreationRateLimit } from "@/lib/supabase/rate-limit"
+import { checkAccountCreationRateLimit, checkResendRateLimit } from "@/lib/supabase/rate-limit"
 
 async function transferGuestRuns(guestUserId: string, newUserId: string) {
   const admin = createAdminClient()
@@ -13,7 +13,7 @@ async function transferGuestRuns(guestUserId: string, newUserId: string) {
   await admin.auth.admin.deleteUser(guestUserId)
 }
 
-export type AuthState = { error: string } | null
+export type AuthState = { error: string } | { unverifiedEmail: string } | null
 export type ResendState = { error: string } | { success: true } | null
 export type ForgotPasswordState = { success: true } | { error: string } | null
 export type ResetPasswordState = { error: string } | null
@@ -61,6 +61,9 @@ export async function signInAction(
     const message = error.message.toLowerCase()
     if (status === 429 || message.includes("rate limit") || message.includes("too many")) {
       return { error: "Too many sign-in attempts. Please wait a bit and try again." }
+    }
+    if (message.includes("email not confirmed")) {
+      return { unverifiedEmail: parsed.data.email }
     }
     return { error: "Invalid email or password." }
   }
@@ -218,15 +221,23 @@ export async function resendVerificationAction(
     return { error: "Email address is required." }
   }
 
-  const headersList = await headers()
-  const ip = headersList.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "unknown"
-  const { allowed, error: rateLimitError } = await checkAccountCreationRateLimit(ip)
+  const { allowed, error: rateLimitError } = await checkResendRateLimit(email)
   if (!allowed) {
-    return { error: rateLimitError ?? "Rate limit exceeded. Try again later." }
+    return { error: rateLimitError ?? "Please wait before requesting another verification email." }
   }
 
+  const origin =
+    process.env.NEXT_PUBLIC_SITE_URL ??
+    (await headers()).get("origin") ??
+    "http://localhost:3000"
+  const emailRedirectTo = `${origin}/auth/callback`
+
   const supabase = await createClient()
-  const { error } = await supabase.auth.resend({ type: "signup", email })
+  const { error } = await supabase.auth.resend({
+    type: "signup",
+    email,
+    options: { emailRedirectTo },
+  })
 
   if (error) {
     return { error: error.message }

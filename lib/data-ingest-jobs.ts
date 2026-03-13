@@ -3,7 +3,9 @@ const EXTENDED_DATA_INGEST_COLUMNS = [
   "batch_id",
   "target_cutoff_date",
   "requested_by",
+  "requested_by_user_id",
   "last_heartbeat_at",
+  "rows_inserted",
 ] as const
 
 export function isMissingDataIngestExtendedColumnError(message?: string | null): boolean {
@@ -22,7 +24,9 @@ export function stripExtendedDataIngestFields<T extends Record<string, unknown>>
   delete copy.batch_id
   delete copy.target_cutoff_date
   delete copy.requested_by
+  delete copy.requested_by_user_id
   delete copy.last_heartbeat_at
+  delete copy.rows_inserted
   return copy
 }
 
@@ -45,4 +49,35 @@ export function isActiveDataIngestStatus(
 ): boolean {
   const normalized = normalizeDataIngestStatus(status)
   return normalized === "queued" || normalized === "running" || isScheduledRetry(normalized, nextRetryAt)
+}
+
+export function isPollingDataIngestStatus(
+  status: string | null | undefined,
+  finishedAt: string | null | undefined,
+): boolean {
+  if (finishedAt) return false
+  const normalized = normalizeDataIngestStatus(status)
+  return normalized === "queued" || normalized === "running"
+}
+
+export function getDataIngestTriggerLabel(
+  requestMode: string | null | undefined,
+  requestedBy: string | null | undefined,
+): string {
+  const mode = (requestMode ?? "").toLowerCase()
+  const requested = (requestedBy ?? "").toLowerCase()
+
+  if (mode === "monthly" || requested.startsWith("cron:monthly")) {
+    return "scheduled monthly refresh"
+  }
+  if (mode === "daily" || requested.startsWith("cron:daily")) {
+    return "daily patch"
+  }
+  if (mode === "manual" || requested.startsWith("manual")) {
+    return "manual repair (admin)"
+  }
+  if (mode === "preflight" || requested.startsWith("run-preflight")) {
+    return "run preflight"
+  }
+  return "data repair"
 }

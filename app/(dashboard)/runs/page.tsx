@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button"
 import { RunsTable } from "@/components/runs-table"
 import { RunsSearchBar } from "@/components/runs-search-bar"
 import { ActiveRunsPoller } from "@/components/active-runs-poller"
-import { getRuns, getRunsCount } from "@/lib/supabase/queries"
+import { getRuns, getRunsCount, getActiveRunsProgress } from "@/lib/supabase/queries"
 
 export const revalidate = 0
 
@@ -30,6 +30,14 @@ export default async function RunsPage({ searchParams }: PageProps) {
     (r) => r.status === "queued" || r.status === "running" || r.status === "waiting_for_data"
   )
 
+  // Fetch progress for active runs in a single batch query.
+  const activeRunIds = runs
+    .filter((r) => r.status === "running" || r.status === "waiting_for_data")
+    .map((r) => r.id)
+  const progressMapRaw = await getActiveRunsProgress(activeRunIds)
+  // Convert Map to plain object for client component serialisation.
+  const progressMap: Record<string, number> = Object.fromEntries(progressMapRaw)
+
   return (
     <AppShell title="Runs">
       <ActiveRunsPoller hasActiveRuns={hasActiveRuns} />
@@ -48,7 +56,7 @@ export default async function RunsPage({ searchParams }: PageProps) {
             </Link>
           </div>
         </div>
-        <RunsTable runs={runs} searchQuery={q} />
+        <RunsTable runs={runs} searchQuery={q} progressMap={progressMap} />
       </div>
     </AppShell>
   )
