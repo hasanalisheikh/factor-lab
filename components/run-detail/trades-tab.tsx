@@ -35,14 +35,19 @@ type TradesData = {
   rebalanceLog: RebalanceEntry[]
 }
 
+function getPredictionDisplayDate(row: ModelPredictionRow): string {
+  return row.target_date || row.as_of_date
+}
+
 function buildFromPredictions(predictions: ModelPredictionRow[]): TradesData {
   if (predictions.length === 0) return { turnoverData: [], rebalanceLog: [] }
 
-  // Group by as_of_date
+  // Group by realized holding date so the log stays inside the requested run window.
   const byDate: Record<string, ModelPredictionRow[]> = {}
   for (const row of predictions) {
-    if (!byDate[row.as_of_date]) byDate[row.as_of_date] = []
-    byDate[row.as_of_date].push(row)
+    const date = getPredictionDisplayDate(row)
+    if (!byDate[date]) byDate[date] = []
+    byDate[date].push(row)
   }
 
   const dates = Object.keys(byDate).sort()

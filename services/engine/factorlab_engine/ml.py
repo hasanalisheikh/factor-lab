@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 import os
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
 import pandas as pd
@@ -196,6 +196,11 @@ def _feature_importance(model: Any, feature_names: list[str]) -> dict[str, float
   return {name: float(values[i] / denom) for i, name in enumerate(feature_names)}
 
 
+def _feature_matrix(frame: pd.DataFrame) -> pd.DataFrame:
+  """Keep feature names attached across fit/predict for sklearn-compatible models."""
+  return frame.loc[:, FEATURE_COLUMNS]
+
+
 def run_walk_forward(
   *,
   run_id: str,
@@ -206,6 +211,7 @@ def run_walk_forward(
   benchmark_ticker: str,
   top_n: int | None = None,
   cost_bps: float | None = None,
+  progress_cb: Callable[[int, int], None] | None = None,
 ) -> MLArtifacts:
   """Daily walk-forward ML backtest.
 
@@ -243,16 +249,22 @@ def run_walk_forward(
     raise RuntimeError("compute_daily_features returned an empty DataFrame — check prices and benchmark_ticker")
 
   feature_frame["date"] = pd.to_datetime(feature_frame["date"], utc=False)
+  trading_dates = pd.Index(pd.to_datetime(prices.sort_index().index, utc=False))
+  next_trading_dates = pd.Series(
+    trading_dates[1:].to_numpy(),
+    index=trading_dates[:-1],
+  )
+  feature_frame["target_date"] = feature_frame["date"].map(next_trading_dates)
 
   features_clean = feature_frame.replace([np.inf, -np.inf], np.nan)
   # Drop NaN per-row: keeps (date, symbol) pairs where ALL features are present
-  model_rows = features_clean.dropna(subset=FEATURE_COLUMNS + ["target_return"]).copy()
+  model_rows = features_clean.dropna(subset=FEATURE_COLUMNS + ["target_return", "target_date"]).copy()
 
   start_ts = pd.to_datetime(start_date)
   end_ts   = pd.to_datetime(end_date)
 
   # ── Pre-backtest validation ───────────────────────────────────────────────
-  pre_window = model_rows[model_rows["date"] < start_ts]
+  pre_window = model_rows[model_rows["target_date"] < start_ts]
   n_train_rows  = len(pre_window)
   n_train_days  = pre_window["date"].nunique()
   avg_symbols   = n_train_rows / max(n_train_days, 1)
@@ -279,7 +291,9 @@ def run_walk_forward(
       "Choose an earlier start date or ingest a broader universe."
     )
 
-  in_window_rows = model_rows[(model_rows["date"] >= start_ts) & (model_rows["date"] <= end_ts)].copy()
+  in_window_rows = model_rows[
+    (model_rows["target_date"] >= start_ts) & (model_rows["target_date"] <= end_ts)
+  ].copy()
   if in_window_rows.empty:
     raise RuntimeError(
       f"No ML rows in backtest window {start_date}..{end_date} after feature dropna. "
@@ -328,8 +342,10 @@ def run_walk_forward(
     # Periodic refit (every model_refit_freq steps); triggers a _build_model call
     if step_idx - last_refit_idx >= model_refit_freq:
       model = _build_model(strategy)
-      model.fit(train_slice[FEATURE_COLUMNS].to_numpy(), train_slice["target_return"].to_numpy())
+      model.fit(_feature_matrix(train_slice), train_slice["target_return"].to_numpy())
       last_refit_idx = step_idx
+      if progress_cb is not None:
+        progress_cb(step_idx + 1, len(rebalance_dates))
 
     # Predict on current date
     test_slice = in_window_rows[
@@ -339,7 +355,7 @@ def run_walk_forward(
     if test_slice.empty:
       continue
 
-    preds = model.predict(test_slice[FEATURE_COLUMNS].to_numpy())  # type: ignore[union-attr]
+    preds = model.predict(_feature_matrix(test_slice))  # type: ignore[union-attr]
 
     if not np.isfinite(preds).all():
       raise RuntimeError(
@@ -369,23 +385,25 @@ def run_walk_forward(
     turnovers.append(turnover)
 
     # Returns
-    gross_ret   = float(selected["target_return"].mean()) if len(selected) > 0 else 0.0
-    net_ret     = gross_ret - cost_rate * turnover
+    gross_ret = float(selected["target_return"].mean()) if len(selected) > 0 else 0.0
+    net_ret = gross_ret - cost_rate * turnover
     bench_ret_v = float(test_slice["benchmark_return"].iloc[0]) if len(test_slice) > 0 else 0.0
+    target_date = pd.Timestamp(test_slice["target_date"].iloc[0])
 
     daily_portfolio.append(net_ret)
     daily_benchmark.append(bench_ret_v)
-    equity_dates.append(as_of_date)
+    equity_dates.append(target_date)
 
     # Accumulate predictions (trimmed to last 20 dates after loop)
     as_of_str = as_of_date.strftime("%Y-%m-%d")
+    target_date_str = target_date.strftime("%Y-%m-%d")
     for _, row in test_slice.iterrows():
       all_predictions.append(
         {
           "run_id": run_id,
           "model_name": strategy,
           "as_of_date": as_of_str,
-          "target_date": as_of_str,  # next trading day — stored as as_of for simplicity
+          "target_date": target_date_str,
           "ticker": str(row["ticker"]),
           "predicted_return": float(row["predicted_return"]),
           "realized_return": float(row["target_return"]),
@@ -400,7 +418,7 @@ def run_walk_forward(
       position_rows.append(
         {
           "run_id": run_id,
-          "date": as_of_str,
+          "date": target_date_str,
           "symbol": str(row["ticker"]),
           "weight": float(row["weight"]),
         }
@@ -408,6 +426,9 @@ def run_walk_forward(
 
   if not daily_portfolio:
     raise RuntimeError("ML walk-forward produced no rebalances — check warmup period vs backtest window")
+
+  if progress_cb is not None and rebalance_dates:
+    progress_cb(len(rebalance_dates), len(rebalance_dates))
 
   # Trim predictions to last 20 as_of_dates
   all_as_of = sorted({r["as_of_date"] for r in all_predictions})

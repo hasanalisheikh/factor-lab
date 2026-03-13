@@ -24,6 +24,8 @@ function statusIcon(status: string) {
       return <CheckCircle className="w-3.5 h-3.5 shrink-0 text-emerald-500" />
     case "failed":
       return <XCircle className="w-3.5 h-3.5 shrink-0 text-destructive" />
+    case "blocked":
+      return <XCircle className="w-3.5 h-3.5 shrink-0 text-amber-400" />
     case "running":
       return <Loader2 className="w-3.5 h-3.5 shrink-0 text-primary animate-spin" />
     default:
@@ -35,6 +37,7 @@ function statusTitle(status: string, name: string): string {
   switch (status) {
     case "completed": return `Run completed: ${name}`
     case "failed":    return `Run failed: ${name}`
+    case "blocked":   return `Run blocked: ${name}`
     case "running":   return `Job running: ${name}`
     case "pending":   return `Job queued: ${name}`
     default:          return `${name}: ${status}`
@@ -70,9 +73,11 @@ export function TopbarNotifications() {
       const supabase = createClient()
 
       // Fetch jobs + matching run names in two lightweight queries
+      const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString()
       const { data: jobs } = await supabase
         .from("jobs")
         .select("id, run_id, name, status, created_at")
+        .gte("created_at", since)
         .order("created_at", { ascending: false })
         .limit(10)
 

@@ -44,10 +44,14 @@ interface MlHolding {
   realizedReturn: number | null
 }
 
+function getPredictionDisplayDate(row: ModelPredictionRow): string {
+  return row.target_date || row.as_of_date
+}
+
 function getMlDates(predictions: ModelPredictionRow[]): string[] {
   const seen = new Set<string>()
   for (const r of predictions) {
-    seen.add(r.as_of_date)
+    seen.add(getPredictionDisplayDate(r))
   }
   return Array.from(seen).sort((a, b) => b.localeCompare(a)) // newest first
 }
@@ -57,7 +61,7 @@ function getMlHoldingsForDate(
   date: string
 ): MlHolding[] {
   return predictions
-    .filter((r) => r.as_of_date === date && r.selected)
+    .filter((r) => getPredictionDisplayDate(r) === date && r.selected)
     .sort((a, b) => a.rank - b.rank)
     .map((r) => ({
       ticker: r.ticker,

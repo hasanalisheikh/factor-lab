@@ -124,8 +124,8 @@ def test_walk_forward_split_and_output_shapes(monkeypatch: pytest.MonkeyPatch):
   monkeypatch.setenv("ML_TRAIN_WINDOW_DAYS", "504")
   monkeypatch.setenv("ML_REFIT_FREQ_DAYS", "5")
 
-  # 72 months (6 years) × 21 days × 10 assets
-  prices = _make_prices(n_months=72, n_assets=6)
+  # Use a little over 6 years so the synthetic series still covers the asserted end date.
+  prices = _make_prices(n_months=84, n_assets=6)
   result = run_walk_forward(
     run_id="test-shapes",
     strategy="ml_ridge",
@@ -139,6 +139,8 @@ def test_walk_forward_split_and_output_shapes(monkeypatch: pytest.MonkeyPatch):
 
   # Equity curve should span roughly the backtest window in trading days
   assert len(result.equity_rows) > 0, "No equity rows produced"
+  assert result.equity_rows[0]["date"] == "2018-01-01"
+  assert result.equity_rows[-1]["date"] == "2020-12-31"
   # ~3 years × 252 days = ~756 days — warmup eats first ~252, so at least 400
   assert len(result.equity_rows) >= 400, f"Too few equity rows: {len(result.equity_rows)}"
 
@@ -181,9 +183,29 @@ def test_positions_match_selected_predictions():
   selected = [r for r in result.prediction_rows if r["selected"]]
 
   for row in selected:
-    key = (row["as_of_date"], row["ticker"])
+    key = (row["target_date"], row["ticker"])
     assert key in positions, f"Position missing for {key}"
     assert np.isclose(positions[key], float(row["weight"]), atol=1e-12)
+
+
+def test_walk_forward_invokes_progress_callback():
+  prices = _make_prices(n_months=72, n_assets=6)
+  progress_calls: list[tuple[int, int]] = []
+
+  run_walk_forward(
+    run_id="test-progress-callback",
+    strategy="ml_ridge",
+    prices=prices,
+    start_date="2019-01-01",
+    end_date="2020-06-30",
+    benchmark_ticker="SPY",
+    top_n=2,
+    cost_bps=5.0,
+    progress_cb=lambda processed, total: progress_calls.append((processed, total)),
+  )
+
+  assert progress_calls, "Expected in-loop ML progress callbacks"
+  assert progress_calls[-1][0] == progress_calls[-1][1]
 
 
 @_requires_lgbm

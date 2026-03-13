@@ -11,7 +11,7 @@ CREATE TABLE runs (
   strategy_id  TEXT        NOT NULL
                            CHECK (strategy_id IN ('equal_weight', 'momentum_12_1', 'ml_ridge', 'ml_lightgbm', 'low_vol', 'trend_filter')),
   status       TEXT        NOT NULL DEFAULT 'queued'
-                           CHECK (status IN ('queued', 'running', 'completed', 'failed')),
+                           CHECK (status IN ('queued', 'running', 'completed', 'failed', 'blocked', 'waiting_for_data')),
   benchmark    TEXT        NOT NULL DEFAULT 'SPY',
   benchmark_ticker TEXT    NOT NULL DEFAULT 'SPY',
   universe     TEXT        NOT NULL DEFAULT 'ETF8',

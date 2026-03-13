@@ -128,6 +128,84 @@ export type SymbolCoverage = {
   status: SymbolCoverageStatus
 }
 
+export type CoverageHealthStatus = "good" | "warning" | "blocked"
+
+export type RunPreflightStatus = "ok" | "warn" | "block"
+
+export type PreflightSuggestedFix = {
+  kind: "clamp_start_date" | "clamp_end_date" | "queue_data_repairs" | "reduce_top_n" | "set_top_n" | "retry_repairs"
+  value?: string | number | string[]
+}
+
+export type RunPreflightIssueAction =
+  | { kind: "clamp_start_date"; value: string; label: string }
+  | { kind: "clamp_end_date"; value: string; label: string }
+  | { kind: "set_top_n"; value: number; label: string }
+  | { kind: "retry_repairs"; value: string[]; label: string }
+
+export type RunPreflightIssue = {
+  severity: Exclude<RunPreflightStatus, "ok">
+  code: string
+  reason: string
+  fix: string
+  action: RunPreflightIssueAction | null
+}
+
+export type RunPreflightConstraints = {
+  dataCutoffDate: string
+  universeEarliestStart: string | null
+  universeValidFrom: string | null
+  minStartDate: string | null
+  maxEndDate: string
+  missingTickers: string[]
+}
+
+export type MissingnessCoverageRow = {
+  symbol: string
+  isBenchmark: boolean
+  firstDate: string | null
+  lastDate: string | null
+  expectedDays: number
+  actualDays: number
+  trueMissingDays: number
+  trueMissingRate: number
+}
+
+export type RunPreflightCoverageSummary = {
+  benchmark: {
+    status: CoverageHealthStatus
+    reason: string | null
+    trueMissingRate: number
+    symbol: string
+  }
+  universe: {
+    status: CoverageHealthStatus
+    reason: string | null
+    over2Percent: string[]
+    over10Percent: string[]
+    affectedShare: number
+  }
+  symbols: MissingnessCoverageRow[]
+}
+
+export type RunPreflightResult = {
+  status: RunPreflightStatus
+  issues: RunPreflightIssue[]
+  reasons: string[]
+  suggested_fixes: PreflightSuggestedFix[]
+  constraints: RunPreflightConstraints
+  coverage: RunPreflightCoverageSummary
+  requiredStart: string
+  requiredEnd: string
+}
+
+export type RunPreflightSnapshot = {
+  constraints: RunPreflightConstraints
+  coverage: RunPreflightCoverageSummary
+  requiredStart: string
+  requiredEnd: string
+}
+
 export type PreflightResult = {
   /** Canonical classification — use this to decide what to do next. */
   status: PreflightStatus
@@ -390,6 +468,418 @@ export async function runPreflightCoverageCheck(params: {
     requiredStart,
     requiredEnd,
   }
+}
+
+function formatPercent(value: number): string {
+  return `${(value * 100).toFixed(1)}%`
+}
+
+function issueToSuggestedFix(issue: RunPreflightIssue): PreflightSuggestedFix | null {
+  if (!issue.action) return null
+  switch (issue.action.kind) {
+    case "clamp_start_date":
+      return { kind: "clamp_start_date", value: issue.action.value }
+    case "clamp_end_date":
+      return { kind: "clamp_end_date", value: issue.action.value }
+    case "set_top_n":
+      return { kind: "set_top_n", value: issue.action.value }
+    case "retry_repairs":
+      return { kind: "retry_repairs", value: issue.action.value }
+  }
+}
+
+function uniqueFixes(fixes: PreflightSuggestedFix[]): PreflightSuggestedFix[] {
+  const seen = new Set<string>()
+  return fixes.filter((fix) => {
+    const key = JSON.stringify(fix)
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+}
+
+export function buildUniverseCoverageStatus(params: {
+  strategyId: StrategyId
+  universeRows: MissingnessCoverageRow[]
+}): RunPreflightCoverageSummary["universe"] {
+  const { strategyId, universeRows } = params
+  const over2Percent = universeRows
+    .filter((row) => row.expectedDays > 0 && row.trueMissingRate > 0.02)
+    .map((row) => row.symbol)
+  const over10Percent = universeRows
+    .filter((row) => row.expectedDays > 0 && row.trueMissingRate > 0.10)
+    .map((row) => row.symbol)
+  const affectedShare =
+    universeRows.length > 0 ? over2Percent.length / universeRows.length : 0
+
+  if (over10Percent.length > 0) {
+    return {
+      status: "blocked",
+      reason: `Too much true missingness in ${over10Percent.join(", ")} (${formatPercent(0.10)} max allowed per ticker).`,
+      over2Percent,
+      over10Percent,
+      affectedShare,
+    }
+  }
+
+  if (affectedShare > 0.05) {
+    if (HIGH_SENSITIVITY_STRATEGIES.has(strategyId)) {
+      return {
+        status: "blocked",
+        reason: `More than 5% of the universe exceeds ${formatPercent(0.02)} true missingness, which is too risky for this ranking-sensitive strategy.`,
+        over2Percent,
+        over10Percent,
+        affectedShare,
+      }
+    }
+    return {
+      status: "warning",
+      reason: `More than 5% of the universe exceeds ${formatPercent(0.02)} true missingness: ${over2Percent.join(", ")}.`,
+      over2Percent,
+      over10Percent,
+      affectedShare,
+    }
+  }
+
+  return {
+    status: "good",
+    reason: null,
+    over2Percent,
+    over10Percent,
+    affectedShare,
+  }
+}
+
+export function buildBenchmarkCoverageStatus(
+  benchmark: string,
+  row: MissingnessCoverageRow | undefined
+): RunPreflightCoverageSummary["benchmark"] {
+  if (!row || !row.firstDate) {
+    return {
+      status: "blocked",
+      reason: `${benchmark} is not ingested yet.`,
+      trueMissingRate: 1,
+      symbol: benchmark,
+    }
+  }
+
+  if (row.expectedDays > 0 && row.trueMissingRate > 0.02) {
+    return {
+      status: "blocked",
+      reason: `${benchmark} true missingness is ${formatPercent(row.trueMissingRate)} (must be ${formatPercent(0.02)} or lower).`,
+      trueMissingRate: row.trueMissingRate,
+      symbol: benchmark,
+    }
+  }
+
+  if (row.expectedDays > 0 && row.trueMissingRate > 0) {
+    return {
+      status: "warning",
+      reason: `${benchmark} true missingness is ${formatPercent(row.trueMissingRate)} but remains within the allowed threshold.`,
+      trueMissingRate: row.trueMissingRate,
+      symbol: benchmark,
+    }
+  }
+
+  return {
+    status: "good",
+    reason: null,
+    trueMissingRate: row?.trueMissingRate ?? 0,
+    symbol: benchmark,
+  }
+}
+
+export function finalizeRunPreflightResult(params: {
+  constraints: RunPreflightConstraints
+  coverage: RunPreflightCoverageSummary
+  requiredStart: string
+  requiredEnd: string
+  issues: RunPreflightIssue[]
+}): RunPreflightResult {
+  const { constraints, coverage, requiredStart, requiredEnd, issues } = params
+  const blockIssues = issues.filter((issue) => issue.severity === "block")
+  const warnIssues = issues.filter((issue) => issue.severity === "warn")
+  const status: RunPreflightStatus = blockIssues.length > 0
+    ? "block"
+    : warnIssues.length > 0
+      ? "warn"
+      : "ok"
+
+  const visibleIssues = status === "warn" ? warnIssues : blockIssues
+  return {
+    status,
+    issues: visibleIssues,
+    reasons: visibleIssues.map((issue) => issue.reason),
+    suggested_fixes: uniqueFixes(
+      visibleIssues
+        .map(issueToSuggestedFix)
+        .filter((fix): fix is PreflightSuggestedFix => Boolean(fix))
+    ),
+    constraints,
+    coverage,
+    requiredStart,
+    requiredEnd,
+  }
+}
+
+export function buildRunPreflightResult(params: {
+  strategyId: StrategyId
+  startDate: string
+  endDate: string
+  benchmark: string
+  constraints: RunPreflightConstraints
+  symbolRows: MissingnessCoverageRow[]
+}): RunPreflightResult {
+  const { strategyId, startDate, endDate, benchmark, constraints, symbolRows } = params
+  const issues: RunPreflightIssue[] = []
+
+  if (constraints.minStartDate && startDate < constraints.minStartDate) {
+    issues.push({
+      severity: "block",
+      code: "start_before_universe_min",
+      reason: `Start date ${startDate} is earlier than the earliest valid start for this universe (${constraints.minStartDate}).`,
+      fix: `Choose ${constraints.minStartDate} or a later start date.`,
+      action: {
+        kind: "clamp_start_date",
+        value: constraints.minStartDate,
+        label: "Use earliest start",
+      },
+    })
+  }
+
+  if (endDate > constraints.maxEndDate) {
+    issues.push({
+      severity: "block",
+      code: "end_after_cutoff",
+      reason: `End date ${endDate} is after the current data cutoff (${constraints.maxEndDate}).`,
+      fix: `Choose ${constraints.maxEndDate} or an earlier end date.`,
+      action: {
+        kind: "clamp_end_date",
+        value: constraints.maxEndDate,
+        label: "Use cutoff end date",
+      },
+    })
+  }
+
+  const benchmarkRow = symbolRows.find((row) => row.symbol === benchmark)
+  const universeRows = symbolRows.filter((row) => !row.isBenchmark)
+  const benchmarkCoverage = buildBenchmarkCoverageStatus(benchmark, benchmarkRow)
+  const universeCoverage = buildUniverseCoverageStatus({ strategyId, universeRows })
+
+  if (benchmarkCoverage.status === "blocked" && benchmarkCoverage.reason) {
+    issues.push({
+      severity: "block",
+      code: "benchmark_missingness_blocked",
+      reason: benchmarkCoverage.reason,
+      fix: `Choose another benchmark or an earlier date range for ${benchmark}.`,
+      action: null,
+    })
+  }
+
+  if (universeCoverage.status === "blocked" && universeCoverage.reason) {
+    issues.push({
+      severity: "block",
+      code: universeCoverage.over10Percent.length > 0
+        ? "universe_missingness_per_ticker_blocked"
+        : "universe_missingness_share_blocked",
+      reason: universeCoverage.reason,
+      fix: "Choose a later start date, an earlier end date, or a different universe.",
+      action: null,
+    })
+  }
+
+  if (benchmarkCoverage.status === "warning" && benchmarkCoverage.reason) {
+    issues.push({
+      severity: "warn",
+      code: "benchmark_missingness_warning",
+      reason: benchmarkCoverage.reason,
+      fix: `You can continue, but results versus ${benchmark} may be less reliable.`,
+      action: null,
+    })
+  }
+  if (universeCoverage.status === "warning" && universeCoverage.reason) {
+    issues.push({
+      severity: "warn",
+      code: "universe_missingness_warning",
+      reason: universeCoverage.reason,
+      fix: "You can continue, but this data quality may affect the rankings.",
+      action: null,
+    })
+  }
+
+  return finalizeRunPreflightResult({
+    constraints,
+    coverage: {
+      benchmark: benchmarkCoverage,
+      universe: universeCoverage,
+      symbols: symbolRows,
+    },
+    requiredStart: symbolRows.length > 0
+      ? subtractCalendarDays(startDate, STRATEGY_WARMUP_CALENDAR_DAYS[strategyId] ?? 0)
+      : startDate,
+    requiredEnd: endDate > constraints.maxEndDate ? constraints.maxEndDate : endDate,
+    issues,
+  })
+}
+
+export function buildRunPreflightSnapshot(params: {
+  strategyId: StrategyId
+  startDate: string
+  endDate: string
+  benchmark: string
+  constraints: RunPreflightConstraints
+  symbolRows: MissingnessCoverageRow[]
+}): RunPreflightSnapshot {
+  const { strategyId, startDate, endDate, benchmark, constraints, symbolRows } = params
+  const benchmarkRow = symbolRows.find((row) => row.symbol === benchmark)
+  const universeRows = symbolRows.filter((row) => !row.isBenchmark)
+  return {
+    constraints,
+    coverage: {
+      benchmark: buildBenchmarkCoverageStatus(benchmark, benchmarkRow),
+      universe: buildUniverseCoverageStatus({ strategyId, universeRows }),
+      symbols: symbolRows,
+    },
+    requiredStart: symbolRows.length > 0
+      ? subtractCalendarDays(startDate, STRATEGY_WARMUP_CALENDAR_DAYS[strategyId] ?? 0)
+      : startDate,
+    requiredEnd: endDate > constraints.maxEndDate ? constraints.maxEndDate : endDate,
+  }
+}
+
+export async function evaluateRunPreflightSnapshot(params: {
+  strategyId: StrategyId
+  startDate: string
+  endDate: string
+  universeSymbols: string[]
+  benchmark: string
+  dataCutoffDate: string
+  universeEarliestStart: string | null
+  universeValidFrom: string | null
+  missingTickers: string[]
+}): Promise<RunPreflightSnapshot> {
+  const {
+    strategyId,
+    startDate,
+    endDate,
+    universeSymbols,
+    benchmark,
+    dataCutoffDate,
+    universeEarliestStart,
+    universeValidFrom,
+    missingTickers,
+  } = params
+
+  const minStartDate =
+    universeEarliestStart && universeValidFrom
+      ? (universeEarliestStart > universeValidFrom ? universeEarliestStart : universeValidFrom)
+      : (universeEarliestStart ?? universeValidFrom ?? null)
+
+  const constraints: RunPreflightConstraints = {
+    dataCutoffDate,
+    universeEarliestStart,
+    universeValidFrom,
+    minStartDate,
+    maxEndDate: dataCutoffDate,
+    missingTickers,
+  }
+
+  const warmupDays = STRATEGY_WARMUP_CALENDAR_DAYS[strategyId] ?? 0
+  const requiredStart = subtractCalendarDays(startDate, warmupDays)
+  const requiredEnd = endDate > dataCutoffDate ? dataCutoffDate : endDate
+  const allSymbols = [...new Set([...universeSymbols, benchmark])]
+
+  const admin = createAdminClient()
+
+  type StatsRow = { symbol: string; first_date: string | null; last_date: string | null }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: statsRows, error: statsError } = await (admin as any)
+    .from("ticker_stats")
+    .select("symbol, first_date, last_date")
+    .in("symbol", allSymbols) as { data: StatsRow[] | null; error: { message: string } | null }
+
+  if (statsError) {
+    console.error("[coverage-check] ticker_stats error:", statsError.message)
+  }
+
+  const firstDateMap = new Map<string, string>()
+  const lastDateMap = new Map<string, string>()
+  for (const row of statsRows ?? []) {
+    if (row.first_date) firstDateMap.set(row.symbol, row.first_date)
+    if (row.last_date) lastDateMap.set(row.symbol, row.last_date)
+  }
+
+  type AggRow = { ticker: string; actual_days: string | number }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: rpcData, error: rpcError } = await (admin as any).rpc(
+    "get_benchmark_coverage_agg",
+    { p_tickers: allSymbols, p_start: requiredStart, p_end: requiredEnd }
+  ) as { data: AggRow[] | null; error: { message: string } | null }
+
+  if (rpcError) {
+    console.error("[coverage-check] get_benchmark_coverage_agg error:", rpcError.message)
+  }
+
+  const actualDaysMap = new Map<string, number>()
+  for (const row of rpcData ?? []) {
+    actualDaysMap.set(row.ticker, Number(row.actual_days))
+  }
+
+  const symbolRows: MissingnessCoverageRow[] = allSymbols.map((symbol) => {
+    const firstDate = firstDateMap.get(symbol) ?? null
+    const actualStart =
+      firstDate && firstDate > requiredStart
+        ? firstDate
+        : requiredStart
+    const expectedDays =
+      firstDate === null || actualStart > requiredEnd
+        ? 0
+        : countBusinessDays(actualStart, requiredEnd)
+    const actualDays = actualDaysMap.get(symbol) ?? 0
+    const trueMissingDays = expectedDays > 0 ? Math.max(expectedDays - actualDays, 0) : 0
+    const trueMissingRate = expectedDays > 0 ? trueMissingDays / expectedDays : 0
+    return {
+      symbol,
+      isBenchmark: symbol === benchmark,
+      firstDate,
+      lastDate: lastDateMap.get(symbol) ?? null,
+      expectedDays,
+      actualDays,
+      trueMissingDays,
+      trueMissingRate,
+    }
+  })
+
+  return buildRunPreflightSnapshot({
+    strategyId,
+    startDate,
+    endDate,
+    benchmark,
+    constraints,
+    symbolRows,
+  })
+}
+
+export async function evaluateRunPreflight(params: {
+  strategyId: StrategyId
+  startDate: string
+  endDate: string
+  universeSymbols: string[]
+  benchmark: string
+  dataCutoffDate: string
+  universeEarliestStart: string | null
+  universeValidFrom: string | null
+  missingTickers: string[]
+}): Promise<RunPreflightResult> {
+  const snapshot = await evaluateRunPreflightSnapshot(params)
+  return buildRunPreflightResult({
+    strategyId: params.strategyId,
+    startDate: params.startDate,
+    endDate: params.endDate,
+    benchmark: params.benchmark,
+    constraints: snapshot.constraints,
+    symbolRows: snapshot.coverage.symbols,
+  })
 }
 
 // ---------------------------------------------------------------------------

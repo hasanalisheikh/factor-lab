@@ -24,6 +24,12 @@ from .supabase_io import DataIngestJob, Job, SupabaseIO
 # Job-level wall-clock timeout (prevents stuck/runaway jobs)
 # ---------------------------------------------------------------------------
 _JOB_TIMEOUT_SECONDS: int = int(os.getenv("JOB_TIMEOUT_SECONDS", "600"))  # 10 min
+_ML_RIDGE_JOB_TIMEOUT_SECONDS: int = int(
+  os.getenv("JOB_TIMEOUT_SECONDS_ML_RIDGE", str(max(_JOB_TIMEOUT_SECONDS, 900)))
+)
+_ML_LIGHTGBM_JOB_TIMEOUT_SECONDS: int = int(
+  os.getenv("JOB_TIMEOUT_SECONDS_ML_LIGHTGBM", str(max(_JOB_TIMEOUT_SECONDS, 1800)))
+)
 
 ProgressCallback = Callable[[str, int], None]
 
@@ -36,6 +42,14 @@ def _utcnow() -> datetime:
 
 def _utc_today_str() -> str:
   return _utcnow().strftime("%Y-%m-%d")
+
+
+def _job_timeout_seconds_for_strategy(strategy_id: str) -> int:
+  if strategy_id == "ml_lightgbm":
+    return _ML_LIGHTGBM_JOB_TIMEOUT_SECONDS
+  if strategy_id == "ml_ridge":
+    return _ML_RIDGE_JOB_TIMEOUT_SECONDS
+  return _JOB_TIMEOUT_SECONDS
 
 # ---------------------------------------------------------------------------
 # Backtest window requirements
@@ -176,6 +190,49 @@ def validate_backtest_window(
 def _to_date(value: str) -> pd.Timestamp:
   ts = pd.to_datetime(value, utc=False)
   return pd.Timestamp(ts.date())
+
+
+def _subtract_calendar_days(value: str, days: int) -> str:
+  if days <= 0:
+    return value
+  return (pd.to_datetime(value) - pd.Timedelta(days=days)).strftime("%Y-%m-%d")
+
+
+def _baseline_warmup_calendar_days(strategy_id: str) -> int:
+  if strategy_id == "momentum_12_1":
+    return 390
+  if strategy_id == "low_vol":
+    return 90
+  if strategy_id == "trend_filter":
+    # Trend Filter needs both the benchmark SMA warmup and the risk-on momentum lookback.
+    return 390
+  return 0
+
+
+def _slice_frame_to_run_window(frame: pd.DataFrame, start: str, end: str) -> pd.DataFrame:
+  mask = (frame.index >= pd.Timestamp(start)) & (frame.index <= pd.Timestamp(end))
+  return frame.loc[mask].copy()
+
+
+def _slice_series_to_run_window(series: pd.Series, start: str, end: str) -> pd.Series:
+  mask = (series.index >= pd.Timestamp(start)) & (series.index <= pd.Timestamp(end))
+  window = series.loc[mask].copy()
+  if not window.empty:
+    window.iloc[0] = 0.0
+  return window
+
+
+def _slice_positions_to_run_window(
+  rows: list[dict[str, Any]],
+  start: str,
+  end: str,
+) -> list[dict[str, Any]]:
+  return [row for row in rows if start <= str(row.get("date", "")) <= end]
+
+
+def _annualize_turnover_from_rebalances(rebalance_turnover: pd.Series) -> float:
+  positive = rebalance_turnover[rebalance_turnover > 0]
+  return float(positive.mean() * 12.0) if len(positive) > 0 else 0.0
 
 
 def _normalize_symbol_list(values: Any) -> list[str]:
@@ -724,6 +781,9 @@ def _build_baseline_result(
   strat = run["strategy_id"]
   costs_bps = float(run.get("costs_bps") or 0.0)
   top_n = int(run.get("top_n") or 5)
+  run_start = str(run["start_date"])
+  run_end = str(run["end_date"])
+  warmup_start = _subtract_calendar_days(run_start, _baseline_warmup_calendar_days(strat))
 
   # trend_filter needs the defensive ticker in the price data
   defensive_ticker: str | None = None
@@ -734,16 +794,16 @@ def _build_baseline_result(
 
   if on_progress:
     on_progress("load_data", 20)
-  prices = io.fetch_prices_frame(tickers, run["start_date"], run["end_date"])
+  prices = io.fetch_prices_frame(tickers, warmup_start, run_end)
   if prices.empty or prices.shape[0] < 40:
-    prices = _download_prices(run["start_date"], run["end_date"], tickers)
+    prices = _download_prices(warmup_start, run_end, tickers)
 
   # For trend_filter: if defensive ticker still missing, try BIL fallback
   if strat == "trend_filter" and defensive_ticker is not None and defensive_ticker not in prices.columns:
     fallback = _TREND_DEFENSIVE_FALLBACK
     tickers_fb = [t for t in tickers if t != defensive_ticker] + [fallback]
     try:
-      prices_fb = _download_prices(run["start_date"], run["end_date"], tickers_fb)
+      prices_fb = _download_prices(warmup_start, run_end, tickers_fb)
       if fallback in prices_fb.columns:
         defensive_ticker = fallback
         prices = prices_fb
@@ -759,7 +819,8 @@ def _build_baseline_result(
         f"for risk-off allocation, but download failed: {exc}"
       ) from exc
 
-  _ensure_min_history(prices, context=f"run {run['id']} strategy {strat}")
+  run_window_prices = _slice_frame_to_run_window(prices, run_start, run_end)
+  _ensure_min_history(run_window_prices, context=f"run {run['id']} strategy {strat}")
   bench_col = _select_available_benchmark_ticker(benchmark_ticker_raw, prices.columns)
 
   if on_progress:
@@ -773,7 +834,7 @@ def _build_baseline_result(
     daily_rets, turnover, rebalance_turnover, rebalance_positions = _low_vol(prices, top_n)
   elif strat == "trend_filter":
     assert defensive_ticker is not None
-    daily_rets, turnover, rebalance_turnover, rebalance_positions = _trend_filter(
+    daily_rets, _, rebalance_turnover, rebalance_positions = _trend_filter(
       prices, universe_tickers, bench_col, defensive_ticker, top_n
     )
   else:
@@ -782,7 +843,13 @@ def _build_baseline_result(
   if on_progress:
     on_progress("rebalance", 60)
   daily_rets = _apply_rebalance_costs(daily_rets, rebalance_turnover, costs_bps)
-  benchmark_rets = prices[bench_col].pct_change().fillna(0.0)
+  daily_rets = _slice_series_to_run_window(daily_rets, run_start, run_end)
+  rebalance_turnover = _slice_series_to_run_window(rebalance_turnover, run_start, run_end)
+  benchmark_rets = _slice_series_to_run_window(
+    prices[bench_col].pct_change().fillna(0.0),
+    run_start,
+    run_end,
+  )
 
   portfolio = 100_000.0 * (1.0 + daily_rets).cumprod()
   benchmark = 100_000.0 * (1.0 + benchmark_rets.reindex(portfolio.index).fillna(0.0)).cumprod()
@@ -790,11 +857,15 @@ def _build_baseline_result(
 
   if on_progress:
     on_progress("metrics", 78)
-  metrics = _compute_metrics(daily_rets, turnover)
+  metrics = _compute_metrics(
+    daily_rets,
+    _annualize_turnover_from_rebalances(rebalance_turnover),
+  )
 
   # Attach run_id to each position row
   position_rows: list[dict[str, Any]] = [
-    {"run_id": run["id"], **p} for p in rebalance_positions
+    {"run_id": run["id"], **p}
+    for p in _slice_positions_to_run_window(rebalance_positions, run_start, run_end)
   ]
   return BacktestResult(equity_rows=rows, metrics=metrics, position_rows=position_rows)
 
@@ -853,6 +924,20 @@ def _build_ml_result(
       f"(universe has {len(investable)} investable symbols)"
     )
 
+  if on_progress:
+    on_progress("train", 75)
+  last_train_progress = 75
+
+  def ml_progress(processed_steps: int, total_steps: int) -> None:
+    nonlocal last_train_progress
+    if not on_progress or total_steps <= 0:
+      return
+    next_progress = 75 + min(14, int((processed_steps / total_steps) * 14))
+    if next_progress <= last_train_progress and processed_steps < total_steps:
+      return
+    last_train_progress = next_progress
+    on_progress("train", next_progress)
+
   ml = run_walk_forward(
     run_id=run["id"],
     strategy=run["strategy_id"],
@@ -862,6 +947,7 @@ def _build_ml_result(
     benchmark_ticker=benchmark_ticker,
     top_n=top_n_for_ml,
     cost_bps=float(run.get("costs_bps") or 10.0),
+    progress_cb=ml_progress,
   )
   if on_progress:
     on_progress("train", 75)
@@ -1460,13 +1546,14 @@ def _process_job(io: SupabaseIO, job: Job) -> None:
     return
 
   started = _utcnow()
-  print(f"[engine] running job={job.id} run={job.run_id} timeout={_JOB_TIMEOUT_SECONDS}s")
-  _install_job_timeout(_JOB_TIMEOUT_SECONDS)
+  run = io.fetch_run(job.run_id)  # type: ignore[arg-type]
+  if run is None:
+    raise RuntimeError(f"Run not found for run_id={job.run_id}")
+  job_timeout_seconds = _job_timeout_seconds_for_strategy(str(run.get("strategy_id", "")))
+  print(f"[engine] running job={job.id} run={job.run_id} timeout={job_timeout_seconds}s")
+  _install_job_timeout(job_timeout_seconds)
   try:
     io.update_job_progress(job.id, stage="ingest", progress=10)
-    run = io.fetch_run(job.run_id)  # type: ignore[arg-type]
-    if run is None:
-      raise RuntimeError(f"Run not found for run_id={job.run_id}")
     resolve_and_snapshot_universe_symbols(io, run)
 
     # Early span validation — fast-fail before any data fetch or computation.
@@ -1576,6 +1663,8 @@ def main() -> None:
   poll_seconds = int(os.getenv("POLL_INTERVAL_SECONDS", "5"))
   batch_size = int(os.getenv("JOB_BATCH_SIZE", "3"))
   port = int(os.getenv("PORT", "8000"))
+  job_stall_minutes = int(os.getenv("JOB_STALL_MINUTES", "15"))
+  job_queue_timeout_minutes = int(os.getenv("JOB_QUEUED_TIMEOUT_MINUTES", "10"))
 
   if not once:
     _start_trigger_server(port)
@@ -1585,8 +1674,8 @@ def main() -> None:
   while True:
     # --- Watchdog & retry scheduler (run before fetching new work) ---
     # jobs table (backtest + legacy data_ingest jobs)
-    io.scan_and_requeue_stalled_jobs(stall_minutes=2, max_attempts=5)
-    io.scan_and_requeue_queued_too_long(timeout_minutes=10, max_attempts=5)
+    io.scan_and_requeue_stalled_jobs(stall_minutes=job_stall_minutes, max_attempts=5)
+    io.scan_and_requeue_queued_too_long(timeout_minutes=job_queue_timeout_minutes, max_attempts=5)
     io.requeue_due_for_retry(max_attempts=5)
     # data_ingest_jobs table (new explicit-schema ingest jobs)
     io.scan_stalled_data_ingest_jobs(stall_minutes=2, max_attempts=5)

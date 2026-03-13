@@ -1,11 +1,23 @@
 "use client"
 
-import { useActionState, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import Link from "next/link"
-import { ArrowLeft, CalendarIcon, Zap } from "lucide-react"
+import { useRouter } from "next/navigation"
+import { ArrowLeft, CalendarIcon, RefreshCcw, Zap } from "lucide-react"
+import { format } from "date-fns"
+import {
+  createRun,
+  ensureUniverseDataReady,
+  getUniverseBatchStatusAction,
+  preflightRun,
+  retryPreflightRepairs,
+  type EnsureUniverseDataReadyResult,
+  type RunConfigInput,
+  type RunPreflightResult,
+  type UniverseBatchStatusSummary,
+} from "@/app/actions/runs"
 import { Switch } from "@/components/ui/switch"
 import { Separator } from "@/components/ui/separator"
-import { format } from "date-fns"
 import { Button } from "@/components/ui/button"
 import { Calendar } from "@/components/ui/calendar"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -13,12 +25,28 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { NativeSelect } from "@/components/ui/native-select"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
-import { createRun, type CreateRunState } from "@/app/actions/runs"
+import {
+  AlertDialog,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import { STRATEGY_LABELS, type StrategyId } from "@/lib/types"
 import { BENCHMARK_OPTIONS } from "@/lib/benchmark"
 import type { UserSettings } from "@/lib/supabase/types"
 import { cn } from "@/lib/utils"
-import { ALL_UNIVERSES, UNIVERSE_SIZES } from "@/lib/universe-config"
+import { ALL_UNIVERSES, UNIVERSE_SIZES, type UniverseId } from "@/lib/universe-config"
 import {
   STRATEGY_WARMUP_CALENDAR_DAYS,
   STRATEGY_WARMUP_DESCRIPTIONS,
@@ -39,10 +67,19 @@ function toInputDate(d: Date | undefined) {
   return d ? format(d, "yyyy-MM-dd") : ""
 }
 
-// Parse a YYYY-MM-DD string as a local-timezone Date (avoids UTC-offset bugs).
 function parseLocalDate(str: string): Date {
   const [y, m, d] = str.split("-").map(Number)
   return new Date(y, m - 1, d)
+}
+
+function resolveMinStartDate(
+  universeEarliestStart: string | null,
+  universeValidFrom: string | null
+): string | null {
+  if (universeEarliestStart && universeValidFrom) {
+    return universeEarliestStart > universeValidFrom ? universeEarliestStart : universeValidFrom
+  }
+  return universeEarliestStart ?? universeValidFrom ?? null
 }
 
 type DataCoverage = {
@@ -53,43 +90,74 @@ type DataCoverage = {
 type Props = {
   defaults: UserSettings | null
   dataCoverage?: DataCoverage | null
-  universeValidFrom?: Record<string, string | null>
+  initialUniverseState: EnsureUniverseDataReadyResult
 }
 
-export function RunForm({ defaults, dataCoverage, universeValidFrom }: Props) {
+export function RunForm({ defaults, dataCoverage, initialUniverseState }: Props) {
+  const router = useRouter()
+  const formRef = useRef<HTMLFormElement>(null)
+  const lastLoadedUniverseRef = useRef(initialUniverseState.constraints.universe)
   const coverageMin = dataCoverage ? parseLocalDate(dataCoverage.minDateStr) : null
-  const coverageMax = dataCoverage ? parseLocalDate(dataCoverage.maxDateStr) : null
+  const initialMaxEndDate = initialUniverseState.constraints.dataCutoffDate ?? dataCoverage?.maxDateStr ?? null
+  const initialMinStartDate = resolveMinStartDate(
+    initialUniverseState.constraints.universeEarliestStart,
+    initialUniverseState.constraints.universeValidFrom,
+  )
 
   const [strategy, setStrategy] = useState<string>("")
-  const [universe, setUniverse] = useState<string>(defaults?.default_universe ?? "ETF8")
-  const [state, formAction, isPending] = useActionState<CreateRunState, FormData>(
-    createRun,
-    null
+  const [universe, setUniverse] = useState<UniverseId>(
+    (defaults?.default_universe ?? "ETF8") as UniverseId
   )
+  const [universeState, setUniverseState] = useState(initialUniverseState)
+  const [batchStatus, setBatchStatus] = useState<UniverseBatchStatusSummary | null>(null)
+  const [allowBatchPolling, setAllowBatchPolling] = useState(Boolean(initialUniverseState.batchId))
+  const [isUniverseLoading, setIsUniverseLoading] = useState(false)
+  const [isPreflighting, setIsPreflighting] = useState(false)
+  const [isSubmitting, setIsSubmitting] = useState(false)
+  const [submitError, setSubmitError] = useState<string | null>(null)
+  const [dateAdjustmentMessage, setDateAdjustmentMessage] = useState<string | null>(null)
+  const [blockResult, setBlockResult] = useState<RunPreflightResult | null>(null)
+  const [warnResult, setWarnResult] = useState<RunPreflightResult | null>(null)
+
   const [startDate, setStartDate] = useState<Date | undefined>(() => {
     const yearsBack = defaults?.default_date_range_years ?? 5
-    if (coverageMax) {
-      const candidate = new Date(coverageMax)
+    if (initialMaxEndDate) {
+      const candidate = parseLocalDate(initialMaxEndDate)
       candidate.setFullYear(candidate.getFullYear() - yearsBack)
-      return coverageMin && candidate < coverageMin ? new Date(coverageMin) : candidate
+      if (coverageMin && candidate < coverageMin) {
+        return new Date(coverageMin)
+      }
+      if (initialMinStartDate && format(candidate, "yyyy-MM-dd") < initialMinStartDate) {
+        return parseLocalDate(initialMinStartDate)
+      }
+      return candidate
     }
-    const d = new Date()
-    d.setFullYear(d.getFullYear() - yearsBack)
-    return d
+    return undefined
   })
   const [endDate, setEndDate] = useState<Date | undefined>(
-    () => coverageMax ?? new Date()
+    () => (initialMaxEndDate ? parseLocalDate(initialMaxEndDate) : undefined)
   )
   const [startOpen, setStartOpen] = useState(false)
   const [endOpen, setEndOpen] = useState(false)
+  const [applyCosts, setApplyCosts] = useState(defaults?.apply_costs_default ?? true)
+  const [capitalDisplay, setCapitalDisplay] = useState(
+    (defaults?.default_initial_capital ?? CAPITAL_DEFAULT).toLocaleString("en-US")
+  )
+  const [capitalValue, setCapitalValue] = useState(
+    defaults?.default_initial_capital ?? CAPITAL_DEFAULT
+  )
+  const [topNValue, setTopNValue] = useState(() =>
+    String(Math.min(defaults?.default_top_n ?? 5, UNIVERSE_SIZES[(defaults?.default_universe ?? "ETF8") as UniverseId] ?? 20))
+  )
 
-  const topNMax = UNIVERSE_SIZES[universe as keyof typeof UNIVERSE_SIZES] ?? 20
-
-  // Universe valid_from and strategy warmup derived values
-  const universeStart = universeValidFrom?.[universe] ?? null
+  const topNMax = UNIVERSE_SIZES[universe] ?? 20
+  const minStartDateStr = resolveMinStartDate(
+    universeState.constraints.universeEarliestStart,
+    universeState.constraints.universeValidFrom,
+  )
+  const maxEndDateStr = universeState.constraints.dataCutoffDate ?? dataCoverage?.maxDateStr ?? null
   const startDateStr = startDate ? format(startDate, "yyyy-MM-dd") : null
-  const showUniverseWarning =
-    universeStart !== null && startDateStr !== null && startDateStr < universeStart
+  const endDateStr = endDate ? format(endDate, "yyyy-MM-dd") : null
   const effectiveStrategyStart = strategy
     ? computeStrategyEarliestStart(strategy as StrategyId, dataCoverage?.minDateStr ?? null)
     : null
@@ -99,15 +167,109 @@ export function RunForm({ defaults, dataCoverage, universeValidFrom }: Props) {
     startDateStr < effectiveStrategyStart
   const warmupDays = strategy ? STRATEGY_WARMUP_CALENDAR_DAYS[strategy as StrategyId] ?? 0 : 0
   const warmupDesc = strategy ? STRATEGY_WARMUP_DESCRIPTIONS[strategy as StrategyId] ?? "" : ""
+  const hasMissingTickers = universeState.constraints.missingTickers.length > 0
+  const isUniverseReady = universeState.ready && !hasMissingTickers
+  const isQueueDisabled =
+    !strategy ||
+    isUniverseLoading ||
+    isPreflighting ||
+    isSubmitting ||
+    !isUniverseReady
 
-  const [applyCosts, setApplyCosts] = useState(defaults?.apply_costs_default ?? true)
+  useEffect(() => {
+    const numericValue = Number(topNValue)
+    if (!Number.isFinite(numericValue) || numericValue < 1) {
+      setTopNValue(String(Math.min(defaults?.default_top_n ?? 5, topNMax)))
+      return
+    }
+    if (numericValue > topNMax) {
+      setTopNValue(String(topNMax))
+    }
+  }, [defaults?.default_top_n, topNMax, topNValue])
 
-  const [capitalDisplay, setCapitalDisplay] = useState(
-    (defaults?.default_initial_capital ?? CAPITAL_DEFAULT).toLocaleString("en-US")
-  )
-  const [capitalValue, setCapitalValue] = useState(
-    defaults?.default_initial_capital ?? CAPITAL_DEFAULT
-  )
+  async function loadUniverseState(universeId: UniverseId, options?: { createBatch?: boolean }) {
+    setIsUniverseLoading(true)
+    setSubmitError(null)
+    setBatchStatus(null)
+    lastLoadedUniverseRef.current = universeId
+    try {
+      const nextState = await ensureUniverseDataReady(universeId, options)
+      setAllowBatchPolling(options?.createBatch !== false && Boolean(nextState.batchId))
+      setUniverseState(nextState)
+    } catch (error) {
+      console.error("[RunForm] ensureUniverseDataReady failed:", error)
+      setSubmitError("Failed to load universe data readiness. Please try again.")
+    } finally {
+      setIsUniverseLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    if (universe === lastLoadedUniverseRef.current) return
+    void loadUniverseState(universe, { createBatch: true })
+  }, [universe])
+
+  useEffect(() => {
+    const batchId = universeState.batchId
+    if (!batchId || universeState.ready || !allowBatchPolling) return
+    const currentBatchId = batchId
+
+    let cancelled = false
+    let timeoutId: ReturnType<typeof setTimeout> | null = null
+
+    async function poll() {
+      const nextStatus = await getUniverseBatchStatusAction(currentBatchId)
+      if (cancelled) return
+
+      setBatchStatus(nextStatus)
+
+      if (!nextStatus || (nextStatus.status !== "pending" && nextStatus.status !== "running")) {
+        const refreshed = await ensureUniverseDataReady(universe, { createBatch: false })
+        if (cancelled) return
+        setAllowBatchPolling(false)
+        setUniverseState(refreshed)
+        return
+      }
+
+      timeoutId = setTimeout(poll, 2000)
+    }
+
+    void poll()
+
+    return () => {
+      cancelled = true
+      if (timeoutId) clearTimeout(timeoutId)
+    }
+  }, [allowBatchPolling, universe, universeState.batchId, universeState.ready])
+
+  useEffect(() => {
+    if (!startDateStr && !endDateStr) return
+
+    let nextStart = startDate
+    let nextEnd = endDate
+    let snappedMessage: string | null = null
+
+    if (minStartDateStr && startDateStr && startDateStr < minStartDateStr) {
+      nextStart = parseLocalDate(minStartDateStr)
+      snappedMessage = `Start date snapped to ${minStartDateStr} because some assets in ${universe} started later.`
+    }
+
+    if (maxEndDateStr && endDateStr && endDateStr > maxEndDateStr) {
+      nextEnd = parseLocalDate(maxEndDateStr)
+      snappedMessage = `End date snapped to ${maxEndDateStr} because backtests stop at the current data cutoff.`
+    }
+
+    const nextStartStr = nextStart ? format(nextStart, "yyyy-MM-dd") : null
+    const nextEndStr = nextEnd ? format(nextEnd, "yyyy-MM-dd") : null
+    if (nextStartStr && nextEndStr && nextStartStr > nextEndStr) {
+      nextEnd = parseLocalDate(nextStartStr)
+      snappedMessage = `End date snapped to ${nextStartStr} to keep the date range valid.`
+    }
+
+    if (nextStart !== startDate) setStartDate(nextStart)
+    if (nextEnd !== endDate) setEndDate(nextEnd)
+    if (snappedMessage) setDateAdjustmentMessage(snappedMessage)
+  }, [endDate, endDateStr, maxEndDateStr, minStartDateStr, startDate, startDateStr, universe])
 
   function handleCapitalChange(e: React.ChangeEvent<HTMLInputElement>) {
     setCapitalDisplay(e.target.value)
@@ -130,6 +292,135 @@ export function RunForm({ defaults, dataCoverage, universeValidFrom }: Props) {
     setCapitalValue(value)
     setCapitalDisplay(value.toLocaleString("en-US"))
   }
+
+  function collectRunInput(): RunConfigInput | null {
+    if (!formRef.current || !startDate || !endDate) return null
+    const formData = new FormData(formRef.current)
+
+    return {
+      name: String(formData.get("name") ?? ""),
+      strategy_id: String(formData.get("strategy_id") ?? "") as StrategyId,
+      start_date: toInputDate(startDate),
+      end_date: toInputDate(endDate),
+      benchmark: String(formData.get("benchmark") ?? BENCHMARK_OPTIONS[0]) as typeof BENCHMARK_OPTIONS[number],
+      universe,
+      costs_bps: Number(formData.get("costs_bps") ?? 0),
+      top_n: Number(topNValue ?? 1),
+      initial_capital: capitalValue,
+      apply_costs: applyCosts,
+      slippage_bps: Number(formData.get("slippage_bps") ?? 0),
+    }
+  }
+
+  async function runCreate(acknowledgeWarnings: boolean) {
+    const input = collectRunInput()
+    if (!input) {
+      setSubmitError("Please complete the form before queueing a backtest.")
+      return
+    }
+
+    setIsSubmitting(true)
+    setSubmitError(null)
+    try {
+      const result = await createRun({
+        ...input,
+        acknowledge_warnings: acknowledgeWarnings,
+      })
+      if (result.ok) {
+        router.push(`/runs/${result.runId}`)
+        return
+      }
+
+      if (result.preflight?.status === "block") {
+        setBlockResult(result.preflight)
+      } else if (result.preflight?.status === "warn") {
+        setWarnResult(result.preflight)
+      } else {
+        setSubmitError(result.error)
+      }
+    } catch (error) {
+      console.error("[RunForm] createRun failed:", error)
+      setSubmitError("Failed to queue the backtest. Please try again.")
+    } finally {
+      setIsSubmitting(false)
+    }
+  }
+
+  async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault()
+    setSubmitError(null)
+    setDateAdjustmentMessage(null)
+
+    const input = collectRunInput()
+    if (!input) {
+      setSubmitError("Please complete the form before queueing a backtest.")
+      return
+    }
+
+    setIsPreflighting(true)
+    try {
+      const result = await preflightRun(input)
+      if (result.status === "block") {
+        setBlockResult(result)
+        return
+      }
+      if (result.status === "warn") {
+        setWarnResult(result)
+        return
+      }
+      await runCreate(false)
+    } catch (error) {
+      console.error("[RunForm] preflightRun failed:", error)
+      setSubmitError("Preflight failed. Please try again.")
+    } finally {
+      setIsPreflighting(false)
+    }
+  }
+
+  async function applySuggestedFix(kind: string, value?: string | number | string[]) {
+    if (kind === "clamp_start_date" && typeof value === "string") {
+      setStartDate(parseLocalDate(value))
+      setDateAdjustmentMessage(`We've moved your start date to ${value}.`)
+      setBlockResult(null)
+      setWarnResult(null)
+      return
+    }
+    if (kind === "clamp_end_date" && typeof value === "string") {
+      setEndDate(parseLocalDate(value))
+      setDateAdjustmentMessage(`We've moved your end date to ${value}.`)
+      setBlockResult(null)
+      setWarnResult(null)
+      return
+    }
+    if (kind === "set_top_n" && typeof value === "number") {
+      setTopNValue(String(value))
+      setDateAdjustmentMessage(`We've reduced Top N to ${value}.`)
+      setBlockResult(null)
+      setWarnResult(null)
+      return
+    }
+    if (kind === "retry_repairs" && Array.isArray(value)) {
+      setSubmitError(null)
+      const input = collectRunInput()
+      if (!input) return
+      const result = await retryPreflightRepairs({
+        symbols: value,
+        required_end: blockResult?.requiredEnd ?? warnResult?.requiredEnd ?? input.end_date,
+      })
+      if (!result.ok) {
+        setSubmitError(result.error)
+        return
+      }
+      if (value.some((symbol) => universeState.constraints.missingTickers.includes(symbol))) {
+        await loadUniverseState(universe, { createBatch: false })
+      }
+      setBlockResult(null)
+      setWarnResult(null)
+      setDateAdjustmentMessage("We restarted the data repair. Try queueing the run again once it finishes.")
+    }
+  }
+  const blockIssues = blockResult?.issues ?? []
+  const warnIssues = warnResult?.issues ?? []
 
   return (
     <>
@@ -154,13 +445,9 @@ export function RunForm({ defaults, dataCoverage, universeValidFrom }: Props) {
           </CardTitle>
         </CardHeader>
         <CardContent className="px-5 pb-5">
-          <form action={formAction} className="flex flex-col gap-4">
-            {/* Name */}
+          <form ref={formRef} onSubmit={handleSubmit} className="flex flex-col gap-4">
             <div className="flex flex-col gap-1.5">
-              <Label
-                htmlFor="name"
-                className="text-[12px] font-medium text-muted-foreground"
-              >
+              <Label htmlFor="name" className="text-[12px] font-medium text-muted-foreground">
                 Run name
               </Label>
               <Input
@@ -172,7 +459,6 @@ export function RunForm({ defaults, dataCoverage, universeValidFrom }: Props) {
               />
             </div>
 
-            {/* Strategy */}
             <div className="flex flex-col gap-1.5">
               <Label className="text-[12px] font-medium text-muted-foreground">
                 Strategy
@@ -196,7 +482,6 @@ export function RunForm({ defaults, dataCoverage, universeValidFrom }: Props) {
               </NativeSelect>
             </div>
 
-            {/* Universe */}
             <div className="flex flex-col gap-1.5">
               <Label className="text-[12px] font-medium text-muted-foreground">
                 Universe
@@ -204,7 +489,7 @@ export function RunForm({ defaults, dataCoverage, universeValidFrom }: Props) {
               <NativeSelect
                 name="universe"
                 value={universe}
-                onChange={(e) => setUniverse(e.target.value)}
+                onChange={(e) => setUniverse(e.target.value as UniverseId)}
                 required
                 hasValue
                 className="h-8 border-border bg-secondary/40 pl-3 pr-8 text-[13px]"
@@ -215,28 +500,56 @@ export function RunForm({ defaults, dataCoverage, universeValidFrom }: Props) {
                   </option>
                 ))}
               </NativeSelect>
-              {universeStart && (
+              {minStartDateStr ? (
                 <p className="text-[11px] text-muted-foreground mt-0.5">
-                  Earliest supported start:{" "}
-                  <span className="font-mono text-foreground">{universeStart}</span>
+                  Earliest valid start for this universe:{" "}
+                  <span className="font-mono text-foreground">{minStartDateStr}</span>{" "}
+                  (because some assets started later).
+                </p>
+              ) : (
+                <p className="text-[11px] text-muted-foreground mt-0.5">
+                  Earliest valid start will appear once every ticker in this universe is ingested.
+                </p>
+              )}
+              {hasMissingTickers && (
+                <p className="text-[11px] text-amber-300/90">
+                  Missing tickers: {universeState.constraints.missingTickers.join(", ")}
                 </p>
               )}
             </div>
 
-            {/* Universe early-start warning */}
-            {showUniverseWarning && universeStart && (
+            {!isUniverseReady && (
               <div className="flex items-start gap-2 px-2.5 py-2 rounded-md bg-amber-950/30 border border-amber-800/40">
-                <span className="text-amber-400 text-xs mt-0.5">⚠</span>
-                <p className="text-xs text-amber-300/80 leading-snug">
-                  Your start date is before some tickers in{" "}
-                  <strong>{universe}</strong> were available (earliest:{" "}
-                  <span className="font-mono">{universeStart}</span>). Pre-inception tickers will
-                  be excluded at each rebalance until they launch.
-                </p>
+                <span className="text-amber-400 text-xs mt-0.5">!</span>
+                <div className="space-y-1 text-xs text-amber-300/80 leading-snug">
+                  {isUniverseLoading ? (
+                    <p>Checking universe data readiness...</p>
+                  ) : batchStatus && (batchStatus.status === "pending" || batchStatus.status === "running") ? (
+                    <p>
+                      Preparing missing universe data: {batchStatus.completedJobs}/{batchStatus.totalJobs} jobs complete
+                      ({batchStatus.avgProgress}%).
+                    </p>
+                  ) : (
+                    <p>
+                      Queue Backtest stays disabled until the selected universe is fully ingested and ready.
+                    </p>
+                  )}
+                  {!isUniverseLoading && !universeState.batchId && hasMissingTickers && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => void loadUniverseState(universe, { createBatch: true })}
+                      className="h-7 text-[11px] border-amber-700/50 bg-transparent text-amber-200 hover:bg-amber-950/40"
+                    >
+                      <RefreshCcw className="w-3 h-3 mr-1.5" />
+                      Retry data repair
+                    </Button>
+                  )}
+                </div>
               </div>
             )}
 
-            {/* Date range */}
             <div className="flex flex-col gap-1.5">
               <div className="flex items-baseline justify-between">
                 <Label className="text-[12px] font-medium text-muted-foreground">
@@ -247,9 +560,7 @@ export function RunForm({ defaults, dataCoverage, universeValidFrom }: Props) {
                 </span>
               </div>
               <div className="grid grid-cols-2 gap-3">
-                {/* Start date */}
                 <div>
-                  <input type="hidden" name="start_date" value={toInputDate(startDate)} />
                   <Popover open={startOpen} onOpenChange={setStartOpen}>
                     <PopoverTrigger asChild>
                       <Button
@@ -267,31 +578,34 @@ export function RunForm({ defaults, dataCoverage, universeValidFrom }: Props) {
                         captionLayout="dropdown-years"
                         showOutsideDays={false}
                         startMonth={coverageMin ?? new Date(2015, 0)}
-                        endMonth={coverageMax ?? new Date()}
+                        endMonth={maxEndDateStr ? parseLocalDate(maxEndDateStr) : new Date()}
                         selected={startDate}
                         onSelect={(d) => {
                           if (!d) return
-                          if (dataCoverage) {
-                            const s = format(d, "yyyy-MM-dd")
-                            if (s < dataCoverage.minDateStr || s > dataCoverage.maxDateStr) return
+                          const selectedStr = format(d, "yyyy-MM-dd")
+                          if (minStartDateStr && selectedStr < minStartDateStr) {
+                            setStartDate(parseLocalDate(minStartDateStr))
+                            setDateAdjustmentMessage(`Start date snapped to ${minStartDateStr}.`)
+                            setStartOpen(false)
+                            return
                           }
+                          if (maxEndDateStr && selectedStr > maxEndDateStr) return
                           setStartDate(d)
                           setStartOpen(false)
                         }}
                         disabled={(d) => {
-                          const s = format(d, "yyyy-MM-dd")
-                          return dataCoverage
-                            ? s < dataCoverage.minDateStr || s > dataCoverage.maxDateStr
-                            : d > new Date()
+                          const value = format(d, "yyyy-MM-dd")
+                          if (minStartDateStr && value < minStartDateStr) return true
+                          if (maxEndDateStr && value > maxEndDateStr) return true
+                          if (endDateStr && value > endDateStr) return true
+                          return false
                         }}
                         autoFocus
                       />
                     </PopoverContent>
                   </Popover>
                 </div>
-                {/* End date */}
                 <div>
-                  <input type="hidden" name="end_date" value={toInputDate(endDate)} />
                   <Popover open={endOpen} onOpenChange={setEndOpen}>
                     <PopoverTrigger asChild>
                       <Button
@@ -309,22 +623,31 @@ export function RunForm({ defaults, dataCoverage, universeValidFrom }: Props) {
                         captionLayout="dropdown-years"
                         showOutsideDays={false}
                         startMonth={coverageMin ?? new Date(2015, 0)}
-                        endMonth={coverageMax ?? new Date()}
+                        endMonth={maxEndDateStr ? parseLocalDate(maxEndDateStr) : new Date()}
                         selected={endDate}
                         onSelect={(d) => {
                           if (!d) return
-                          if (dataCoverage) {
-                            const s = format(d, "yyyy-MM-dd")
-                            if (s < dataCoverage.minDateStr || s > dataCoverage.maxDateStr) return
+                          const selectedStr = format(d, "yyyy-MM-dd")
+                          if (startDateStr && selectedStr < startDateStr) {
+                            setEndDate(parseLocalDate(startDateStr))
+                            setDateAdjustmentMessage(`End date snapped to ${startDateStr}.`)
+                            setEndOpen(false)
+                            return
+                          }
+                          if (maxEndDateStr && selectedStr > maxEndDateStr) {
+                            setEndDate(parseLocalDate(maxEndDateStr))
+                            setDateAdjustmentMessage(`End date snapped to ${maxEndDateStr}.`)
+                            setEndOpen(false)
+                            return
                           }
                           setEndDate(d)
                           setEndOpen(false)
                         }}
                         disabled={(d) => {
-                          const s = format(d, "yyyy-MM-dd")
-                          return dataCoverage
-                            ? s < dataCoverage.minDateStr || s > dataCoverage.maxDateStr
-                            : d > new Date()
+                          const value = format(d, "yyyy-MM-dd")
+                          if (startDateStr && value < startDateStr) return true
+                          if (maxEndDateStr && value > maxEndDateStr) return true
+                          return false
                         }}
                         autoFocus
                       />
@@ -332,17 +655,23 @@ export function RunForm({ defaults, dataCoverage, universeValidFrom }: Props) {
                   </Popover>
                 </div>
               </div>
-              {dataCoverage && (
-                <p className="text-[11px] text-muted-foreground">
-                  Available data: {dataCoverage.minDateStr} → {dataCoverage.maxDateStr}
-                </p>
-              )}
+              <div className="space-y-0.5">
+                {maxEndDateStr && (
+                  <p className="text-[11px] text-muted-foreground">
+                    Data current through <span className="font-mono text-foreground">{maxEndDateStr}</span>.
+                  </p>
+                )}
+                {dataCoverage?.minDateStr && (
+                  <p className="text-[11px] text-muted-foreground">
+                    Earliest visible history: {dataCoverage.minDateStr}
+                  </p>
+                )}
+              </div>
             </div>
 
-            {/* Strategy warmup warning */}
             {showWarmupWarning && effectiveStrategyStart && (
               <div className="flex items-start gap-2 px-2.5 py-2 rounded-md bg-amber-950/30 border border-amber-800/40">
-                <span className="text-amber-400 text-xs mt-0.5">⚠</span>
+                <span className="text-amber-400 text-xs mt-0.5">!</span>
                 <p className="text-xs text-amber-300/80 leading-snug">
                   <strong>{STRATEGY_LABELS[strategy as StrategyId]}</strong> needs ~{warmupDays}{" "}
                   calendar days of history before it can trade.{warmupDesc ? ` ${warmupDesc}` : ""}{" "}
@@ -352,15 +681,10 @@ export function RunForm({ defaults, dataCoverage, universeValidFrom }: Props) {
               </div>
             )}
 
-            {/* Initial capital */}
             <div className="flex flex-col gap-1.5">
-              <Label
-                htmlFor="initial_capital"
-                className="text-[12px] font-medium text-muted-foreground"
-              >
+              <Label htmlFor="initial_capital" className="text-[12px] font-medium text-muted-foreground">
                 Initial Capital ($)
               </Label>
-              <input type="hidden" name="initial_capital" value={capitalValue} />
               <div className="flex gap-2">
                 <Input
                   id="initial_capital"
@@ -391,13 +715,9 @@ export function RunForm({ defaults, dataCoverage, universeValidFrom }: Props) {
               </div>
             </div>
 
-            {/* Execution config */}
             <div className="grid grid-cols-3 gap-3">
               <div className="flex flex-col gap-1.5">
-                <Label
-                  htmlFor="benchmark"
-                  className="text-[12px] font-medium text-muted-foreground"
-                >
+                <Label htmlFor="benchmark" className="text-[12px] font-medium text-muted-foreground">
                   Benchmark
                 </Label>
                 <NativeSelect
@@ -415,10 +735,7 @@ export function RunForm({ defaults, dataCoverage, universeValidFrom }: Props) {
                 </NativeSelect>
               </div>
               <div className="flex flex-col gap-1.5">
-                <Label
-                  htmlFor="costs_bps"
-                  className="text-[12px] font-medium text-muted-foreground"
-                >
+                <Label htmlFor="costs_bps" className="text-[12px] font-medium text-muted-foreground">
                   Costs (bps)
                 </Label>
                 <Input
@@ -434,10 +751,7 @@ export function RunForm({ defaults, dataCoverage, universeValidFrom }: Props) {
                 />
               </div>
               <div className="flex flex-col gap-1.5">
-                <Label
-                  htmlFor="top_n"
-                  className="text-[12px] font-medium text-muted-foreground"
-                >
+                <Label htmlFor="top_n" className="text-[12px] font-medium text-muted-foreground">
                   Top N
                 </Label>
                 <Input
@@ -447,8 +761,8 @@ export function RunForm({ defaults, dataCoverage, universeValidFrom }: Props) {
                   min={1}
                   max={topNMax}
                   step={1}
-                  defaultValue={Math.min(defaults?.default_top_n ?? 5, topNMax)}
-                  key={`top_n_${universe}`}
+                  value={topNValue}
+                  onChange={(e) => setTopNValue(e.target.value)}
                   className="h-8 text-[13px] bg-secondary/40 border-border"
                   required
                 />
@@ -458,7 +772,6 @@ export function RunForm({ defaults, dataCoverage, universeValidFrom }: Props) {
 
             <Separator className="my-1 bg-border/50" />
 
-            {/* Apply costs toggle */}
             <div className="flex items-center justify-between">
               <div className="flex flex-col gap-0.5">
                 <Label
@@ -471,11 +784,6 @@ export function RunForm({ defaults, dataCoverage, universeValidFrom }: Props) {
                   Deduct costs_bps from returns at each rebalance
                 </span>
               </div>
-              <input
-                type="hidden"
-                name="apply_costs"
-                value={applyCosts ? "on" : ""}
-              />
               <Switch
                 id="apply_costs_toggle"
                 checked={applyCosts}
@@ -484,12 +792,8 @@ export function RunForm({ defaults, dataCoverage, universeValidFrom }: Props) {
               />
             </div>
 
-            {/* Slippage */}
             <div className="flex flex-col gap-1.5">
-              <Label
-                htmlFor="slippage_bps"
-                className="text-[12px] font-medium text-muted-foreground"
-              >
+              <Label htmlFor="slippage_bps" className="text-[12px] font-medium text-muted-foreground">
                 Slippage (bps)
                 <span className="ml-1.5 text-[11px] font-normal opacity-60">optional</span>
               </Label>
@@ -505,26 +809,115 @@ export function RunForm({ defaults, dataCoverage, universeValidFrom }: Props) {
               />
             </div>
 
-            {/* Error message */}
-            {state?.error && (
-              <p className="text-[12px] text-destructive bg-destructive/8 border border-destructive/20 rounded-md px-3 py-2">
-                {state.error}
+            {dateAdjustmentMessage && (
+              <p className="text-[12px] text-amber-300 bg-amber-950/30 border border-amber-800/40 rounded-md px-3 py-2">
+                {dateAdjustmentMessage}
               </p>
             )}
 
-            {/* Submit */}
+            {submitError && (
+              <p className="text-[12px] text-destructive bg-destructive/8 border border-destructive/20 rounded-md px-3 py-2">
+                {submitError}
+              </p>
+            )}
+
             <Button
               type="submit"
               size="sm"
-              disabled={isPending || !strategy}
+              disabled={isQueueDisabled}
               className="h-8 text-[12px] font-medium mt-1 w-full"
             >
               <Zap className="w-3.5 h-3.5 mr-1.5" />
-              {isPending ? "Queueing…" : "Queue Backtest"}
+              {isSubmitting ? "Queueing..." : isPreflighting ? "Checking..." : "Queue Backtest"}
             </Button>
           </form>
         </CardContent>
       </Card>
+
+      <AlertDialog open={blockResult !== null} onOpenChange={(open) => !open && setBlockResult(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>This run is blocked</AlertDialogTitle>
+            <AlertDialogDescription>
+              Fix these items before the run can be created.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="space-y-3">
+            {blockIssues.map((issue) => {
+              const action = issue.action
+              return (
+                <div key={`${issue.code}:${issue.reason}`} className="rounded-md border border-border/60 bg-secondary/30 px-3 py-2.5">
+                  <p className="text-sm text-foreground">{issue.reason}</p>
+                  <p className="mt-1 text-[12px] text-muted-foreground">{issue.fix}</p>
+                  {action && (
+                    <div className="mt-2">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => void applySuggestedFix(action.kind, action.value)}
+                      >
+                        {action.label}
+                      </Button>
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Close</AlertDialogCancel>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <Dialog open={warnResult !== null} onOpenChange={(open) => !open && setWarnResult(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Warning</DialogTitle>
+            <DialogDescription>
+              Review these warnings before you continue.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            {warnIssues.map((issue) => {
+              const action = issue.action
+              return (
+                <div key={`${issue.code}:${issue.reason}`} className="rounded-md border border-amber-800/40 bg-amber-950/20 px-3 py-2.5">
+                  <p className="text-sm text-foreground">{issue.reason}</p>
+                  <p className="mt-1 text-[12px] text-muted-foreground">{issue.fix}</p>
+                  {action && (
+                    <div className="mt-2">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => void applySuggestedFix(action.kind, action.value)}
+                      >
+                        {action.label}
+                      </Button>
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setWarnResult(null)}>
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              onClick={() => {
+                setWarnResult(null)
+                void runCreate(true)
+              }}
+            >
+              Acknowledge and Queue
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   )
 }

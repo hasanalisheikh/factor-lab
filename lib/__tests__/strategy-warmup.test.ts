@@ -22,8 +22,8 @@ describe("STRATEGY_WARMUP_CALENDAR_DAYS", () => {
     expect(STRATEGY_WARMUP_CALENDAR_DAYS.low_vol).toBe(90)
   })
 
-  it("trend_filter has 290-day warmup", () => {
-    expect(STRATEGY_WARMUP_CALENDAR_DAYS.trend_filter).toBe(290)
+  it("trend_filter has 390-day warmup", () => {
+    expect(STRATEGY_WARMUP_CALENDAR_DAYS.trend_filter).toBe(390)
   })
 })
 
@@ -62,11 +62,11 @@ describe("computeStrategyEarliestStart", () => {
     expect(result!.startsWith("2015-")).toBe(true)
   })
 
-  it("trend_filter adds ~290 days", () => {
-    // 2015-01-02 + 290 days ≈ 2015-10-18
+  it("trend_filter adds ~390 days", () => {
+    // 2015-01-02 + 390 days ≈ 2016-01-27
     const result = computeStrategyEarliestStart("trend_filter", "2015-01-02")
     expect(result).not.toBeNull()
-    expect(result!.startsWith("2015-")).toBe(true)
+    expect(result!.startsWith("2016-")).toBe(true)
   })
 
   it("exact date arithmetic is correct — 730 days from 2000-01-03", () => {

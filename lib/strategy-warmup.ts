@@ -10,7 +10,8 @@ import type { StrategyId } from "@/lib/types"
  *   ml_ridge:      730     — 504-day training window (ML_TRAIN_WINDOW_DAYS) ≈ 730 calendar days
  *   ml_lightgbm:   730     — same as ml_ridge
  *   low_vol:        90     — 60-day rolling vol window ≈ 90 calendar days
- *   trend_filter:  290     — 200-day SMA ≈ 290 calendar days
+ *   trend_filter:  390     — 200-day benchmark SMA plus momentum lookback for
+ *                            the risk-on sleeve; use the larger warmup window
  */
 export const STRATEGY_WARMUP_CALENDAR_DAYS: Record<StrategyId, number> = {
   equal_weight:  0,
@@ -18,7 +19,7 @@ export const STRATEGY_WARMUP_CALENDAR_DAYS: Record<StrategyId, number> = {
   ml_ridge:      730,
   ml_lightgbm:   730,
   low_vol:        90,
-  trend_filter:  290,
+  trend_filter:  390,
 }
 
 export const STRATEGY_WARMUP_DESCRIPTIONS: Record<StrategyId, string> = {
@@ -27,7 +28,7 @@ export const STRATEGY_WARMUP_DESCRIPTIONS: Record<StrategyId, string> = {
   ml_ridge:      "Requires ≈2 years of daily training data before backtest start (ML_TRAIN_WINDOW_DAYS=504 trading days)",
   ml_lightgbm:   "Requires ≈2 years of daily training data before backtest start (ML_TRAIN_WINDOW_DAYS=504 trading days)",
   low_vol:       "Requires 60-day realized volatility lookback (≈90 calendar days of history before start)",
-  trend_filter:  "Requires 200-day SMA lookback (≈290 calendar days of history before start)",
+  trend_filter:  "Requires a 200-day benchmark SMA plus momentum history for the risk-on sleeve (≈390 calendar days of history before start)",
 }
 
 /**

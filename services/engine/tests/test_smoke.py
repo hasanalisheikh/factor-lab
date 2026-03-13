@@ -169,6 +169,40 @@ def test_smoke_momentum_12_1(monkeypatch):
   _assert_smoke(result, "momentum_12_1")
 
 
+def test_baseline_fetches_warmup_history_and_trims_output(monkeypatch):
+  tickers = ["A", "B", "C", "D", "BENCH"]
+  prices = _make_prices(tickers, start="2015-01-01", periods=1_600, seed=11)
+  requests: list[tuple[str, str]] = []
+
+  class _RecordingIO(_FakeIO):
+    def fetch_prices_frame(
+      self, tickers: list[str], start_date: str, end_date: str
+    ) -> pd.DataFrame:
+      requests.append((start_date, end_date))
+      return super().fetch_prices_frame(tickers, start_date, end_date)
+
+  run = _fake_run(
+    "momentum_12_1",
+    ["A", "B", "C", "D"],
+    start="2018-01-02",
+    end="2020-12-31",
+    top_n=2,
+  )
+  io = _RecordingIO(prices)
+
+  import factorlab_engine.worker as w
+  monkeypatch.setattr(w, "_download_prices", lambda *a, **kw: prices)
+
+  result = _build_baseline_result(io, run)
+
+  assert requests, "Expected the engine to request price history"
+  assert requests[0][0] < run["start_date"], "Expected warmup fetch before the run start"
+  assert requests[0][1] == run["end_date"]
+  assert result.equity_rows[0]["date"] == run["start_date"]
+  assert result.equity_rows[0]["portfolio"] == pytest.approx(100_000.0)
+  assert all(pos["date"] >= run["start_date"] for pos in result.position_rows or [])
+
+
 # ---------------------------------------------------------------------------
 # Smoke: low_vol
 # ---------------------------------------------------------------------------
@@ -285,6 +319,8 @@ def test_smoke_ml_ridge():
 
   assert len(result.equity_rows) > 0, "ml_ridge: no equity rows"
   assert len(result.position_rows) > 0, "ml_ridge: no positions"
+  assert result.equity_rows[0]["date"] == "2018-01-01"
+  assert result.equity_rows[-1]["date"] == "2019-12-31"
   for row in result.equity_rows:
     assert "portfolio" in row and "benchmark" in row
     assert np.isfinite(row["portfolio"]) and np.isfinite(row["benchmark"])
@@ -318,6 +354,8 @@ def test_smoke_ml_lightgbm():
 
   assert len(result.equity_rows) > 0, "ml_lightgbm: no equity rows"
   assert len(result.position_rows) > 0, "ml_lightgbm: no positions"
+  assert result.equity_rows[0]["date"] == "2018-01-01"
+  assert result.equity_rows[-1]["date"] == "2019-12-31"
   assert result.metadata.get("feature_importance"), "ml_lightgbm: no feature_importance"
   totals: dict[str, float] = defaultdict(float)
   for pos in result.position_rows:

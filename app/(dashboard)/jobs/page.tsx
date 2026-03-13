@@ -85,7 +85,7 @@ export default async function JobsPage() {
                             </span>
                           )}
                         </div>
-                        {status === "failed" && job.error_message && (
+                        {(status === "failed" || status === "blocked") && job.error_message && (
                           <p className="text-[11px] text-destructive mt-1 max-w-[520px] truncate">
                             {job.error_message}
                           </p>
