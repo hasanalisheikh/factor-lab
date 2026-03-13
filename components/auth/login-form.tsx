@@ -1,6 +1,6 @@
 "use client"
 
-import { useActionState, useState } from "react"
+import { useActionState, useEffect, useState } from "react"
 import Link from "next/link"
 import { AlertCircle, CheckCircle2, Mail } from "lucide-react"
 import {
@@ -19,6 +19,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Spinner } from "@/components/ui/spinner"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { createClient } from "@/lib/supabase/client"
 
 export function LoginForm({
   authError,
@@ -65,6 +66,61 @@ export function LoginForm({
   const [confirmPassword, setConfirmPassword] = useState("")
   const [passwordMismatchError, setPasswordMismatchError] = useState<string | null>(null)
   const [verifyEmail, setVerifyEmail] = useState(initialEmail ?? "")
+  const [resendCooldown, setResendCooldown] = useState(0)
+
+  // Start 60s cooldown after successful resend
+  useEffect(() => {
+    if ("success" in (resendState ?? {})) {
+      setResendCooldown(60)
+    }
+  }, [resendState])
+
+  useEffect(() => {
+    if (resendCooldown <= 0) return
+    const id = setInterval(() => setResendCooldown((n) => Math.max(0, n - 1)), 1000)
+    return () => clearInterval(id)
+  }, [resendCooldown])
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.location.hash.includes("access_token=")) {
+      return
+    }
+
+    let cancelled = false
+    const supabase = createClient()
+    async function hydrateSession() {
+      try {
+        const params = new URLSearchParams(window.location.hash.replace(/^#/, ""))
+        const accessToken = params.get("access_token")
+        const refreshToken = params.get("refresh_token")
+
+        if (accessToken && refreshToken) {
+          const { data } = await supabase.auth.setSession({
+            access_token: accessToken,
+            refresh_token: refreshToken,
+          })
+          if (!cancelled && data.session) {
+            window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}`)
+            window.location.href = "/dashboard"
+          }
+          return
+        }
+
+        const { data } = await supabase.auth.getSession()
+        if (!cancelled && data.session) {
+          window.location.href = "/dashboard"
+        }
+      } catch {
+        // The normal login UI remains available if session hydration fails.
+      }
+    }
+
+    void hydrateSession()
+
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   const isAnyPending = isSignInPending || isSignUpPending || isGuestPending
 
@@ -104,8 +160,14 @@ export function LoginForm({
     setPasswordMismatchError(null)
   }
 
-  const signInError = signInState?.error ? formatFriendlyError(signInState.error) : null
-  const signUpError = signUpState?.error ? formatFriendlyError(signUpState.error) : null
+  function goToVerify(email: string) {
+    setVerifyEmail(email)
+    setActiveTab("verify")
+  }
+
+  const unverifiedEmail = signInState && "unverifiedEmail" in signInState ? signInState.unverifiedEmail : null
+  const signInError = signInState && "error" in signInState ? formatFriendlyError(signInState.error) : null
+  const signUpError = signUpState && "error" in signUpState ? formatFriendlyError(signUpState.error) : null
 
   const inputClassName =
     "h-9 border-white/10 bg-white/5 text-white/90 placeholder:text-white/45 focus-visible:border-primary/70 focus-visible:ring-primary/40"
@@ -114,23 +176,24 @@ export function LoginForm({
 
   return (
     <div className="flex h-full flex-col">
-      <div className="space-y-2.5">
-        <div className="space-y-1.5">
-          <Logo className="[&_span]:!text-[24px]" size={26} />
-          <div className="space-y-0.5">
-            <h1 className="text-xl font-semibold tracking-tight text-white/90">
-              {activeTab === "signin"
-                ? "Sign in"
-                : activeTab === "signup"
-                  ? "Create account"
-                  : activeTab === "forgot"
-                    ? "Reset password"
-                    : "Verify your email"}
-            </h1>
-            <p className="text-sm text-white/60">
-              Quant research dashboard for backtests and reports.
-            </p>
-          </div>
+      <div className="absolute left-5 top-5 z-10 flex items-center gap-2">
+        <Logo size={26} wordmarkClassName="text-[24px]" />
+      </div>
+
+      <div className="space-y-2.5 pt-14">
+        <div className="space-y-0.5">
+          <h1 className="text-xl font-semibold tracking-tight text-white/90">
+            {activeTab === "signin"
+              ? "Sign in"
+              : activeTab === "signup"
+                ? "Create account"
+                : activeTab === "forgot"
+                  ? "Reset password"
+                  : "Verify your email"}
+          </h1>
+          <p className="text-sm text-white/60">
+            Quant research dashboard for backtests and reports.
+          </p>
         </div>
 
         {authError && (
@@ -276,8 +339,8 @@ export function LoginForm({
               )}
               <Button
                 type="submit"
-                disabled={isResendPending}
-                aria-disabled={isResendPending}
+                disabled={isResendPending || resendCooldown > 0}
+                aria-disabled={isResendPending || resendCooldown > 0}
                 className={primaryButtonClassName}
               >
                 {isResendPending ? (
@@ -285,6 +348,8 @@ export function LoginForm({
                     <Spinner className="size-4" />
                     Sending...
                   </>
+                ) : resendCooldown > 0 ? (
+                  `Resend in ${resendCooldown}s`
                 ) : (
                   "Resend verification email"
                 )}
@@ -374,6 +439,22 @@ export function LoginForm({
                     Forgot password?
                   </button>
                 </div>
+
+                {unverifiedEmail && (
+                  <Alert className="border-amber-500/40 bg-amber-500/10">
+                    <AlertCircle className="size-4 text-amber-400" />
+                    <AlertDescription className="text-amber-300">
+                      Email not verified.{" "}
+                      <button
+                        type="button"
+                        onClick={() => goToVerify(unverifiedEmail)}
+                        className="font-medium underline hover:text-amber-200"
+                      >
+                        Resend verification email
+                      </button>
+                    </AlertDescription>
+                  </Alert>
+                )}
 
                 {signInError && (
                   <Alert variant="destructive" className="border-destructive/40 bg-destructive/10">
@@ -555,7 +636,7 @@ export function LoginForm({
         )}
       </div>
 
-      <p className="mt-auto text-xs text-white/45">
+      <p className="mt-auto translate-y-8 text-[11px] text-white/45">
         FactorLab • Quant Research Dashboard
         <br />
         Not financial advice.

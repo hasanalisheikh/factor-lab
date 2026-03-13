@@ -35,14 +35,23 @@ export function TopbarUserMenu() {
   const router = useRouter()
 
   useEffect(() => {
+    let cancelled = false
     const supabase = createClient()
-    supabase.auth.getUser().then(({ data }) => {
-      if (!data.user) return
-      setUserInfo({
-        email: data.user.email ?? null,
-        isGuest: data.user.user_metadata?.is_guest === true,
+    supabase.auth.getUser()
+      .then(({ data, error }) => {
+        if (cancelled || error || !data.user) return
+        setUserInfo({
+          email: data.user.email ?? null,
+          isGuest: data.user.user_metadata?.is_guest === true,
+        })
       })
-    })
+      .catch(() => {
+        // Ignore transient auth fetch failures during fast route transitions.
+      })
+
+    return () => {
+      cancelled = true
+    }
   }, [])
 
   function handleSignOutClick() {
@@ -54,6 +63,9 @@ export function TopbarUserMenu() {
   }
 
   async function confirmSignOut() {
+    if (userInfo?.isGuest) {
+      localStorage.removeItem("fl_notifs_last_seen")
+    }
     const supabase = createClient()
     await supabase.auth.signOut()
     window.location.href = "/login"

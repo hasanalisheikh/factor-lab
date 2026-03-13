@@ -1,6 +1,6 @@
 "use client"
 
-import { useActionState, useState } from "react"
+import { useActionState, useEffect, useState } from "react"
 import { AlertCircle } from "lucide-react"
 import { resetPasswordAction, type ResetPasswordState } from "@/app/actions/auth"
 import { Logo } from "@/components/logo"
@@ -10,6 +10,7 @@ import { Card } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Spinner } from "@/components/ui/spinner"
+import { createClient } from "@/lib/supabase/client"
 
 export function ResetPasswordForm() {
   const [state, action_, isPending] = useActionState<ResetPasswordState, FormData>(
@@ -17,9 +18,46 @@ export function ResetPasswordForm() {
     null
   )
 
+  const [isHydratingSession, setIsHydratingSession] = useState(true)
   const [password, setPassword] = useState("")
   const [confirmPassword, setConfirmPassword] = useState("")
   const [mismatchError, setMismatchError] = useState<string | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    const supabase = createClient()
+
+    async function hydrateSession() {
+      try {
+        const params = new URLSearchParams(window.location.hash.replace(/^#/, ""))
+        const accessToken = params.get("access_token")
+        const refreshToken = params.get("refresh_token")
+
+        if (accessToken && refreshToken) {
+          await supabase.auth.setSession({
+            access_token: accessToken,
+            refresh_token: refreshToken,
+          })
+          window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}`)
+          return
+        }
+
+        await supabase.auth.getSession()
+      } catch {
+        // The form will surface a server-side error if the reset session is invalid.
+      } finally {
+        if (!cancelled) {
+          setIsHydratingSession(false)
+        }
+      }
+    }
+
+    void hydrateSession()
+
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   const inputClassName =
     "h-9 border-white/10 bg-white/5 text-white/90 placeholder:text-white/45 focus-visible:border-primary/70 focus-visible:ring-primary/40"
@@ -30,7 +68,7 @@ export function ResetPasswordForm() {
     <Card className="border-white/10 bg-card/95 p-6 shadow-[0_28px_75px_-36px_rgba(0,0,0,0.95)]">
       <div className="space-y-4">
         <div className="space-y-1.5">
-          <Logo className="[&_span]:!text-[24px]" size={26} />
+          <Logo size={26} wordmarkClassName="text-[24px]" />
           <div className="space-y-0.5">
             <h1 className="text-xl font-semibold tracking-tight text-white/90">
               Set new password
@@ -101,11 +139,16 @@ export function ResetPasswordForm() {
 
           <Button
             type="submit"
-            disabled={isPending}
-            aria-disabled={isPending}
+            disabled={isPending || isHydratingSession}
+            aria-disabled={isPending || isHydratingSession}
             className={primaryButtonClassName}
           >
-            {isPending ? (
+            {isHydratingSession ? (
+              <>
+                <Spinner className="size-4" />
+                Preparing reset session...
+              </>
+            ) : isPending ? (
               <>
                 <Spinner className="size-4" />
                 Updating password...

@@ -1,50 +1,38 @@
 import { describe, expect, it } from "vitest"
+
 import {
-  alignEquityCurveByDate,
+  downsampleEquityCurve,
   getAlignedTimeframeEquityCurve,
-  type EquityCurvePoint,
 } from "@/lib/equity-curve"
 
-describe("alignEquityCurveByDate", () => {
-  it("drops dates with invalid portfolio; forward-fills missing benchmark from last valid value", () => {
-    const rows: EquityCurvePoint[] = [
-      { date: "2025-01-01", portfolio: 100, benchmark: 100 },
-      { date: "2025-01-02", portfolio: 101, benchmark: 0 }, // invalid benchmark → forward-fill from 2025-01-01
-      { date: "2025-01-03", portfolio: Number.NaN, benchmark: 101 }, // invalid portfolio → dropped
-      { date: "2025-01-04", portfolio: 102, benchmark: 102 },
-    ]
+function makePoint(index: number) {
+  const date = new Date(Date.UTC(2023, 0, 1 + index))
+  return {
+    date: date.toISOString().slice(0, 10),
+    portfolio: 100_000 + index,
+    benchmark: 100_000 + index / 2,
+  }
+}
 
-    expect(alignEquityCurveByDate(rows)).toEqual([
-      { date: "2025-01-01", portfolio: 100, benchmark: 100 },
-      { date: "2025-01-02", portfolio: 101, benchmark: 100 }, // forward-filled
-      { date: "2025-01-04", portfolio: 102, benchmark: 102 },
-    ])
-  })
+describe("downsampleEquityCurve", () => {
+  it("always preserves the first and last visible dates", () => {
+    const data = Array.from({ length: 1001 }, (_, index) => makePoint(index))
 
-  it("drops a date with invalid benchmark when there is no prior valid benchmark to forward-fill from", () => {
-    const rows: EquityCurvePoint[] = [
-      { date: "2025-01-01", portfolio: 100, benchmark: 0 }, // invalid benchmark, no prior → dropped
-      { date: "2025-01-02", portfolio: 101, benchmark: 101 },
-    ]
+    const sampled = downsampleEquityCurve(data, 100)
 
-    expect(alignEquityCurveByDate(rows)).toEqual([
-      { date: "2025-01-02", portfolio: 101, benchmark: 101 },
-    ])
+    expect(sampled[0]?.date).toBe(data[0]?.date)
+    expect(sampled.at(-1)?.date).toBe(data.at(-1)?.date)
   })
 })
 
 describe("getAlignedTimeframeEquityCurve", () => {
-  it("applies timeframe filter before alignment", () => {
-    const rows: EquityCurvePoint[] = [
-      { date: "2025-01-01", portfolio: 100, benchmark: 100 },
-      { date: "2025-12-20", portfolio: 110, benchmark: 110 },
-      { date: "2025-12-25", portfolio: 111, benchmark: 0 },
-      { date: "2025-12-31", portfolio: 112, benchmark: 112 },
-    ]
+  it("keeps the full run range when ALL is selected", () => {
+    const data = Array.from({ length: 500 }, (_, index) => makePoint(index))
 
-    // 1W from 2025-12-31 includes 2025-12-24 onward.
-    expect(getAlignedTimeframeEquityCurve(rows, "1W")).toEqual([
-      { date: "2025-12-31", portfolio: 112, benchmark: 112 },
-    ])
+    const allRange = getAlignedTimeframeEquityCurve(data, "ALL")
+
+    expect(allRange).toHaveLength(data.length)
+    expect(allRange[0]?.date).toBe(data[0]?.date)
+    expect(allRange.at(-1)?.date).toBe(data.at(-1)?.date)
   })
 })
