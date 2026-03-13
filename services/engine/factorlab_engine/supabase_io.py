@@ -36,6 +36,10 @@ class DataIngestJob:
   end_date: str
   stage: str | None = None
   attempt_count: int = 0
+  request_mode: str | None = None
+  batch_id: str | None = None
+  target_cutoff_date: str | None = None
+  requested_by: str | None = None
   requested_by_run_id: str | None = None
   requested_by_user_id: str | None = None
 
@@ -60,6 +64,108 @@ class SupabaseIO:
         "Missing NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY"
       )
     self.client: Client = create_client(url, key)
+    self._legacy_data_ingest_schema: bool | None = None
+
+  def _is_missing_data_ingest_column_error(self, exc: Exception | str) -> bool:
+    message = str(exc).lower()
+    return (
+      ("data_ingest_jobs" in message or "schema cache" in message)
+      and ("does not exist" in message or "could not find" in message)
+      and any(
+        column in message
+        for column in (
+          "request_mode",
+          "batch_id",
+          "target_cutoff_date",
+          "requested_by",
+          "last_heartbeat_at",
+        )
+      )
+    )
+
+  def _normalize_data_ingest_status(self, status: str | None) -> str | None:
+    if status == "completed":
+      return "succeeded"
+    return status
+
+  def _legacy_data_ingest_mode(self) -> bool | None:
+    return getattr(self, "_legacy_data_ingest_schema", None)
+
+  def _legacy_data_ingest_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
+    compat = dict(payload)
+    for column in (
+      "request_mode",
+      "batch_id",
+      "target_cutoff_date",
+      "requested_by",
+      "last_heartbeat_at",
+    ):
+      compat.pop(column, None)
+    if compat.get("status") == "succeeded":
+      compat["status"] = "completed"
+    elif compat.get("status") == "retrying":
+      compat["status"] = "failed"
+    if compat.get("stage") == "upsert_prices":
+      compat["stage"] = "upsert"
+    return compat
+
+  def _should_retry_legacy_data_ingest_write(
+    self,
+    message: str,
+    payload: dict[str, Any],
+  ) -> bool:
+    lower = message.lower()
+    return (
+      self._is_missing_data_ingest_column_error(lower)
+      or (
+        payload.get("status") in ("succeeded", "retrying")
+        and "data_ingest_jobs_status_check" in lower
+      )
+      or (
+        payload.get("stage") == "upsert_prices"
+        and "stage" in lower
+        and "data_ingest_jobs" in lower
+      )
+    )
+
+  def _select_data_ingest_rows(
+    self,
+    extended_fields: str,
+    legacy_fields: str,
+    query_builder: Any,
+  ) -> Any:
+    if self._legacy_data_ingest_mode() is True:
+      return query_builder(legacy_fields).execute()
+    try:
+      return query_builder(extended_fields).execute()
+    except Exception as exc:
+      if not self._is_missing_data_ingest_column_error(exc):
+        raise
+      self._legacy_data_ingest_schema = True
+      return query_builder(legacy_fields).execute()
+
+  def _update_data_ingest_row(self, job_id: str, values: dict[str, Any]) -> Any:
+    payload = dict(values)
+    for _ in range(2):
+      write_payload = (
+        self._legacy_data_ingest_payload(payload)
+        if self._legacy_data_ingest_mode()
+        else dict(payload)
+      )
+      try:
+        return (
+          self.client.table("data_ingest_jobs")
+          .update(write_payload)
+          .eq("id", job_id)
+          .execute()
+        )
+      except Exception as exc:
+        if self._legacy_data_ingest_mode():
+          raise
+        if not self._should_retry_legacy_data_ingest_write(str(exc), payload):
+          raise
+        self._legacy_data_ingest_schema = True
+    raise RuntimeError(f"data_ingest_jobs update failed for {job_id}")
 
   def fetch_queued_jobs(self, limit: int = 3) -> list[Job]:
     result = (
@@ -467,6 +573,9 @@ class SupabaseIO:
     This is the retry scheduler — it runs every worker main-loop iteration
     and moves jobs from status='failed' (with next_retry_at <= NOW()) back
     to status='queued' so the worker picks them up.
+
+    Legacy rows in `jobs` require a non-null stage, so requeued jobs reset to
+    the initial "ingest" stage instead of NULL.
     """
     try:
       now_iso = datetime.now(timezone.utc).isoformat()
@@ -488,7 +597,7 @@ class SupabaseIO:
       for row in due:
         self.client.table("jobs").update({
           "status": "queued",
-          "stage": None,
+          "stage": "ingest",
           "progress": 0,
           "next_retry_at": None,
           "error_message": None,
@@ -507,16 +616,29 @@ class SupabaseIO:
     if not tickers:
       return pd.DataFrame()
 
-    result = (
-      self.client.table("prices")
-      .select("ticker,date,adj_close")
-      .in_("ticker", tickers)
-      .gte("date", start_date)
-      .lte("date", end_date)
-      .order("date")
-      .execute()
-    )
-    rows = result.data or []
+    rows: list[dict[str, Any]] = []
+    page_size = 1000
+    offset = 0
+    while True:
+      result = (
+        self.client.table("prices")
+        .select("ticker,date,adj_close")
+        .in_("ticker", tickers)
+        .gte("date", start_date)
+        .lte("date", end_date)
+        .order("date")
+        .order("ticker")
+        .range(offset, offset + page_size - 1)
+        .execute()
+      )
+      chunk = result.data or []
+      if not chunk:
+        break
+      rows.extend(chunk)
+      if len(chunk) < page_size:
+        break
+      offset += page_size
+
     if not rows:
       return pd.DataFrame()
 
@@ -884,13 +1006,16 @@ class SupabaseIO:
 
   def fetch_queued_data_ingest_jobs(self, limit: int = 5) -> list[DataIngestJob]:
     """Fetch up to `limit` queued data_ingest_jobs ordered by creation time."""
-    result = (
-      self.client.table("data_ingest_jobs")
-      .select("id,symbol,start_date,end_date,stage,attempt_count,requested_by_run_id,requested_by_user_id")
-      .eq("status", "queued")
-      .order("created_at")
-      .limit(limit)
-      .execute()
+    result = self._select_data_ingest_rows(
+      "id,symbol,start_date,end_date,stage,attempt_count,request_mode,batch_id,target_cutoff_date,requested_by,requested_by_run_id,requested_by_user_id",
+      "id,symbol,start_date,end_date,stage,attempt_count,requested_by_run_id,requested_by_user_id",
+      lambda fields: (
+        self.client.table("data_ingest_jobs")
+        .select(fields)
+        .eq("status", "queued")
+        .order("created_at")
+        .limit(limit)
+      ),
     )
     jobs: list[DataIngestJob] = []
     for r in result.data or []:
@@ -901,6 +1026,10 @@ class SupabaseIO:
         end_date=str(r["end_date"]),
         stage=r.get("stage"),
         attempt_count=int(r.get("attempt_count") or 0),
+        request_mode=r.get("request_mode"),
+        batch_id=r.get("batch_id"),
+        target_cutoff_date=r.get("target_cutoff_date"),
+        requested_by=r.get("requested_by"),
         requested_by_run_id=r.get("requested_by_run_id"),
         requested_by_user_id=r.get("requested_by_user_id"),
       ))
@@ -914,23 +1043,39 @@ class SupabaseIO:
     """
     now = datetime.now(timezone.utc).isoformat()
     try:
-      claimed = (
-        self.client.table("data_ingest_jobs")
-        .update({
-          "status": "running",
-          "stage": "download",
-          "progress": 5,
-          "started_at": now,
-          "updated_at": now,
-          "locked_at": now,
-          "finished_at": None,
-          "error": None,
-          "next_retry_at": None,
-        })
-        .eq("id", job.id)
-        .eq("status", "queued")
-        .execute()
-      )
+      payload = {
+        "status": "running",
+        "stage": "download",
+        "progress": 5,
+        "started_at": now,
+        "updated_at": now,
+        "last_heartbeat_at": now,
+        "locked_at": now,
+        "finished_at": None,
+        "error": None,
+        "next_retry_at": None,
+      }
+      for _ in range(2):
+        write_payload = (
+          self._legacy_data_ingest_payload(payload)
+          if self._legacy_data_ingest_mode()
+          else dict(payload)
+        )
+        try:
+          claimed = (
+            self.client.table("data_ingest_jobs")
+            .update(write_payload)
+            .eq("id", job.id)
+            .eq("status", "queued")
+            .execute()
+          )
+          break
+        except Exception as exc:
+          if self._legacy_data_ingest_mode():
+            raise
+          if not self._should_retry_legacy_data_ingest_write(str(exc), payload):
+            raise
+          self._legacy_data_ingest_schema = True
       return bool(claimed.data)
     except Exception as exc:
       print(f"[supabase_io] claim_data_ingest_job error job={job.id}: {exc}")
@@ -947,9 +1092,7 @@ class SupabaseIO:
     """
     try:
       now = datetime.now(timezone.utc).isoformat()
-      self.client.table("data_ingest_jobs").update(
-        {"updated_at": now}
-      ).eq("id", job_id).execute()
+      self._update_data_ingest_row(job_id, {"updated_at": now, "last_heartbeat_at": now})
     except Exception as exc:
       print(f"[supabase_io] heartbeat warning data_ingest_job={job_id}: {exc}")
 
@@ -960,9 +1103,12 @@ class SupabaseIO:
     bounded = max(0, min(int(progress), 100))
     now = datetime.now(timezone.utc).isoformat()
     try:
-      self.client.table("data_ingest_jobs").update(
-        {"stage": stage, "progress": bounded, "updated_at": now}
-      ).eq("id", job_id).execute()
+      self._update_data_ingest_row(job_id, {
+        "stage": stage,
+        "progress": bounded,
+        "updated_at": now,
+        "last_heartbeat_at": now,
+      })
     except Exception as exc:
       print(f"[supabase_io] update_data_ingest_progress error job={job_id}: {exc}")
 
@@ -975,26 +1121,29 @@ class SupabaseIO:
     start_date: str,
     end_date: str,
   ) -> None:
-    """Mark data_ingest_job completed, update ticker_stats cache, and chain preflight."""
+    """Mark data_ingest_job succeeded, refresh cache, and finalize any batch."""
     now = datetime.now(timezone.utc).isoformat()
     try:
-      self.client.table("data_ingest_jobs").update({
-        "status": "completed",
+      self._update_data_ingest_row(job.id, {
+        "status": "succeeded",
         "stage": "finalize",
         "progress": 100,
         "finished_at": now,
         "updated_at": now,
+        "last_heartbeat_at": now,
         "error": None,
-      }).eq("id", job.id).execute()
+        "next_retry_at": None,
+      })
     except Exception as exc:
       print(f"[supabase_io] save_data_ingest_job_success update error job={job.id}: {exc}")
 
     try:
+      note_prefix = f"{job.request_mode or 'manual'} ingest"
       self.client.table("data_ingestion_log").insert({
         "status": "success",
         "tickers_updated": tickers_updated,
         "rows_upserted": rows_upserted,
-        "note": f"on-demand ingest {job.symbol} ({start_date} to {end_date})",
+        "note": f"{note_prefix} {job.symbol} ({start_date} to {end_date})",
         "source": "yfinance",
       }).execute()
     except Exception as exc:
@@ -1005,7 +1154,61 @@ class SupabaseIO:
     except Exception as exc:
       print(f"[supabase_io] warning: could not upsert ticker_stats for {job.symbol}: {exc}")
 
+    self.try_finalize_scheduled_refresh_batch(job)
     self.try_chain_preflight_backtest_v2(job)
+
+  def try_finalize_scheduled_refresh_batch(self, job: DataIngestJob) -> None:
+    """Advance data_state when the last scheduled refresh job in a batch succeeds."""
+    if not job.batch_id or job.request_mode not in ("monthly", "daily", "manual"):
+      return
+    if not job.target_cutoff_date:
+      return
+
+    try:
+      result = (
+        self.client.table("data_ingest_jobs")
+        .select("id,symbol,status")
+        .eq("batch_id", job.batch_id)
+        .execute()
+      )
+      batch_jobs = result.data or []
+      if not batch_jobs:
+        return
+
+      if any(j["status"] in ("queued", "running", "retrying") for j in batch_jobs):
+        return
+      if any(j["status"] != "succeeded" for j in batch_jobs):
+        return
+
+      now_iso = datetime.now(timezone.utc).isoformat()
+      self.client.table("data_state").upsert({
+        "id": 1,
+        "data_cutoff_date": job.target_cutoff_date,
+        "last_update_at": now_iso,
+        "update_mode": job.request_mode,
+        "updated_by": job.requested_by or job.request_mode,
+      }).execute()
+
+      symbols = sorted({
+        str(j.get("symbol"))
+        for j in batch_jobs
+        if j.get("symbol")
+      })
+      for symbol in symbols:
+        try:
+          self.client.rpc("upsert_ticker_stats", {"p_ticker": symbol}).execute()
+        except Exception as exc:
+          print(f"[supabase_io] warning: could not refresh ticker_stats for {symbol}: {exc}")
+
+      print(
+        f"[supabase_io] finalized {job.request_mode} refresh batch={job.batch_id} "
+        f"cutoff={job.target_cutoff_date} symbols={len(symbols)}"
+      )
+    except Exception as exc:
+      print(
+        f"[supabase_io] try_finalize_scheduled_refresh_batch error "
+        f"batch={job.batch_id}: {exc}"
+      )
 
   def save_data_ingest_job_failure_with_retry(
     self,
@@ -1015,22 +1218,23 @@ class SupabaseIO:
     *,
     stage: str = "download",
   ) -> None:
-    """Mark data_ingest_job failed and schedule an automatic retry with backoff."""
+    """Mark data_ingest_job retrying and schedule an automatic retry with backoff."""
     next_attempt = job.attempt_count + 1
     delay = _get_retry_delay(next_attempt)
     next_retry_at = (datetime.now(timezone.utc) + timedelta(seconds=delay)).isoformat()
     now = datetime.now(timezone.utc).isoformat()
     try:
-      self.client.table("data_ingest_jobs").update({
-        "status": "failed",
+      self._update_data_ingest_row(job.id, {
+        "status": "retrying",
         "stage": stage,
         "progress": 100,
         "finished_at": now,
         "updated_at": now,
+        "last_heartbeat_at": now,
         "error": error_message[:2000],
         "attempt_count": next_attempt,
         "next_retry_at": next_retry_at,
-      }).eq("id", job.id).execute()
+      })
     except Exception as exc:
       print(f"[supabase_io] save_data_ingest_job_failure_with_retry error job={job.id}: {exc}")
     print(
@@ -1049,15 +1253,16 @@ class SupabaseIO:
     """Mark data_ingest_job permanently blocked (no auto-retry), then chain preflight."""
     now = datetime.now(timezone.utc).isoformat()
     try:
-      self.client.table("data_ingest_jobs").update({
+      self._update_data_ingest_row(job.id, {
         "status": "blocked",
         "stage": stage,
         "progress": 100,
         "finished_at": now,
         "updated_at": now,
+        "last_heartbeat_at": now,
         "error": f"[blocked] {error_message[:1980]}",
         "next_retry_at": None,
-      }).eq("id", job.id).execute()
+      })
     except Exception as exc:
       print(f"[supabase_io] save_data_ingest_job_blocked error job={job.id}: {exc}")
     print(f"[supabase_io] ingest job={job.id} symbol={job.symbol} BLOCKED: {error_message[:200]}")
@@ -1069,7 +1274,7 @@ class SupabaseIO:
     """Detect running data_ingest_jobs that are stuck and schedule retries.
 
     Two detection paths:
-      1. Primary — heartbeat gone silent: updated_at older than stall_minutes.
+      1. Primary — heartbeat gone silent: last_heartbeat_at older than stall_minutes.
       2. Secondary — heartbeat alive but job exceeded max runtime: started_at
          older than _INGEST_MAX_RUNTIME_SECONDS. This catches yfinance calls that
          block indefinitely while the heartbeat background thread keeps firing.
@@ -1080,21 +1285,27 @@ class SupabaseIO:
       cutoff_max_runtime = (now_utc - timedelta(seconds=_INGEST_MAX_RUNTIME_SECONDS)).isoformat()
 
       # Primary: heartbeat gone silent
-      result_silent = (
-        self.client.table("data_ingest_jobs")
-        .select("id,stage,attempt_count,requested_by_run_id,symbol")
-        .eq("status", "running")
-        .lt("updated_at", cutoff_heartbeat)
-        .execute()
+      result_silent = self._select_data_ingest_rows(
+        "id,stage,attempt_count,request_mode,batch_id,target_cutoff_date,requested_by,requested_by_run_id,symbol",
+        "id,stage,attempt_count,requested_by_run_id,symbol",
+        lambda fields: (
+          self.client.table("data_ingest_jobs")
+          .select(fields)
+          .eq("status", "running")
+          .lt("updated_at", cutoff_heartbeat)
+        ),
       )
       # Secondary: heartbeat alive but running too long
-      result_maxtime = (
-        self.client.table("data_ingest_jobs")
-        .select("id,stage,attempt_count,requested_by_run_id,symbol")
-        .eq("status", "running")
-        .lt("started_at", cutoff_max_runtime)
-        .not_.is_("started_at", "null")
-        .execute()
+      result_maxtime = self._select_data_ingest_rows(
+        "id,stage,attempt_count,request_mode,batch_id,target_cutoff_date,requested_by,requested_by_run_id,symbol",
+        "id,stage,attempt_count,requested_by_run_id,symbol",
+        lambda fields: (
+          self.client.table("data_ingest_jobs")
+          .select(fields)
+          .eq("status", "running")
+          .lt("started_at", cutoff_max_runtime)
+          .not_.is_("started_at", "null")
+        ),
       )
       # Deduplicate by id (a single job may appear in both result sets)
       seen_ids: set[str] = set()
@@ -1119,17 +1330,18 @@ class SupabaseIO:
           next_retry_at = (
             datetime.now(timezone.utc) + timedelta(seconds=delay)
           ).isoformat()
-          self.client.table("data_ingest_jobs").update({
-            "status": "failed",
+          self._update_data_ingest_row(job_id, {
+            "status": "retrying",
             "stage": row.get("stage") or "download",
             "attempt_count": next_attempt,
             "next_retry_at": next_retry_at,
             "updated_at": now_iso,
+            "last_heartbeat_at": now_iso,
             "error": (
               f"[stalled] no heartbeat for {stall_minutes}m "
               f"(attempt {next_attempt}/{max_attempts}). Retry in {delay}s."
             ),
-          }).eq("id", job_id).execute()
+          })
           print(
             f"[supabase_io] stalled data_ingest_job={job_id} "
             f"attempt={next_attempt} retry_at={next_retry_at}"
@@ -1139,16 +1351,17 @@ class SupabaseIO:
             f"[stalled] no heartbeat for {stall_minutes}m after "
             f"{next_attempt} attempt(s). Worker likely crashed mid-job."
           )
-          self.client.table("data_ingest_jobs").update({
+          self._update_data_ingest_row(job_id, {
             "status": "failed",
             "progress": 100,
             "stage": row.get("stage") or "download",
             "attempt_count": next_attempt,
             "finished_at": now_iso,
             "updated_at": now_iso,
+            "last_heartbeat_at": now_iso,
             "next_retry_at": None,
             "error": error_msg[:2000],
-          }).eq("id", job_id).execute()
+          })
           print(
             f"[supabase_io] permanently failed stalled data_ingest_job={job_id} "
             f"(exhausted {next_attempt} attempts)"
@@ -1162,6 +1375,10 @@ class SupabaseIO:
               end_date="",
               stage=row.get("stage"),
               attempt_count=next_attempt,
+              request_mode=row.get("request_mode"),
+              batch_id=row.get("batch_id"),
+              target_cutoff_date=row.get("target_cutoff_date"),
+              requested_by=row.get("requested_by"),
               requested_by_run_id=run_id,
             )
             self.try_chain_preflight_backtest_v2(fake_job)
@@ -1177,12 +1394,15 @@ class SupabaseIO:
       cutoff = (
         datetime.now(timezone.utc) - timedelta(minutes=timeout_minutes)
       ).isoformat()
-      result = (
-        self.client.table("data_ingest_jobs")
-        .select("id,stage,attempt_count,requested_by_run_id,symbol")
-        .eq("status", "queued")
-        .lt("created_at", cutoff)
-        .execute()
+      result = self._select_data_ingest_rows(
+        "id,stage,attempt_count,request_mode,batch_id,target_cutoff_date,requested_by,requested_by_run_id,symbol",
+        "id,stage,attempt_count,requested_by_run_id,symbol",
+        lambda fields: (
+          self.client.table("data_ingest_jobs")
+          .select(fields)
+          .eq("status", "queued")
+          .lt("created_at", cutoff)
+        ),
       )
       stuck = result.data or []
       if not stuck:
@@ -1199,30 +1419,32 @@ class SupabaseIO:
           next_retry_at = (
             datetime.now(timezone.utc) + timedelta(seconds=30)
           ).isoformat()
-          self.client.table("data_ingest_jobs").update({
-            "status": "failed",
+          self._update_data_ingest_row(job_id, {
+            "status": "retrying",
             "attempt_count": next_attempt,
             "next_retry_at": next_retry_at,
             "updated_at": now_iso,
+            "last_heartbeat_at": now_iso,
             "error": (
               f"[queued-too-long] queued for >{timeout_minutes}m without being claimed. "
               "Worker may not be running. Retry in 30s."
             ),
-          }).eq("id", job_id).execute()
+          })
         else:
           error_msg = (
             f"[queued-too-long] queued for >{timeout_minutes}m after "
             f"{next_attempt} attempt(s). No worker available."
           )
-          self.client.table("data_ingest_jobs").update({
+          self._update_data_ingest_row(job_id, {
             "status": "failed",
             "progress": 100,
             "attempt_count": next_attempt,
             "finished_at": now_iso,
             "updated_at": now_iso,
+            "last_heartbeat_at": now_iso,
             "next_retry_at": None,
             "error": error_msg[:2000],
-          }).eq("id", job_id).execute()
+          })
           run_id = row.get("requested_by_run_id")
           if run_id:
             fake_job = DataIngestJob(
@@ -1231,6 +1453,10 @@ class SupabaseIO:
               start_date="",
               end_date="",
               attempt_count=next_attempt,
+              request_mode=row.get("request_mode"),
+              batch_id=row.get("batch_id"),
+              target_cutoff_date=row.get("target_cutoff_date"),
+              requested_by=row.get("requested_by"),
               requested_by_run_id=run_id,
             )
             self.try_chain_preflight_backtest_v2(fake_job)
@@ -1239,13 +1465,14 @@ class SupabaseIO:
       print(f"[supabase_io] scan_queued_too_long_data_ingest error: {exc}")
 
   def requeue_due_data_ingest(self, max_attempts: int = 5) -> None:
-    """Re-queue failed data_ingest_jobs whose next_retry_at has arrived."""
+    """Re-queue retrying data_ingest_jobs whose next_retry_at has arrived."""
     try:
       now_iso = datetime.now(timezone.utc).isoformat()
+      retry_status = "failed" if self._legacy_data_ingest_mode() else "retrying"
       result = (
         self.client.table("data_ingest_jobs")
         .select("id,attempt_count")
-        .eq("status", "failed")
+        .eq("status", retry_status)
         .lte("next_retry_at", now_iso)
         .lt("attempt_count", max_attempts)
         .not_.is_("next_retry_at", "null")
@@ -1257,14 +1484,16 @@ class SupabaseIO:
 
       print(f"[supabase_io] requeueing {len(due)} due-for-retry data_ingest_job(s)")
       for row in due:
-        self.client.table("data_ingest_jobs").update({
+        self._update_data_ingest_row(row["id"], {
           "status": "queued",
           "stage": None,
           "progress": 0,
+          "finished_at": None,
           "next_retry_at": None,
           "error": None,
           "updated_at": now_iso,
-        }).eq("id", row["id"]).execute()
+          "last_heartbeat_at": now_iso,
+        })
         print(
           f"[supabase_io] requeued data_ingest_job={row['id']} "
           f"attempt_count={row['attempt_count']}"
@@ -1292,10 +1521,13 @@ class SupabaseIO:
       if not preflight_jobs:
         return
 
-      # Non-terminal: queued, running, or failed-but-will-retry
+      # Non-terminal: queued, running, retrying, or failed-but-will-retry
       if any(
-        j["status"] in ("queued", "running")
-        or (j["status"] == "failed" and j.get("next_retry_at"))
+        self._normalize_data_ingest_status(j["status"]) in ("queued", "running", "retrying")
+        or (
+          self._normalize_data_ingest_status(j["status"]) == "failed"
+          and j.get("next_retry_at")
+        )
         for j in preflight_jobs
       ):
         return
@@ -1315,7 +1547,8 @@ class SupabaseIO:
 
       failed_jobs = [
         j for j in preflight_jobs
-        if j["status"] in ("failed", "blocked") and not j.get("next_retry_at")
+        if self._normalize_data_ingest_status(j["status"]) in ("failed", "blocked")
+        and not j.get("next_retry_at")
       ]
       if failed_jobs:
         failed_symbols = [str(j.get("symbol", "?")) for j in failed_jobs]
@@ -1368,7 +1601,7 @@ class SupabaseIO:
         self.client.table("data_ingest_jobs")
         .select("id,status,start_date,end_date")
         .eq("symbol", symbol)
-        .in_("status", ["queued", "running"])
+        .in_("status", ["queued", "running", "retrying"])
         .order("created_at", desc=True)
         .limit(1)
         .execute()
