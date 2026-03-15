@@ -263,8 +263,27 @@ def run_walk_forward(
   start_ts = pd.to_datetime(start_date)
   end_ts   = pd.to_datetime(end_date)
 
+  in_window_rows = model_rows[
+    (model_rows["target_date"] >= start_ts) & (model_rows["target_date"] <= end_ts)
+  ].copy()
+  if in_window_rows.empty:
+    raise RuntimeError(
+      f"No ML rows in backtest window {start_date}..{end_date} after feature dropna. "
+      "Check that price data covers the requested backtest window."
+    )
+
+  all_tickers = sorted(in_window_rows["ticker"].unique().tolist())
+  if not all_tickers:
+    raise RuntimeError("No non-benchmark tickers available for ML portfolio")
+
   # ── Pre-backtest validation ───────────────────────────────────────────────
-  pre_window = model_rows[model_rows["target_date"] < start_ts]
+  first_rebalance_date = pd.Timestamp(in_window_rows["date"].min())
+  initial_window_start = first_rebalance_date - pd.Timedelta(days=train_window_cal_days)
+  pre_window = model_rows[
+    (model_rows["date"] >= initial_window_start)
+    & (model_rows["date"] < first_rebalance_date)
+    & (model_rows["ticker"].isin(all_tickers))
+  ]
   n_train_rows  = len(pre_window)
   n_train_days  = pre_window["date"].nunique()
   avg_symbols   = n_train_rows / max(n_train_days, 1)
@@ -290,20 +309,6 @@ def run_walk_forward(
       f"Failures: {'; '.join(fail_reasons)}. "
       "Choose an earlier start date or ingest a broader universe."
     )
-
-  in_window_rows = model_rows[
-    (model_rows["target_date"] >= start_ts) & (model_rows["target_date"] <= end_ts)
-  ].copy()
-  if in_window_rows.empty:
-    raise RuntimeError(
-      f"No ML rows in backtest window {start_date}..{end_date} after feature dropna. "
-      f"train_rows={n_train_rows}, train_days={n_train_days}, avg_symbols/day={avg_symbols:.1f}. "
-      "Check that price data covers the requested backtest window."
-    )
-
-  all_tickers = sorted(in_window_rows["ticker"].unique().tolist())
-  if not all_tickers:
-    raise RuntimeError("No non-benchmark tickers available for ML portfolio")
 
   top_n_eff = max(1, min(top_n_cfg, len(all_tickers)))
   rebalance_dates: list[pd.Timestamp] = sorted(in_window_rows["date"].unique())

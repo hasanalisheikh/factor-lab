@@ -164,6 +164,29 @@ def test_walk_forward_split_and_output_shapes(monkeypatch: pytest.MonkeyPatch):
     assert abs(sum(float(r["weight"]) for r in picks) - 1.0) < 1e-8
 
 
+def test_walk_forward_validates_recent_training_window_not_full_warmup_history():
+  prices = _make_prices(n_months=84, n_assets=5)
+  late_start = pd.Timestamp("2017-01-03")
+  prices.loc[prices.index < late_start, "T4"] = np.nan
+
+  result = run_walk_forward(
+    run_id="test-recent-window-validation",
+    strategy="ml_ridge",
+    prices=prices,
+    start_date="2020-01-02",
+    end_date="2020-12-31",
+    benchmark_ticker="SPY",
+    top_n=5,
+    cost_bps=10.0,
+  )
+
+  assert len(result.equity_rows) > 0
+  model_params = result.metadata.get("model_params", {})
+  assert model_params.get("top_n") == 5
+  assert model_params.get("train_days", 0) >= 252
+  assert model_params.get("avg_symbols_per_day", 0) >= 5.0
+
+
 def test_positions_match_selected_predictions():
   """Position weights must align with selected prediction weights."""
   prices = _make_prices(n_months=72, n_assets=6)

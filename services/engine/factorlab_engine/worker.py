@@ -827,13 +827,19 @@ def _build_baseline_result(
 
   if on_progress:
     on_progress("compute_signals", 40)
+  # Slice prices to investable universe only. The full `prices` frame may
+  # contain the benchmark ticker (added so equity-curve math works) and the
+  # trend-filter defensive asset (TLT/BIL). Passing the wider frame to
+  # equal_weight / momentum / low_vol would make those strategies hold the
+  # benchmark as a portfolio asset, which is incorrect.
+  universe_prices = prices[[c for c in universe_tickers if c in prices.columns]]
   rebalance_positions: list[dict[str, Any]] = []
   if strat == "equal_weight":
-    daily_rets, turnover, rebalance_turnover, rebalance_positions = _equal_weight(prices)
+    daily_rets, turnover, rebalance_turnover, rebalance_positions = _equal_weight(universe_prices)
   elif strat == "momentum_12_1":
-    daily_rets, turnover, rebalance_turnover, rebalance_positions = _momentum_12_1(prices, top_n)
+    daily_rets, turnover, rebalance_turnover, rebalance_positions = _momentum_12_1(universe_prices, top_n)
   elif strat == "low_vol":
-    daily_rets, turnover, rebalance_turnover, rebalance_positions = _low_vol(prices, top_n)
+    daily_rets, turnover, rebalance_turnover, rebalance_positions = _low_vol(universe_prices, top_n)
   elif strat == "trend_filter":
     assert defensive_ticker is not None
     daily_rets, _, rebalance_turnover, rebalance_positions = _trend_filter(
