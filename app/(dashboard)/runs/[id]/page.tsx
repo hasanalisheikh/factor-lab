@@ -255,7 +255,8 @@ export default async function RunDetailPage({ params }: { params: Promise<{ id: 
 
       {/* Tabs */}
       <Tabs defaultValue="overview" className="w-full">
-        <TabsList className="bg-secondary/50 h-9 p-0.5 rounded-lg w-fit">
+        <div className="overflow-x-auto w-full">
+        <TabsList className="bg-secondary/50 h-9 p-0.5 rounded-lg w-max">
           <TabsTrigger
             value="overview"
             className="text-[12px] font-medium h-8 rounded-md px-3 data-[state=active]:bg-accent data-[state=active]:text-accent-foreground"
@@ -283,6 +284,7 @@ export default async function RunDetailPage({ params }: { params: Promise<{ id: 
             </TabsTrigger>
           )}
         </TabsList>
+        </div>
 
         <TabsContent value="overview" className="mt-4">
           <OverviewTab

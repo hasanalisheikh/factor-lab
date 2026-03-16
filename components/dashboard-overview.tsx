@@ -127,7 +127,7 @@ export function DashboardOverview({
       ) : null}
       <MetricCards metrics={dashboardMetrics} />
 
-      <div className="grid grid-cols-1 lg:grid-cols-[340px_minmax(0,1fr)] gap-4">
+      <div className="grid grid-cols-1 lg:grid-cols-[280px_minmax(0,1fr)] xl:grid-cols-[340px_minmax(0,1fr)] gap-4">
         {children}
         <div className="flex flex-col gap-2">
           <EquityChart

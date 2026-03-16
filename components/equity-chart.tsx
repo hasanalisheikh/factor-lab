@@ -71,11 +71,11 @@ export function EquityChart({
     <Card className="bg-card border-border min-w-0 overflow-hidden">
       <CardHeader className="pb-1 px-4 pt-4">
         <div className="flex items-center justify-between flex-wrap gap-2">
-          <div className="flex items-center gap-4">
-            <CardTitle className="text-[13px] font-medium text-card-foreground">
+          <div className="flex items-center gap-3 min-w-0">
+            <CardTitle className="text-[13px] font-medium text-card-foreground shrink-0">
               Equity Curve
             </CardTitle>
-            <div className="flex items-center gap-3">
+            <div className="hidden sm:flex items-center gap-3">
               <div className="flex items-center gap-1.5">
                 <div className="w-1.5 h-1.5 rounded-full bg-chart-1" />
                 <span className="text-[10px] text-muted-foreground">Portfolio</span>
@@ -86,7 +86,7 @@ export function EquityChart({
               </div>
             </div>
           </div>
-          <div className="flex items-center gap-0.5 bg-secondary rounded-lg p-0.5">
+          <div className="flex items-center gap-0.5 bg-secondary rounded-lg p-0.5 shrink-0">
             {timeframes.map((tf) => (
               <Button
                 key={tf.label}

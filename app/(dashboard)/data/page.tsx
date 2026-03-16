@@ -479,7 +479,7 @@ export default async function DataPage({
 
       {mode === "backtest" ? (
         <>
-          <div className="mb-4 grid grid-cols-2 gap-4 xl:grid-cols-4">
+          <div className="mb-4 grid grid-cols-1 sm:grid-cols-2 gap-4 xl:grid-cols-4">
             <SummaryMetricCard
               title="Tickers Ingested"
               tooltip="Required universe + benchmark tickers currently present in the monitored research window."
@@ -616,7 +616,7 @@ export default async function DataPage({
         </>
       ) : (
         <>
-          <div className="mb-4 grid grid-cols-2 gap-4 xl:grid-cols-6">
+          <div className="mb-4 grid grid-cols-1 sm:grid-cols-2 gap-4 xl:grid-cols-6">
             <SummaryMetricCard
               title="DB Tickers"
               tooltip="Distinct tickers with price data anywhere in the database."

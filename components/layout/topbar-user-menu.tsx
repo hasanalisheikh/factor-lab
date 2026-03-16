@@ -168,26 +168,30 @@ export function TopbarUserMenu() {
             runs and settings on the same account.
           </AlertDialogDescription>
         </AlertDialogHeader>
-        <AlertDialogFooter className="flex-col gap-2 sm:flex-row">
+        <div className="flex flex-col gap-3 sm:flex-row">
           <AlertDialogAction
             onClick={() => {
               setShowGuestWarning(false)
               router.push("/login?upgrade=1")
             }}
+            className="w-full sm:flex-1 sm:min-w-0"
           >
-            Create account (recommended)
+            Create account
           </AlertDialogAction>
           <AlertDialogAction
             onClick={confirmSignOut}
             disabled={isSigningOut}
-            className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            className="w-full sm:flex-1 sm:min-w-0 bg-destructive text-destructive-foreground hover:bg-destructive/90"
           >
-            {isSigningOut ? "Signing out..." : "Sign out and discard"}
+            {isSigningOut ? "Signing out..." : "Sign out"}
           </AlertDialogAction>
-          <AlertDialogCancel disabled={isSigningOut}>
+          <AlertDialogCancel
+            disabled={isSigningOut}
+            className="w-full sm:flex-1 sm:min-w-0"
+          >
             Keep working
           </AlertDialogCancel>
-        </AlertDialogFooter>
+        </div>
       </AlertDialogContent>
     </AlertDialog>
     </>

@@ -12,7 +12,7 @@ interface MetricCardsProps {
 export function MetricCards({ metrics }: MetricCardsProps) {
   if (metrics.length === 0) {
     return (
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         {Array.from({ length: 4 }).map((_, i) => (
           <Card key={i} className="bg-card border-border">
             <CardContent className="p-4">
@@ -25,7 +25,7 @@ export function MetricCards({ metrics }: MetricCardsProps) {
   }
 
   return (
-    <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
       {metrics.map((m) => (
         <Card key={m.label} className="bg-card border-border">
           <CardContent className="p-4">

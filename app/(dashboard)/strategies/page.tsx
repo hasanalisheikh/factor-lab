@@ -207,8 +207,8 @@ function SectionTitle({ children }: { children: React.ReactNode }) {
 
 function FieldRow({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className="flex gap-3 py-2 border-b border-border/40 last:border-0">
-      <span className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider w-28 shrink-0 pt-0.5">
+    <div className="flex flex-col gap-0.5 sm:flex-row sm:gap-3 py-2 border-b border-border/40 last:border-0">
+      <span className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider sm:w-28 sm:shrink-0 sm:pt-0.5">
         {label}
       </span>
       <span className="text-[13px] text-foreground/90 leading-relaxed flex-1">{children}</span>
@@ -369,8 +369,8 @@ export default function StrategiesPage() {
         <Card className="bg-card border-border">
           <CardContent className="px-4 py-3 divide-y divide-border/40">
             {metricDefs.map((m) => (
-              <div key={m.name} className="flex gap-3 py-2.5">
-                <div className="w-32 shrink-0">
+              <div key={m.name} className="flex flex-col gap-0.5 sm:flex-row sm:gap-3 py-2.5">
+                <div className="sm:w-32 sm:shrink-0">
                   <span className="text-[12px] font-medium font-mono text-foreground">{m.name}</span>
                   <p className="text-[10px] text-muted-foreground mt-0.5">{m.full}</p>
                 </div>

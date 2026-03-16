@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
-import { ArrowLeft, CalendarIcon, RefreshCcw, Zap } from "lucide-react"
+import { ArrowLeft, CalendarIcon, ChevronsLeft, ChevronsRight, RefreshCcw, Zap } from "lucide-react"
 import { format } from "date-fns"
 import {
   createRun,
@@ -127,6 +127,136 @@ function PreflightBenchmarkDiagnostics({
         <span className="text-muted-foreground">True missing rate</span>
         <span className="font-mono text-foreground">{formatPreflightPercent(benchmark.trueMissingRate)}</span>
       </div>
+    </div>
+  )
+}
+
+function YearPickCalendar({
+  startMonth,
+  endMonth,
+  selected,
+  onSelect,
+  disabled,
+  autoFocus,
+}: {
+  startMonth?: Date
+  endMonth?: Date
+  selected?: Date
+  onSelect: (d: Date | undefined) => void
+  disabled?: (d: Date) => boolean
+  autoFocus?: boolean
+}) {
+  const [yearPickMode, setYearPickMode] = useState(false)
+  const [displayMonth, setDisplayMonth] = useState<Date>(selected ?? startMonth ?? new Date())
+
+  const startYear = startMonth?.getFullYear() ?? 2015
+  const endYear = endMonth?.getFullYear() ?? new Date().getFullYear()
+
+  const prevMonth = new Date(displayMonth.getFullYear(), displayMonth.getMonth() - 1)
+  const nextMonth = new Date(displayMonth.getFullYear(), displayMonth.getMonth() + 1)
+  const prevYear = new Date(displayMonth.getFullYear() - 1, displayMonth.getMonth())
+  const nextYear = new Date(displayMonth.getFullYear() + 1, displayMonth.getMonth())
+  const canPrevMonth = !startMonth || prevMonth >= new Date(startMonth.getFullYear(), startMonth.getMonth())
+  const canNextMonth = !endMonth || nextMonth <= new Date(endMonth.getFullYear(), endMonth.getMonth())
+  const canPrevYear = !startMonth || prevYear >= new Date(startMonth.getFullYear(), startMonth.getMonth())
+  const canNextYear = !endMonth || nextYear <= new Date(endMonth.getFullYear(), endMonth.getMonth())
+
+  return (
+    <div className="p-3">
+      {/* Custom nav header */}
+      <div className="flex items-center justify-between mb-2 h-8">
+        <div className="flex items-center gap-0.5">
+          <button
+            type="button"
+            onClick={() => canPrevYear && setDisplayMonth(prevYear)}
+            disabled={!canPrevYear}
+            className="p-1 rounded-md hover:bg-accent text-muted-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-not-allowed"
+            aria-label="Previous year"
+          >
+            <ChevronsLeft className="size-3.5" />
+          </button>
+          <button
+            type="button"
+            onClick={() => canPrevMonth && setDisplayMonth(prevMonth)}
+            disabled={!canPrevMonth}
+            className="p-1 rounded-md hover:bg-accent text-muted-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-not-allowed"
+            aria-label="Previous month"
+          >
+            <ChevronsLeft className="size-3 -ml-2" />
+          </button>
+        </div>
+
+        <button
+          type="button"
+          onClick={() => setYearPickMode((v) => !v)}
+          className="text-sm font-medium px-2 py-0.5 rounded hover:bg-accent transition-colors"
+          title="Pick a year"
+        >
+          {format(displayMonth, yearPickMode ? "yyyy" : "MMMM yyyy")}
+        </button>
+
+        <div className="flex items-center gap-0.5">
+          <button
+            type="button"
+            onClick={() => canNextMonth && setDisplayMonth(nextMonth)}
+            disabled={!canNextMonth}
+            className="p-1 rounded-md hover:bg-accent text-muted-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-not-allowed"
+            aria-label="Next month"
+          >
+            <ChevronsRight className="size-3 -mr-2" />
+          </button>
+          <button
+            type="button"
+            onClick={() => canNextYear && setDisplayMonth(nextYear)}
+            disabled={!canNextYear}
+            className="p-1 rounded-md hover:bg-accent text-muted-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-not-allowed"
+            aria-label="Next year"
+          >
+            <ChevronsRight className="size-3.5" />
+          </button>
+        </div>
+      </div>
+
+      {yearPickMode ? (
+        /* Year grid */
+        <div className="grid grid-cols-4 gap-1 w-[220px]">
+          {Array.from({ length: endYear - startYear + 1 }, (_, i) => startYear + i).map((year) => (
+            <button
+              key={year}
+              type="button"
+              onClick={() => {
+                setDisplayMonth(new Date(year, displayMonth.getMonth()))
+                setYearPickMode(false)
+              }}
+              className={cn(
+                "py-1.5 text-sm rounded-md transition-colors",
+                year === displayMonth.getFullYear()
+                  ? "bg-primary text-primary-foreground"
+                  : "hover:bg-accent"
+              )}
+            >
+              {year}
+            </button>
+          ))}
+        </div>
+      ) : (
+        /* Calendar grid — navigation hidden since we handle it above */
+        <Calendar
+          mode="single"
+          showOutsideDays={false}
+          hideNavigation
+          captionLayout="label"
+          startMonth={startMonth}
+          endMonth={endMonth}
+          month={displayMonth}
+          onMonthChange={setDisplayMonth}
+          selected={selected}
+          onSelect={onSelect}
+          disabled={disabled}
+          autoFocus={autoFocus}
+          className="p-0"
+        />
+      )}
     </div>
   )
 }
@@ -627,11 +757,8 @@ export function RunForm({ defaults, dataCoverage, initialUniverseState, diagnost
                         {startDate ? format(startDate, "MMM d, yyyy") : "Start date"}
                       </Button>
                     </PopoverTrigger>
-                    <PopoverContent className="w-auto p-0" align="start" side="top" avoidCollisions={false}>
-                      <Calendar
-                        mode="single"
-                        captionLayout="dropdown-years"
-                        showOutsideDays={false}
+                    <PopoverContent className="w-auto p-0" align="start">
+                      <YearPickCalendar
                         startMonth={coverageMin ?? new Date(2015, 0)}
                         endMonth={maxEndDateStr ? parseLocalDate(maxEndDateStr) : new Date()}
                         selected={startDate}
@@ -672,11 +799,8 @@ export function RunForm({ defaults, dataCoverage, initialUniverseState, diagnost
                         {endDate ? format(endDate, "MMM d, yyyy") : "End date"}
                       </Button>
                     </PopoverTrigger>
-                    <PopoverContent className="w-auto p-0" align="start" side="top" avoidCollisions={false}>
-                      <Calendar
-                        mode="single"
-                        captionLayout="dropdown-years"
-                        showOutsideDays={false}
+                    <PopoverContent className="w-auto p-0" align="start">
+                      <YearPickCalendar
                         startMonth={coverageMin ?? new Date(2015, 0)}
                         endMonth={maxEndDateStr ? parseLocalDate(maxEndDateStr) : new Date()}
                         selected={endDate}
@@ -772,7 +896,7 @@ export function RunForm({ defaults, dataCoverage, initialUniverseState, diagnost
               </div>
             </div>
 
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               <div className="flex flex-col gap-1.5">
                 <Label htmlFor="benchmark" className="text-[12px] font-medium text-muted-foreground">
                   Benchmark

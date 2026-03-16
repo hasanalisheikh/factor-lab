@@ -87,7 +87,7 @@ export default async function JobsPage() {
                           )}
                         </div>
                         {(status === "failed" || status === "blocked") && job.error_message && (
-                          <p className="text-[11px] text-destructive mt-1 max-w-[520px] truncate">
+                          <p className="text-[11px] text-destructive mt-1 max-w-full truncate">
                             {job.error_message}
                           </p>
                         )}
@@ -142,7 +142,7 @@ export default async function JobsPage() {
                 return (
                   <div
                     key={row.run_id}
-                    className="px-4 py-2.5 flex items-center justify-between gap-4"
+                    className="px-4 py-2.5 flex items-start justify-between gap-3 flex-wrap sm:flex-nowrap"
                   >
                     <div className="flex flex-col gap-0.5 min-w-0">
                       <span className="text-[13px] font-medium text-card-foreground truncate">
@@ -155,7 +155,7 @@ export default async function JobsPage() {
                           : " · eq --"}
                       </span>
                     </div>
-                    <div className="flex items-center gap-4 shrink-0 text-[11px] font-mono">
+                    <div className="flex items-center gap-3 shrink-0 text-[11px] font-mono">
                       <span
                         className={cn(
                           outcome === "skip"
