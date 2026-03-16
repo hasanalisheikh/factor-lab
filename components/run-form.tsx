@@ -799,7 +799,7 @@ export function RunForm({ defaults, dataCoverage, initialUniverseState, diagnost
                         {endDate ? format(endDate, "MMM d, yyyy") : "End date"}
                       </Button>
                     </PopoverTrigger>
-                    <PopoverContent className="w-auto p-0" align="start">
+                    <PopoverContent className="w-auto p-0" align="end">
                       <YearPickCalendar
                         startMonth={coverageMin ?? new Date(2015, 0)}
                         endMonth={maxEndDateStr ? parseLocalDate(maxEndDateStr) : new Date()}
