@@ -24,6 +24,8 @@ export function StatusBadge({ status }: { status: RunStatus }) {
   return (
     <Badge
       variant="outline"
+      data-testid="run-status-badge"
+      data-status={status}
       className={cn(
         "text-[10px] font-medium capitalize px-2 py-0 h-5 leading-5 rounded-md",
         statusConfig[status].className

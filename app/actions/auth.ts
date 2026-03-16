@@ -1,5 +1,6 @@
 "use server"
 
+import type { User } from "@supabase/supabase-js"
 import { headers } from "next/headers"
 import { redirect } from "next/navigation"
 import { z } from "zod"
@@ -10,6 +11,13 @@ import { checkAccountCreationRateLimit, checkResendRateLimit } from "@/lib/supab
 async function transferGuestRuns(guestUserId: string, newUserId: string) {
   const admin = createAdminClient()
   await admin.from("runs").update({ user_id: newUserId }).eq("user_id", guestUserId)
+  const notificationsUpdate = await admin
+    .from("notifications")
+    .update({ user_id: newUserId })
+    .eq("user_id", guestUserId)
+  if (notificationsUpdate.error && !notificationsUpdate.error.message.includes("does not exist")) {
+    console.warn("[auth] transferGuestRuns notifications update:", notificationsUpdate.error.message)
+  }
   await admin.auth.admin.deleteUser(guestUserId)
 }
 
@@ -28,6 +36,179 @@ const emailPasswordSchema = z.object({
   email: z.string().email("Invalid email address"),
   password: passwordSchema,
 })
+
+const ACCOUNT_EXISTS_ERROR = "An account with this email already exists. Sign in to that account instead."
+
+async function checkCreateAccountRateLimit(): Promise<AuthState> {
+  const headersList = await headers()
+  const ip = headersList.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "unknown"
+  const { allowed, error } = await checkAccountCreationRateLimit(ip)
+
+  if (allowed) {
+    return null
+  }
+
+  return { error: error ?? "Rate limit exceeded. Try again later." }
+}
+
+function isEmailAlreadyTakenError(message: string) {
+  const normalized = message.toLowerCase()
+
+  return (
+    normalized.includes("already registered") ||
+    normalized.includes("already been registered") ||
+    normalized.includes("already exists") ||
+    normalized.includes("duplicate key")
+  )
+}
+
+async function findUserByEmail(
+  admin: ReturnType<typeof createAdminClient>,
+  email: string
+): Promise<User | null> {
+  const normalizedEmail = email.trim().toLowerCase()
+  const perPage = 1000
+  let page = 1
+
+  while (true) {
+    const { data, error } = await admin.auth.admin.listUsers({ page, perPage })
+    if (error) {
+      console.warn("[auth] listUsers email lookup failed:", error.message)
+      return null
+    }
+
+    const match = data.users.find((candidate) => candidate.email?.toLowerCase() === normalizedEmail)
+    if (match) {
+      return match
+    }
+
+    const hasMorePages =
+      data.nextPage != null ||
+      (data.lastPage > 0 && page < data.lastPage) ||
+      data.users.length === perPage
+
+    if (!hasMorePages) {
+      return null
+    }
+
+    page += 1
+  }
+}
+
+async function refreshOrReauthenticateSession(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  email: string,
+  password: string
+): Promise<AuthState> {
+  const { data: refreshData, error: refreshError } = await supabase.auth.refreshSession()
+
+  if (!refreshError && refreshData.session && refreshData.user?.user_metadata?.is_guest !== true) {
+    return null
+  }
+
+  const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({
+    email,
+    password,
+  })
+
+  if (signInError || !signInData.session) {
+    return {
+      error: "Account upgraded, but we couldn't refresh your session. Please sign in with your new email and password.",
+    }
+  }
+
+  return null
+}
+
+async function upgradeGuestUserInPlace({
+  supabase,
+  guestUser,
+  email,
+  password,
+}: {
+  supabase: Awaited<ReturnType<typeof createClient>>
+  guestUser: User
+  email: string
+  password: string
+}): Promise<AuthState> {
+  const admin = createAdminClient()
+  const existingUser = await findUserByEmail(admin, email)
+
+  if (existingUser && existingUser.id !== guestUser.id) {
+    return { error: ACCOUNT_EXISTS_ERROR }
+  }
+
+  const { error: updateError } = await admin.auth.admin.updateUserById(guestUser.id, {
+    email,
+    password,
+    user_metadata: {
+      ...(guestUser.user_metadata ?? {}),
+      is_guest: false,
+    },
+    email_confirm: true,
+  })
+
+  if (updateError) {
+    if (isEmailAlreadyTakenError(updateError.message)) {
+      return { error: ACCOUNT_EXISTS_ERROR }
+    }
+
+    return { error: updateError.message }
+  }
+
+  const sessionError = await refreshOrReauthenticateSession(supabase, email, password)
+  if (sessionError) {
+    return sessionError
+  }
+
+  redirect("/dashboard")
+}
+
+export async function upgradeGuestToEmailPassword({
+  email,
+  password,
+}: {
+  email: string
+  password: string
+}): Promise<AuthState> {
+  const parsed = emailPasswordSchema.safeParse({ email, password })
+  if (!parsed.success) {
+    return { error: parsed.error.issues[0].message }
+  }
+
+  const rateLimitState = await checkCreateAccountRateLimit()
+  if (rateLimitState) {
+    return rateLimitState
+  }
+
+  const supabase = await createClient()
+  const { data: { user }, error: userError } = await supabase.auth.getUser()
+
+  if (userError || !user) {
+    return { error: "Sign in as a guest before upgrading your account." }
+  }
+
+  if (user.user_metadata?.is_guest !== true) {
+    return { error: "Only guest accounts can be upgraded here." }
+  }
+
+  return upgradeGuestUserInPlace({
+    supabase,
+    guestUser: user,
+    email: parsed.data.email,
+    password: parsed.data.password,
+  })
+}
+
+export async function upgradeGuestAction(
+  _prev: AuthState,
+  formData: FormData
+): Promise<AuthState> {
+  return upgradeGuestToEmailPassword({
+    email: String(formData.get("email") ?? "").trim(),
+    password: String(formData.get("password") ?? ""),
+  })
+}
 
 // ─── Sign In ─────────────────────────────────────────────────────────────────
 
@@ -91,20 +272,22 @@ export async function signUpAction(
     return { error: parsed.error.issues[0].message }
   }
 
-  // Rate limit by IP
-  const headersList = await headers()
-  const ip = headersList.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "unknown"
-  const { allowed, error: rateLimitError } = await checkAccountCreationRateLimit(ip)
-  if (!allowed) {
-    return { error: rateLimitError ?? "Rate limit exceeded. Try again later." }
+  const rateLimitState = await checkCreateAccountRateLimit()
+  if (rateLimitState) {
+    return rateLimitState
   }
 
   const supabase = await createClient()
-
-  // Capture any active guest session before it gets replaced
   const { data: { user: currentUser } } = await supabase.auth.getUser()
-  const guestUserId =
-    currentUser?.user_metadata?.is_guest === true ? currentUser.id : null
+
+  if (currentUser?.user_metadata?.is_guest === true) {
+    return upgradeGuestUserInPlace({
+      supabase,
+      guestUser: currentUser,
+      email: parsed.data.email,
+      password: parsed.data.password,
+    })
+  }
 
   // Build the callback URL for email verification.
   // NEXT_PUBLIC_SITE_URL should be set to https://factor-lab.vercel.app in production.
@@ -122,8 +305,8 @@ export async function signUpAction(
   })
 
   if (error) {
-    if (error.message.toLowerCase().includes("already registered")) {
-      return { error: "An account with this email already exists. Please sign in instead." }
+    if (isEmailAlreadyTakenError(error.message)) {
+      return { error: ACCOUNT_EXISTS_ERROR }
     }
     return { error: error.message }
   }
@@ -132,18 +315,13 @@ export async function signUpAction(
   // email for duplicate addresses instead of returning an error. An empty identities
   // array is the reliable signal that the email is already taken.
   if (signUpData.user && (signUpData.user.identities?.length ?? 0) === 0) {
-    return { error: "An account with this email already exists. Please sign in instead." }
+    return { error: ACCOUNT_EXISTS_ERROR }
   }
 
   if (!signUpData.session) {
     // Email confirmation required — session will be established when they click the link
     const verifyUrl = `/login?tab=verify&email=${encodeURIComponent(parsed.data.email)}`
     redirect(verifyUrl)
-  }
-
-  // Auto-confirmed (email confirmation disabled) — session already set in cookies
-  if (guestUserId && signUpData.user && signUpData.user.id !== guestUserId) {
-    await transferGuestRuns(guestUserId, signUpData.user.id)
   }
 
   redirect("/dashboard")

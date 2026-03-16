@@ -1,4 +1,10 @@
 import type { EquityCurveRow, RunMetricsRow } from "@/lib/supabase/types"
+import {
+  DEFAULT_EQUITY_CHART_MAX_POINTS,
+  getChartDateLabels,
+  getDownsampleIndices,
+  pickByIndices,
+} from "@/lib/equity-curve"
 
 // ── Formatters ─────────────────────────────────────────────────────────────
 
@@ -102,16 +108,12 @@ export function computeDrawdownSeries(equity: EquityCurveRow[]): number[] {
   })
 }
 
-export function trimWarmup(equity: EquityCurveRow[]): { series: EquityCurveRow[]; trimmedPoints: number } {
-  if (equity.length < 3) return { series: equity, trimmedPoints: 0 }
+export function getWarmupPointCount(equity: EquityCurveRow[]): number {
+  if (equity.length < 3) return 0
 
   const startNav = equity[0].portfolio
   const firstActiveIdx = equity.findIndex((pt) => Math.abs(pt.portfolio - startNav) > 1e-9)
-  if (firstActiveIdx <= 0) return { series: equity, trimmedPoints: 0 }
-
-  const series = equity.slice(firstActiveIdx)
-  if (series.length < 2) return { series: equity, trimmedPoints: 0 }
-  return { series, trimmedPoints: firstActiveIdx }
+  return firstActiveIdx > 0 ? firstActiveIdx : 0
 }
 
 // ── Metadata ───────────────────────────────────────────────────────────────
@@ -200,8 +202,12 @@ export function buildReportHtml(params: {
   } = params
 
   const strategyLabel = STRATEGY_LABELS[strategyId] ?? strategyId
-  const { series: chartSeries, trimmedPoints } = trimWarmup(equityCurve)
-  const drawdown = computeDrawdownSeries(chartSeries)
+  const warmupPoints = getWarmupPointCount(equityCurve)
+  const chartRawSeries = equityCurve
+  const plottedIndices = getDownsampleIndices(chartRawSeries.length, DEFAULT_EQUITY_CHART_MAX_POINTS)
+  const chartSeries = pickByIndices(chartRawSeries, plottedIndices)
+  const rawDrawdown = computeDrawdownSeries(chartRawSeries)
+  const drawdown = pickByIndices(rawDrawdown, plottedIndices)
   const portfolioSeries = chartSeries.map((pt) => pt.portfolio)
   const benchmarkSeries = chartSeries.map((pt) => pt.benchmark)
 
@@ -222,7 +228,9 @@ export function buildReportHtml(params: {
 
   // Equity chart: shared scale so both lines are directly comparable on one y-axis.
   const eqPadLeft = 66
-  const allEquityPoints = [...portfolioSeries, ...benchmarkSeries]
+  const rawPortfolioSeries = chartRawSeries.map((pt) => pt.portfolio)
+  const rawBenchmarkSeries = chartRawSeries.map((pt) => pt.benchmark)
+  const allEquityPoints = [...rawPortfolioSeries, ...rawBenchmarkSeries]
   const eqMin = allEquityPoints.length > 0 ? Math.min(...allEquityPoints) : 0
   const eqMax = allEquityPoints.length > 0 ? Math.max(...allEquityPoints) : 1
   const portfolioLine = makePolylineShared(portfolioSeries, eqMin, eqMax, eqWidth, eqHeight, pad, eqPadLeft)
@@ -230,17 +238,14 @@ export function buildReportHtml(params: {
 
   // Drawdown chart: wider left margin for y-axis labels.
   const ddPadLeft = 46
-  const drawdownLine = makePolyline(drawdown, ddWidth, ddHeight, pad, ddPadLeft)
-  const drawdownMax = Math.min(...drawdown, 0) // <= 0
+  const drawdownMax = Math.min(...rawDrawdown, 0) // <= 0
+  const drawdownLine = makePolylineShared(drawdown, drawdownMax, 0, ddWidth, ddHeight, pad, ddPadLeft)
 
   const first = chartSeries[0]
   const last = chartSeries[chartSeries.length - 1]
 
   // ── X-axis date context ────────────────────────────────────────────────────
-  const chartDates = chartSeries.map((pt) => pt.date)
-  const xDateStart = chartDates[0] ?? ""
-  const xDateMid = chartDates[Math.floor(chartDates.length / 2)] ?? ""
-  const xDateEnd = chartDates[chartDates.length - 1] ?? ""
+  const { start: xDateStart, mid: xDateMid, end: xDateEnd } = getChartDateLabels(chartSeries)
 
   const eqXAxis = `<div style="display:flex;justify-content:space-between;font-size:10px;color:#475569;padding:2px 16px 0 ${eqPadLeft}px;font-family:inherit;">`
     + `<span>${escapeHtml(xDateStart)}</span>`
@@ -378,8 +383,10 @@ export function buildReportHtml(params: {
       <p><strong>Transaction costs:</strong> ${escapeHtml(costsDisplay)}</p>
       ${typeof slippageBps === "number" && slippageBps > 0 ? `<p><strong>Slippage:</strong> ${slippageBps} bps (configured)</p>` : ""}
       ${initialCapital !== null ? `<p><strong>Initial capital:</strong> ${fmtMoney(initialCapital)}</p>` : ""}
-      <p><strong>Equity curve data points:</strong> ${chartSeries.length}${trimmedPoints > 0 ? ` (${trimmedPoints} warmup point(s) excluded before first active position)` : ""}</p>
+      <p><strong>Equity curve points:</strong> ${chartSeries.length}${chartSeries.length < chartRawSeries.length ? ` (from ${chartRawSeries.length} raw)` : ""}</p>
+      ${warmupPoints > 0 ? `<p><strong>Warmup before first active position:</strong> ${warmupPoints} trading day(s) at starting NAV.</p>` : ""}
       ${benchmarkOverlapDetected ? `<p><strong>Benchmark overlap:</strong> portfolio holds ${escapeHtml(benchmarkTicker)} at some rebalances.</p>` : ""}
+      ${universeSymbols?.includes("GOOGL") && universeSymbols?.includes("GOOG") ? `<p><strong>Dual-class shares:</strong> GOOGL and GOOG are both held &mdash; these are dual-class shares of Alphabet Inc. and move nearly identically; their combined weight is roughly double a single-class holding.</p>` : ""}
       ${runMetadata.positionsDigest ? `<p><strong>Positions digest:</strong> <span style="font-size:12px">${escapeHtml(runMetadata.positionsDigest.slice(0, 16))}</span></p>` : ""}
       ${runMetadata.equityDigest ? `<p><strong>Equity digest:</strong> <span style="font-size:12px">${escapeHtml(runMetadata.equityDigest.slice(0, 16))}</span></p>` : ""}
       <p><strong>Generated:</strong> ${escapeHtml(generatedAt)}</p>
@@ -418,7 +425,7 @@ export function buildReportHtml(params: {
       ${eqXAxis}
       <p style="margin-top:6px;"><strong>Start NAV:</strong> ${fmtMoney(first?.portfolio ?? 0)} | <strong>End NAV:</strong> ${fmtMoney(last?.portfolio ?? 0)}</p>
       <p><strong>Benchmark End:</strong> ${fmtMoney(last?.benchmark ?? 0)}</p>
-      ${trimmedPoints > 0 ? `<p><strong>Warmup:</strong> Excluded first ${trimmedPoints} trading day(s) before first rebalance/active position.</p>` : ""}
+      ${warmupPoints > 0 ? `<p><strong>Warmup:</strong> First ${warmupPoints} trading day(s) remained at starting NAV before the first active position.</p>` : ""}
     </div>
 
     <h2>Drawdown</h2>

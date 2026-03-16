@@ -1,0 +1,29 @@
+{
+  "name": "factorlab-playwright-audit",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "audit": "playwright test tests/audit.spec.ts --reporter=list",
+    "audit:data": "playwright test tests/data-consistency.spec.ts --reporter=list",
+    "audit:strategy": "FILTER_STRATEGY=$STRATEGY playwright test tests/audit.spec.ts --reporter=list",
+    "audit:resume": "RESUME=1 playwright test tests/audit.spec.ts --reporter=list",
+    "report": "node -e \"require('./helpers/results').generateReports()\"",
+    "install-browsers": "playwright install chromium",
+    "targeted": "playwright test tests/targeted-preflight.spec.ts tests/targeted-ml.spec.ts tests/targeted-charts.spec.ts tests/targeted-overlap.spec.ts tests/targeted-reliability.spec.ts --reporter=list",
+    "targeted:preflight": "playwright test tests/targeted-preflight.spec.ts --reporter=list",
+    "targeted:ml": "playwright test tests/targeted-ml.spec.ts --reporter=list",
+    "targeted:charts": "playwright test tests/targeted-charts.spec.ts --reporter=list",
+    "targeted:overlap": "playwright test tests/targeted-overlap.spec.ts --reporter=list",
+    "targeted:reliability": "playwright test tests/targeted-reliability.spec.ts --reporter=list",
+    "targeted:report": "node -e \"require('./helpers/targeted').generateTargetedReports()\"",
+    "full": "playwright test tests/audit.spec.ts tests/targeted-preflight.spec.ts tests/targeted-ml.spec.ts tests/targeted-charts.spec.ts tests/targeted-overlap.spec.ts tests/targeted-reliability.spec.ts --reporter=list"
+  },
+  "dependencies": {
+    "node-html-parser": "^6.1.13"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.0",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.0"
+  }
+}

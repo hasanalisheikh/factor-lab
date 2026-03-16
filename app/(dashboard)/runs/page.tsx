@@ -5,7 +5,13 @@ import { Button } from "@/components/ui/button"
 import { RunsTable } from "@/components/runs-table"
 import { RunsSearchBar } from "@/components/runs-search-bar"
 import { ActiveRunsPoller } from "@/components/active-runs-poller"
-import { getRuns, getRunsCount, getActiveRunsProgress } from "@/lib/supabase/queries"
+import { RunsDeleteToast } from "@/components/runs-delete-toast"
+import {
+  getRuns,
+  getRunsCount,
+  getActiveRunsProgress,
+  getReportUrlsByRunIds,
+} from "@/lib/supabase/queries"
 
 export const revalidate = 0
 
@@ -34,14 +40,18 @@ export default async function RunsPage({ searchParams }: PageProps) {
   const activeRunIds = runs
     .filter((r) => r.status === "running" || r.status === "waiting_for_data")
     .map((r) => r.id)
-  const progressMapRaw = await getActiveRunsProgress(activeRunIds)
+  const [progressMapRaw, reportUrls] = await Promise.all([
+    getActiveRunsProgress(activeRunIds),
+    getReportUrlsByRunIds(runs.map((r) => r.id)),
+  ])
   // Convert Map to plain object for client component serialisation.
   const progressMap: Record<string, number> = Object.fromEntries(progressMapRaw)
 
   return (
     <AppShell title="Runs">
       <ActiveRunsPoller hasActiveRuns={hasActiveRuns} />
-      <div className="mx-auto w-full max-w-[1200px] flex flex-col gap-4">
+      <RunsDeleteToast />
+      <div className="mx-auto flex w-full max-w-[1200px] flex-col gap-4 pb-[calc(env(safe-area-inset-bottom)+5rem)] md:pb-0">
         <div className="flex items-center justify-between gap-3">
           <RunsSearchBar defaultQuery={q} />
           <div className="flex items-center gap-3 shrink-0">
@@ -56,7 +66,7 @@ export default async function RunsPage({ searchParams }: PageProps) {
             </Link>
           </div>
         </div>
-        <RunsTable runs={runs} searchQuery={q} progressMap={progressMap} />
+        <RunsTable runs={runs} searchQuery={q} progressMap={progressMap} reportUrls={reportUrls} />
       </div>
     </AppShell>
   )

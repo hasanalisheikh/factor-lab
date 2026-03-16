@@ -10,6 +10,7 @@ const config = [
       "node_modules/**",
       "services/engine/**",
       ".venv/**",
+      "playwright-audit/**",
     ],
   },
   {

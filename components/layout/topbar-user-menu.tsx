@@ -1,8 +1,9 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useState, useTransition } from "react"
 import { useRouter } from "next/navigation"
 import { LogOut, Settings, User } from "lucide-react"
+import { signOutAction } from "@/app/actions/auth"
 import { createClient } from "@/lib/supabase/client"
 import {
   AlertDialog,
@@ -32,6 +33,7 @@ type UserInfo = {
 export function TopbarUserMenu() {
   const [userInfo, setUserInfo] = useState<UserInfo>(null)
   const [showGuestWarning, setShowGuestWarning] = useState(false)
+  const [isSigningOut, startSignOutTransition] = useTransition()
   const router = useRouter()
 
   useEffect(() => {
@@ -63,12 +65,13 @@ export function TopbarUserMenu() {
   }
 
   async function confirmSignOut() {
-    if (userInfo?.isGuest) {
-      localStorage.removeItem("fl_notifs_last_seen")
-    }
-    const supabase = createClient()
-    await supabase.auth.signOut()
-    window.location.href = "/login"
+    startSignOutTransition(async () => {
+      if (userInfo?.isGuest) {
+        localStorage.removeItem("fl_notifs_last_seen")
+      }
+
+      await signOutAction()
+    })
   }
 
   const initials = userInfo?.isGuest
@@ -147,10 +150,11 @@ export function TopbarUserMenu() {
 
         <DropdownMenuItem
           onClick={handleSignOutClick}
+          disabled={isSigningOut}
           className="text-[12px] cursor-pointer text-destructive focus:text-destructive"
         >
           <LogOut className="w-3.5 h-3.5 mr-2" />
-          Sign out
+          {isSigningOut ? "Signing out..." : "Sign out"}
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
@@ -158,24 +162,30 @@ export function TopbarUserMenu() {
     <AlertDialog open={showGuestWarning} onOpenChange={setShowGuestWarning}>
       <AlertDialogContent>
         <AlertDialogHeader>
-          <AlertDialogTitle>Your work won&apos;t be saved</AlertDialogTitle>
+          <AlertDialogTitle>Keep your guest runs?</AlertDialogTitle>
           <AlertDialogDescription>
-            Guest sessions are temporary. Create an account to keep your runs
-            and settings, or sign in to an existing account.
+            Create an account without signing out to keep this guest session&apos;s
+            runs and settings on the same account.
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter className="flex-col gap-2 sm:flex-row">
-          <AlertDialogAction onClick={() => router.push("/settings?tab=account")}>
-            Create account
+          <AlertDialogAction
+            onClick={() => {
+              setShowGuestWarning(false)
+              router.push("/login?upgrade=1")
+            }}
+          >
+            Create account (recommended)
           </AlertDialogAction>
           <AlertDialogAction
-            onClick={() => router.push("/login")}
-            className="bg-secondary text-secondary-foreground hover:bg-secondary/80"
+            onClick={confirmSignOut}
+            disabled={isSigningOut}
+            className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
           >
-            Sign in
+            {isSigningOut ? "Signing out..." : "Sign out and discard"}
           </AlertDialogAction>
-          <AlertDialogCancel onClick={confirmSignOut}>
-            Sign out anyway
+          <AlertDialogCancel disabled={isSigningOut}>
+            Keep working
           </AlertDialogCancel>
         </AlertDialogFooter>
       </AlertDialogContent>

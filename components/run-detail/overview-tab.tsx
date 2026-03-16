@@ -13,8 +13,8 @@ import { Area, AreaChart, CartesianGrid, XAxis, YAxis } from "recharts"
 import { EquityChart } from "@/components/equity-chart"
 import {
   getDefaultTimeframe,
-  sliceEquityCurveByTimeframe,
-  alignEquityCurveByDate,
+  pickByIndices,
+  prepareTimeframeEquityCurve,
 } from "@/lib/equity-curve"
 import type { RunMetricsRow, EquityCurveRow } from "@/lib/supabase/types"
 
@@ -82,6 +82,7 @@ export type RunConfig = {
   dataCutoffUsed?: string | null
   universeEarliestStart?: string | null
   benchmarkCoverageHealth?: { status: string; reason: string | null } | null
+  dualClassDisclosure?: boolean
 }
 
 interface OverviewTabProps {
@@ -94,19 +95,27 @@ interface OverviewTabProps {
 export function OverviewTab({ metrics, equityCurve, benchmarkTicker, runConfig }: OverviewTabProps) {
   const [selectedTf, setSelectedTf] = useState(() => getDefaultTimeframe(equityCurve))
 
-  const slicedEquity = useMemo(
-    () => alignEquityCurveByDate(sliceEquityCurveByTimeframe(equityCurve, selectedTf)),
+  const chartState = useMemo(
+    () => prepareTimeframeEquityCurve(equityCurve, selectedTf),
     [equityCurve, selectedTf],
   )
 
-  const drawdownData = useMemo(() => computeDrawdown(slicedEquity), [slicedEquity])
+  const rawDrawdownData = useMemo(() => computeDrawdown(chartState.raw), [chartState.raw])
+  const drawdownData = useMemo(
+    () => pickByIndices(rawDrawdownData, chartState.plottedIndices),
+    [chartState.plottedIndices, rawDrawdownData],
+  )
+  const drawdownDomain = useMemo(() => {
+    if (rawDrawdownData.length === 0) return undefined
+    return [Math.min(...rawDrawdownData.map((point) => point.drawdown), 0), 0] as [number, number]
+  }, [rawDrawdownData])
 
   return (
     <div className="flex flex-col gap-4">
       {/* Metric cards grid */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         {metricDefs.map(({ key, label, format }) => (
-          <Card key={key} className="bg-card border-border">
+          <Card key={key} data-testid="kpi-card" data-kpi-name={key} className="bg-card border-border">
             <CardContent className="p-3.5">
               <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider mb-1">
                 {label}
@@ -144,39 +153,42 @@ export function OverviewTab({ metrics, equityCurve, benchmarkTicker, runConfig }
               No drawdown data available
             </div>
           ) : (
-            <ChartContainer config={ddConfig} className="h-[160px] w-full">
-              <AreaChart data={drawdownData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
-                <defs>
-                  <linearGradient id="ovDrawdown" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="var(--color-chart-4)" stopOpacity={0.3} />
-                    <stop offset="95%" stopColor="var(--color-chart-4)" stopOpacity={0} />
-                  </linearGradient>
-                </defs>
-                <CartesianGrid strokeDasharray="3 3" className="stroke-border/20" vertical={false} />
-                <XAxis
-                  dataKey="date"
-                  tickLine={false}
-                  axisLine={false}
-                  tickMargin={8}
-                  tickFormatter={(v) => new Date(v + "T00:00:00Z").toLocaleDateString("en-US", { month: "short", year: "2-digit" })}
-                  interval="preserveStartEnd"
-                  className="text-[10px]"
-                  stroke="var(--color-muted-foreground)"
-                  opacity={0.5}
-                />
-                <YAxis
-                  tickLine={false}
-                  axisLine={false}
-                  tickMargin={8}
-                  tickFormatter={(v) => `${v.toFixed(1)}%`}
-                  className="text-[10px]"
-                  stroke="var(--color-muted-foreground)"
-                  opacity={0.5}
-                />
-                <ChartTooltip content={<ChartTooltipContent formatter={(v) => [`${Number(v).toFixed(2)}%`, "Drawdown"]} />} />
-                <Area dataKey="drawdown" type="monotone" fill="url(#ovDrawdown)" stroke="var(--color-chart-4)" strokeWidth={1.5} dot={false} />
-              </AreaChart>
-            </ChartContainer>
+            <>
+              <ChartContainer config={ddConfig} className="h-[160px] w-full">
+                <AreaChart data={drawdownData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+                  <defs>
+                    <linearGradient id="ovDrawdown" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="var(--color-chart-4)" stopOpacity={0.3} />
+                      <stop offset="95%" stopColor="var(--color-chart-4)" stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" className="stroke-border/20" vertical={false} />
+                  <XAxis
+                    dataKey="date"
+                    tick={false}
+                    tickLine={false}
+                    axisLine={false}
+                  />
+                  <YAxis
+                    tickLine={false}
+                    axisLine={false}
+                    tickMargin={8}
+                    tickFormatter={(v) => `${v.toFixed(1)}%`}
+                    domain={drawdownDomain}
+                    className="text-[10px]"
+                    stroke="var(--color-muted-foreground)"
+                    opacity={0.5}
+                  />
+                  <ChartTooltip content={<ChartTooltipContent formatter={(v) => [`${Number(v).toFixed(2)}%`, "Drawdown"]} />} />
+                  <Area dataKey="drawdown" type="monotone" fill="url(#ovDrawdown)" stroke="var(--color-chart-4)" strokeWidth={1.5} dot={false} />
+                </AreaChart>
+              </ChartContainer>
+              <div className="flex items-center justify-between px-4 pt-1 text-[10px] font-mono text-muted-foreground">
+                <span>{chartState.dateLabels.start}</span>
+                <span>{chartState.dateLabels.mid}</span>
+                <span>{chartState.dateLabels.end}</span>
+              </div>
+            </>
           )}
         </CardContent>
       </Card>
@@ -237,6 +249,11 @@ export function OverviewTab({ metrics, equityCurve, benchmarkTicker, runConfig }
                 </div>
               ))}
             </div>
+            {runConfig.dualClassDisclosure && (
+              <p className="mt-3 text-[11px] text-amber-600 dark:text-amber-500">
+                <strong>Dual-class shares:</strong> GOOGL and GOOG are both held &mdash; these are dual-class shares of Alphabet Inc. and move nearly identically; their combined weight is roughly double a single-class holding.
+              </p>
+            )}
             <DisclaimerFooter />
           </CardContent>
         </Card>

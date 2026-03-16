@@ -8,12 +8,26 @@ const {
   getUniverseConstraintsSnapshotMock,
   getUniverseBatchStatusMock,
   evaluateRunPreflightSnapshotMock,
+  redirectMock,
+  revalidatePathMock,
 } = vi.hoisted(() => ({
   createClientMock: vi.fn(),
   createAdminClientMock: vi.fn(),
   getUniverseConstraintsSnapshotMock: vi.fn(),
   getUniverseBatchStatusMock: vi.fn(),
   evaluateRunPreflightSnapshotMock: vi.fn(),
+  redirectMock: vi.fn((path: string) => {
+    throw new Error(`REDIRECT:${path}`)
+  }),
+  revalidatePathMock: vi.fn(),
+}))
+
+vi.mock("next/navigation", () => ({
+  redirect: redirectMock,
+}))
+
+vi.mock("next/cache", () => ({
+  revalidatePath: revalidatePathMock,
 }))
 
 vi.mock("@/lib/supabase/server", () => ({
@@ -37,7 +51,7 @@ vi.mock("@/lib/coverage-check", async () => {
   }
 })
 
-import { createRun, preflightRun } from "@/app/actions/runs"
+import { createRun, deleteRunAction, preflightRun } from "@/app/actions/runs"
 
 const BASE_CONSTRAINTS: UniverseConstraintsSnapshot = {
   universe: "ETF8",
@@ -58,9 +72,16 @@ function makeSnapshot(options?: {
   universeFirstDates?: Record<string, string | null>
   universeMissingRates?: Record<string, number>
   missingTickers?: string[]
+  warmupStart?: string
   requiredStart?: string
   requiredEnd?: string
   symbols?: string[]
+  benchmarkCandidates?: Array<{
+    symbol: string
+    status: "ok" | "warn" | "block"
+    benchmarkTrueMissingRate: number
+    affectedShare: number
+  }>
 }): RunPreflightSnapshot {
   const {
     minStartDate = "2004-11-18",
@@ -70,9 +91,11 @@ function makeSnapshot(options?: {
     universeFirstDates = {},
     universeMissingRates = {},
     missingTickers = [],
+    warmupStart = "2018-01-01",
     requiredStart = "2019-01-01",
     requiredEnd = "2026-03-12",
     symbols = ["SPY", "QQQ", "IWM", "TLT", "GLD", "VNQ", "EFA", "EEM", "SPY"],
+    benchmarkCandidates = [],
   } = options ?? {}
 
   const uniqueSymbols = [...new Set(symbols)]
@@ -93,6 +116,7 @@ function makeSnapshot(options?: {
       isBenchmark,
       firstDate,
       lastDate: firstDate ? maxEndDate : null,
+      windowStart: firstDate ? (firstDate > warmupStart ? firstDate : warmupStart) : null,
       expectedDays,
       actualDays,
       trueMissingDays,
@@ -108,13 +132,26 @@ function makeSnapshot(options?: {
       minStartDate,
       maxEndDate,
       missingTickers,
+      warmupStart,
+      requiredStart,
+      requiredEnd,
     },
     coverage: {
       benchmark: {
-        status: benchmarkMissingRate > 0.02 ? "blocked" : benchmarkMissingRate > 0 ? "warning" : "good",
-        reason: null,
+        status: benchmarkMissingRate > 0.10 ? "blocked" : benchmarkMissingRate > 0.02 ? "warning" : "good",
+        reason: benchmarkMissingRate > 0.10
+          ? `SPY missingness is ${(benchmarkMissingRate * 100).toFixed(1)}% over ${warmupStart} -> ${requiredEnd} (source: run_window) (10.0% max allowed).`
+          : benchmarkMissingRate > 0.02
+            ? `SPY missingness is ${(benchmarkMissingRate * 100).toFixed(1)}% over ${warmupStart} -> ${requiredEnd} (source: run_window) (2.0% good threshold, 10.0% block threshold).`
+            : null,
+        metricSourceUsed: "run_window",
         trueMissingRate: benchmarkMissingRate,
         symbol: "SPY",
+        windowStartUsed: warmupStart,
+        windowEndUsed: requiredEnd,
+        expectedDays: 100,
+        actualDays: 100 - Math.round(100 * benchmarkMissingRate),
+        missingDays: Math.round(100 * benchmarkMissingRate),
       },
       universe: {
         status: "good",
@@ -124,20 +161,63 @@ function makeSnapshot(options?: {
         affectedShare: 0,
       },
       symbols: coverageSymbols,
+      benchmarkCandidates,
     },
+    warmupStart,
     requiredStart,
     requiredEnd,
   }
 }
 
 function makeAuthenticatedClient(userId = "user-1") {
+  const runInsertPayloads: Record<string, unknown>[] = []
+  const jobInsertPayloads: Record<string, unknown>[] = []
+  const deletedRunIds: string[] = []
+
   return {
+    runInsertPayloads,
+    jobInsertPayloads,
+    deletedRunIds,
     auth: {
       getUser: vi.fn().mockResolvedValue({
         data: {
           user: { id: userId },
         },
       }),
+    },
+    from(table: string) {
+      if (table === "runs") {
+        return {
+          insert: (payload: Record<string, unknown>) => {
+            runInsertPayloads.push(payload)
+            return {
+              select: () => ({
+                single: async () => ({
+                  data: { id: "run-123" },
+                  error: null,
+                }),
+              }),
+            }
+          },
+          delete: () => ({
+            eq: async (_column: string, id: string) => {
+              deletedRunIds.push(id)
+              return { error: null }
+            },
+          }),
+        }
+      }
+
+      if (table === "jobs") {
+        return {
+          insert: async (payload: Record<string, unknown>) => {
+            jobInsertPayloads.push(payload)
+            return { error: null }
+          },
+        }
+      }
+
+      throw new Error(`Unexpected authenticated table access in test: ${table}`)
     },
   }
 }
@@ -175,6 +255,20 @@ function makeAdminStub() {
         }
       }
 
+      if (table === "ticker_stats") {
+        return {
+          select: () => ({
+            in: async () => ({
+              data: [
+                { symbol: "TLT", first_date: "2002-07-30", last_date: "2026-03-12" },
+                { symbol: "BIL", first_date: "2007-05-25", last_date: "2026-03-12" },
+              ],
+              error: null,
+            }),
+          }),
+        }
+      }
+
       throw new Error(`Unexpected table access in test: ${table}`)
     },
   }
@@ -206,6 +300,102 @@ function makeRepairAdminStub() {
       }
 
       throw new Error(`Unexpected repair-table access in test: ${table}`)
+    },
+  }
+}
+
+function makeDeleteServerClient(options?: {
+  userId?: string
+  visibleRuns?: Array<{
+    id: string
+    status: string
+    user_id: string
+  }>
+}) {
+  const userId = options?.userId ?? "user-1"
+  const visibleRuns = new Map(
+    (options?.visibleRuns ?? []).map((run) => [run.id, run])
+  )
+  const deletedRunIds: string[] = []
+
+  return {
+    deletedRunIds,
+    getVisibleRunIds: () => [...visibleRuns.keys()],
+    auth: {
+      getUser: vi.fn().mockResolvedValue({
+        data: { user: { id: userId } },
+        error: null,
+      }),
+    },
+    from(table: string) {
+      if (table !== "runs") {
+        throw new Error(`Unexpected delete-table access in test: ${table}`)
+      }
+
+      return {
+        select: () => ({
+          eq: (_column: string, runId: string) => ({
+            maybeSingle: async () => ({
+              data: visibleRuns.get(runId) ?? null,
+              error: null,
+            }),
+          }),
+        }),
+        delete: () => ({
+          eq: async (_column: string, runId: string) => {
+            deletedRunIds.push(runId)
+            visibleRuns.delete(runId)
+            return { error: null }
+          },
+        }),
+      }
+    },
+  }
+}
+
+function makeDeleteAdminStub(options?: {
+  storagePath?: string | null
+}) {
+  const deletedIngestRunIds: string[] = []
+  const deletedStoragePaths: string[] = []
+
+  return {
+    deletedIngestRunIds,
+    deletedStoragePaths,
+    storage: {
+      from: vi.fn(() => ({
+        remove: async (paths: string[]) => {
+          deletedStoragePaths.push(...paths)
+          return { error: null }
+        },
+      })),
+    },
+    from(table: string) {
+      if (table === "reports") {
+        return {
+          select: () => ({
+            eq: (_column: string, _runId: string) => ({
+              maybeSingle: async () => ({
+                data: options?.storagePath ? { storage_path: options.storagePath } : null,
+                error: null,
+              }),
+            }),
+          }),
+        }
+      }
+
+      if (table === "data_ingest_jobs") {
+        return {
+          delete: () => ({
+            eq: async (_column: string, runId: string) => {
+              deletedIngestRunIds.push(runId)
+              return { error: null }
+            },
+          }),
+        }
+      }
+
+      throw new Error(`Unexpected delete-admin table access in test: ${table}`)
     },
   }
 }
@@ -295,6 +485,45 @@ describe("run actions preflight gating", () => {
     expect(result.issues[0]?.fix).toContain("reduce Top N")
   })
 
+  it("preflight evaluates ML training coverage in the initial rolling window", async () => {
+    vi.stubEnv("ML_MIN_TRAIN_DAYS", "252")
+    vi.stubEnv("ML_TRAIN_WINDOW_DAYS", "504")
+
+    evaluateRunPreflightSnapshotMock.mockResolvedValue(
+      makeSnapshot({
+        benchmarkFirstDate: "2000-01-03",
+        warmupStart: "2022-01-03",
+        requiredStart: "2024-01-02",
+        universeFirstDates: {
+          QQQ: "2021-01-04",
+          IWM: "2021-01-04",
+          TLT: "2021-01-04",
+          GLD: "2021-01-04",
+          VNQ: "2021-01-04",
+          EFA: "2023-10-02",
+          EEM: "2023-10-02",
+        },
+      })
+    )
+
+    const result = await preflightRun({
+      name: "ML rolling window",
+      strategy_id: "ml_ridge",
+      start_date: "2024-01-02",
+      end_date: "2026-03-12",
+      benchmark: "SPY",
+      universe: "ETF8",
+      costs_bps: 10,
+      top_n: 5,
+      initial_capital: 100000,
+      apply_costs: true,
+      slippage_bps: 0,
+    })
+
+    expect(result.status).toBe("ok")
+    expect(result.issues.some((issue) => issue.code === "ml_insufficient_training_history")).toBe(false)
+  })
+
   it("preflight starts universe repairs and blocks queueing until missing data is ready", async () => {
     const repairAdmin = makeRepairAdminStub()
     createAdminClientMock.mockReturnValue(repairAdmin)
@@ -359,8 +588,72 @@ describe("run actions preflight gating", () => {
     expect(result.issues[0]).toMatchObject({
       code: "top_n_above_universe_size",
       action: {
-        kind: "set_top_n",
+        kind: "reduce_top_n",
         value: 8,
+      },
+    })
+  })
+
+  it("does not queue repairs for current symbols that only fail missingness thresholds", async () => {
+    const repairAdmin = makeRepairAdminStub()
+    createAdminClientMock.mockReturnValue(repairAdmin)
+    evaluateRunPreflightSnapshotMock.mockResolvedValue(
+      makeSnapshot({
+        universeMissingRates: {
+          QQQ: 0.12,
+        },
+      })
+    )
+
+    const result = await preflightRun({
+      name: "Current but gappy",
+      strategy_id: "equal_weight",
+      start_date: "2018-01-01",
+      end_date: "2026-03-12",
+      benchmark: "SPY",
+      universe: "ETF8",
+      costs_bps: 10,
+      top_n: 5,
+      initial_capital: 100000,
+      apply_costs: true,
+      slippage_bps: 0,
+    })
+
+    expect(result.status).toBe("block")
+    expect(result.issues.some((issue) => issue.code === "universe_missingness_per_ticker_blocked")).toBe(true)
+    expect(repairAdmin.dataIngestRows).toHaveLength(0)
+  })
+
+  it("suggests a benchmark change when an alternative benchmark is cleaner", async () => {
+    evaluateRunPreflightSnapshotMock.mockResolvedValue(
+      makeSnapshot({
+        benchmarkMissingRate: 0.12,
+        benchmarkCandidates: [
+          { symbol: "QQQ", status: "ok", benchmarkTrueMissingRate: 0.0, affectedShare: 0 },
+          { symbol: "SPY", status: "block", benchmarkTrueMissingRate: 0.12, affectedShare: 0 },
+        ],
+      })
+    )
+
+    const result = await preflightRun({
+      name: "Switch benchmark",
+      strategy_id: "equal_weight",
+      start_date: "2018-01-01",
+      end_date: "2026-03-12",
+      benchmark: "SPY",
+      universe: "ETF8",
+      costs_bps: 10,
+      top_n: 5,
+      initial_capital: 100000,
+      apply_costs: true,
+      slippage_bps: 0,
+    })
+
+    expect(result.status).toBe("block")
+    expect(result.issues.find((issue) => issue.code === "benchmark_missingness_blocked")).toMatchObject({
+      action: {
+        kind: "change_benchmark",
+        value: "QQQ",
       },
     })
   })
@@ -392,12 +685,57 @@ describe("run actions preflight gating", () => {
     expect(createAdminClientMock).not.toHaveBeenCalled()
   })
 
-  it("warn acknowledgement gates creation and marks executed_with_missing_data", async () => {
+  it("allows clean runs for every strategy to be created and queued", async () => {
+    const serverClient = makeAuthenticatedClient()
     const admin = makeAdminStub()
+    createClientMock.mockResolvedValue(serverClient)
+    createAdminClientMock.mockReturnValue(admin)
+    evaluateRunPreflightSnapshotMock.mockResolvedValue(makeSnapshot())
+
+    const strategies = [
+      "equal_weight",
+      "momentum_12_1",
+      "low_vol",
+      "trend_filter",
+      "ml_ridge",
+      "ml_lightgbm",
+    ] as const
+
+    for (const strategy of strategies) {
+      const result = await createRun({
+        name: `Clean ${strategy}`,
+        strategy_id: strategy,
+        start_date: "2018-01-01",
+        end_date: "2026-03-12",
+        benchmark: "SPY",
+        universe: "ETF8",
+        costs_bps: 10,
+        top_n: 5,
+        initial_capital: 100000,
+        apply_costs: true,
+        slippage_bps: 0,
+        acknowledge_warnings: false,
+      })
+
+      expect(result.ok).toBe(true)
+    }
+
+    expect(serverClient.runInsertPayloads).toHaveLength(strategies.length)
+    expect(serverClient.jobInsertPayloads).toHaveLength(strategies.length)
+    expect(serverClient.runInsertPayloads[0]).toMatchObject({
+      user_id: "user-1",
+      status: "queued",
+    })
+  })
+
+  it("warn acknowledgement gates creation and marks executed_with_missing_data", async () => {
+    const serverClient = makeAuthenticatedClient()
+    const admin = makeAdminStub()
+    createClientMock.mockResolvedValue(serverClient)
     createAdminClientMock.mockReturnValue(admin)
     evaluateRunPreflightSnapshotMock.mockResolvedValue(
       makeSnapshot({
-        benchmarkMissingRate: 0.01,
+        benchmarkMissingRate: 0.04,
       })
     )
 
@@ -418,7 +756,7 @@ describe("run actions preflight gating", () => {
 
     expect(blockedWithoutAck.ok).toBe(false)
     expect(blockedWithoutAck.preflight?.status).toBe("warn")
-    expect(admin.runInsertPayloads).toHaveLength(0)
+    expect(serverClient.runInsertPayloads).toHaveLength(0)
 
     const createdWithAck = await createRun({
       name: "Warn acked",
@@ -436,11 +774,58 @@ describe("run actions preflight gating", () => {
     })
 
     expect(createdWithAck.ok).toBe(true)
-    expect(admin.runInsertPayloads).toHaveLength(1)
-    expect(admin.runInsertPayloads[0]).toMatchObject({
+    expect(serverClient.runInsertPayloads).toHaveLength(1)
+    expect(serverClient.runInsertPayloads[0]).toMatchObject({
       status: "queued",
       executed_with_missing_data: true,
+      user_id: "user-1",
     })
-    expect(admin.jobInsertPayloads).toHaveLength(1)
+    expect(serverClient.jobInsertPayloads).toHaveLength(1)
+  })
+})
+
+describe("deleteRunAction", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it("lets an owner delete a run and removes it from the visible runs set", async () => {
+    const runId = "22222222-2222-4222-8222-222222222222"
+    const serverClient = makeDeleteServerClient({
+      visibleRuns: [
+        { id: runId, status: "completed", user_id: "user-1" },
+      ],
+    })
+    const admin = makeDeleteAdminStub({
+      storagePath: `${runId}/tearsheet.html`,
+    })
+
+    createClientMock.mockResolvedValue(serverClient)
+    createAdminClientMock.mockReturnValue(admin)
+
+    await expect(deleteRunAction(runId)).rejects.toThrow("REDIRECT:/runs?deleted=1")
+
+    expect(serverClient.deletedRunIds).toEqual([runId])
+    expect(serverClient.getVisibleRunIds()).toEqual([])
+    expect(admin.deletedIngestRunIds).toEqual([runId])
+    expect(admin.deletedStoragePaths).toEqual([`${runId}/tearsheet.html`])
+    expect(revalidatePathMock).toHaveBeenCalledWith("/runs")
+  })
+
+  it("rejects deletes for runs the current user does not own", async () => {
+    const runId = "33333333-3333-4333-8333-333333333333"
+    const serverClient = makeDeleteServerClient({
+      visibleRuns: [],
+    })
+
+    createClientMock.mockResolvedValue(serverClient)
+    createAdminClientMock.mockReturnValue(makeDeleteAdminStub())
+
+    await expect(deleteRunAction(runId)).resolves.toEqual({
+      error: "You can only delete your own runs.",
+    })
+
+    expect(serverClient.deletedRunIds).toEqual([])
+    expect(redirectMock).not.toHaveBeenCalled()
   })
 })

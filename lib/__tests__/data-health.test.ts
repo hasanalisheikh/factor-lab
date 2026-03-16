@@ -93,20 +93,20 @@ describe("assessDataHealth", () => {
     )
   })
 
-  it("returns WARNING when the benchmark missing rate breaches the good threshold", () => {
+  it("returns WARNING when the benchmark missing rate breaches the shared benchmark good threshold", () => {
     const assessment = assessDataHealth({
       completeness: 99.8,
       requiredNotIngested: 0,
       trueMissingRate: 0.002,
       maxGapDays: 1,
       benchmarkTicker: "SPY",
-      benchmarkTrueMissingRate: 0.011,
+      benchmarkTrueMissingRate: 0.021,
       benchmarkMaxGapDays: 1,
     })
 
     expect(assessment.status).toBe("WARNING")
     expect(assessment.reason).toBe(
-      "Reason: benchmark SPY true missing rate is 1.1% (good threshold 1.0%)."
+      "Reason: benchmark SPY true missing rate is 2.1% (good threshold 2.0%)."
     )
   })
 

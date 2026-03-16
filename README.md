@@ -1,18 +1,54 @@
 # FactorLab
 
-FactorLab is a hybrid quant research product with:
-- Next.js dashboard (`app/`, `components/`)
-- Supabase state/results/storage (`supabase/`)
-- Python compute engine + worker (`services/engine/`)
+FactorLab is a quantitative research platform for backtesting systematic equity strategies. It combines a Next.js dashboard, Supabase Postgres database, and a Python compute engine to let you design, run, and compare factor-based strategies against a benchmark — without writing any code.
 
-## Core Product Scope
+> **Research only.** Results are historical simulations and do not constitute financial advice or a guarantee of future returns.
 
-- Queue a run from `/runs/new`
-- Track job lifecycle in `/jobs` (`queued/running/completed/failed`)
-- Inspect results in `/dashboard`, `/runs`, `/runs/[id]`
-- Compare strategy snapshots in `/compare`
-- Browse strategy methodology and metrics glossary at `/strategies`
-- Download HTML tearsheets from run detail
+---
+
+## Key Features
+
+- **Six strategies** out of the box: equal weight, momentum, low volatility, trend filter, Ridge regression (ML), LightGBM (ML)
+- **Preflight-first run creation** — data coverage is checked before a run is queued; missing data is auto-ingested
+- **Walk-forward ML** — daily predictions with weekly refit, no look-ahead bias
+- **HTML tearsheets** — self-contained performance reports, downloadable from each completed run
+- **ML Insights tab** — feature importance, predicted picks, realized vs. predicted return
+- **Compare workbench** — side-by-side equity curves and metrics for two runs
+- **Guest mode** — try the app with one click, no email required
+- **Row-level security** — every user's runs and results are strictly isolated
+
+---
+
+## Strategies
+
+| ID | Display Name | Rebalance | Signal |
+|----|--------------|-----------|--------|
+| `equal_weight` | Equal Weight | Monthly | None — holds all assets at 1/N |
+| `momentum_12_1` | Momentum 12-1 | Monthly | 12-month return skipping most recent month |
+| `low_vol` | Low Volatility | Monthly | 60-day realized volatility (lowest wins) |
+| `trend_filter` | Trend Filter | Monthly | 200-day benchmark SMA — risk-on/off regime switch |
+| `ml_ridge` | ML Ridge | Daily | Walk-forward Ridge regression on 8 daily features |
+| `ml_lightgbm` | ML LightGBM | Daily | Walk-forward LightGBM on same 8 features |
+
+See [docs/strategies.md](docs/strategies.md) for full methodology, warmup requirements, strengths, and limitations.
+
+---
+
+## Universes
+
+| Preset | Assets | Description |
+|--------|--------|-------------|
+| **ETF8** | 8 ETFs | SPY, QQQ, IWM, EFA, EEM, TLT, GLD, VNQ — cross-asset coverage |
+| **SP100** | 20 stocks | Large-cap S&P 500 members: AAPL, MSFT, AMZN, GOOGL, META, NVDA, JPM… |
+| **NASDAQ100** | 20 stocks | Nasdaq-100 leaders: AAPL, MSFT, NVDA, AMZN, META, TSLA, NFLX, AMD… |
+
+---
+
+## Supported Benchmarks
+
+SPY, QQQ, IWM, VTI, EFA, EEM, TLT, GLD, VNQ
+
+---
 
 ## Architecture
 
@@ -24,20 +60,16 @@ graph TB
   subgraph Vercel
     SA[Server Actions]
     MW[Auth Middleware]
+    CR[Vercel Cron — monthly + daily refresh]
   end
   subgraph Supabase
-    DB[(Postgres)]
+    DB[(Postgres + RLS)]
     ST[Storage — tearsheets]
-    AU[Auth + RLS]
+    AU[Auth]
   end
-  subgraph "Python Worker"
+  subgraph "Python Worker (Render)"
     WK[worker.py — job polling]
     ML[ml.py — walk-forward]
-    IN[ingest.py — prices]
-  end
-  subgraph "GitHub Actions"
-    CI[CI — lint · test · build]
-    IG[Ingest — Mon–Fri 21:00 UTC]
   end
   UI --> MW --> SA
   SA --> DB
@@ -45,288 +77,122 @@ graph TB
   SA --> AU
   WK --> DB
   WK --> ML
-  IG --> IN --> DB
+  CR --> DB
 ```
 
-- Frontend: Next.js App Router + TypeScript + Tailwind + shadcn/ui
-- Database: Supabase Postgres
-- Reports: Supabase Storage bucket (`reports`)
-- Compute: Python worker polling `jobs`, writing `equity_curve` + `run_metrics` + `positions`
+- **Frontend:** Next.js 16 App Router + TypeScript + Tailwind v4 + shadcn/ui
+- **Database:** Supabase Postgres with row-level security
+- **Reports:** Supabase Storage bucket (`reports`) — HTML tearsheets
+- **Compute:** Python worker polls `jobs`, writes `equity_curve`, `run_metrics`, `positions`, `model_predictions`
+- **Price data:** Yahoo Finance via `yfinance`; optional Stooq fallback
+
+---
 
 ## Job Lifecycle
 
-- `jobs.status`: `queued | running | completed | failed`
-- `jobs.stage`: `ingest | features | train | backtest | report`
-- `jobs.progress`: `0..100`
-- `jobs.error_message`: persisted worker error for debugging
+### Run statuses
 
-Worker claims jobs with a conditional status transition (`queued -> running`) to prevent duplicate processing.
+| Status | Meaning |
+|--------|---------|
+| `queued` | Backtest job waiting for the worker |
+| `waiting_for_data` | Price data is being ingested; backtest will chain automatically |
+| `running` | Worker is executing the backtest |
+| `completed` | Results are available |
+| `failed` | Unrecoverable error; see Jobs page for the error message |
+
+### Job stages (backtest)
+
+`ingest` → `load_data` → `compute_signals` → `rebalance` → `metrics` → `persist` → `report`
+
+### Job stages (ML backtest)
+
+`load_data` → `features` → `train` → `backtest` → `persist` → `report`
+
+### Data ingest job statuses
+
+`queued` → `running` → `completed` / `failed` / `blocked`
+
+- **Blocked** — permanent failure (invalid ticker, delisted symbol). No automatic retry; a "Retry now" button appears on the Data page.
+- **Failed** — transient error (network, timeout). Retried with exponential backoff: 60s → 300s → 900s → 3600s (up to 5 attempts).
+
+Worker claims jobs with an atomic `queued → running` transition to prevent double-processing. A 15-second heartbeat detects stalled jobs; stall scanner requeues them after 2 minutes.
+
+---
+
+## Data System
+
+### Data Cutoff Mode
+
+FactorLab uses a singleton `data_state` row to define the effective dataset boundary:
+
+| Field | Description |
+|-------|-------------|
+| `data_cutoff_date` | Global "Current through" date — all coverage checks and run end dates cap here |
+| `update_mode` | `monthly` (Backtest-ready) or `daily` (Advanced) |
+| `last_update_at` | When the cutoff was last advanced |
+
+**Backtest-ready (monthly):** Updated once per month via Vercel Cron at `0 0 1 * *`. Stable; recommended for most users.
+
+**Advanced (daily):** Updated nightly via `/api/cron/daily-refresh` at `0 1 * * *`. Set `ENABLE_DAILY_UPDATES=true` to enable. More recent data, but coverage may be partial until the nightly patch completes.
+
+### Scheduled Refreshes
+
+- Monthly refresh replays the last ~10 trading days plus a ~30 trading day gap-repair window.
+- Daily patch replays the last ~5 trading days plus a ~10 trading day gap-repair window.
+- The cutoff only advances after **every** job in the batch succeeds.
+- Required tickers = all universe preset members + all supported benchmarks.
+
+### How Run Gating Works
+
+On `createRun()`:
+1. Preflight check queries coverage for all universe symbols + benchmark over the warmup-adjusted window.
+2. **All healthy** → run is `queued` immediately.
+3. **Missing data** → run is `waiting_for_data`; data ingest jobs are auto-queued with `preflight_run_id` linking them to the run.
+4. **Ticker inception date too late** → error returned with the minimum viable start date; no run is created.
+5. When every preflight ingest job settles, the worker chains to the backtest automatically — no user action required.
+
+Coverage thresholds: benchmark ≥ 99%, universe ≥ 98% (99% for momentum/ML strategies).
+
+### Adding a New Benchmark or Universe Ticker
+
+1. Add to `lib/universe-config.ts` (`UNIVERSE_PRESETS`) and/or `BENCHMARK_OPTIONS` in `lib/benchmark.ts`
+2. Add its inception date to `TICKER_INCEPTION_DATES` in `lib/supabase/types.ts`
+3. Mirror the change in `services/engine/factorlab_engine/worker.py` (`UNIVERSE_PRESETS`)
+4. The next scheduled refresh (or a run preflight that needs the ticker) will queue the required ingest automatically
+
+### Fallback Data Provider
+
+Set `FACTORLAB_FALLBACK_PROVIDER=stooq` on the worker to enable a Stooq.com fallback. When yfinance returns fewer than 50% of expected business days, the worker fetches the same range from Stooq and merges the results. No additional packages required.
+
+---
 
 ## Run Reproducibility
 
-`runs` stores:
-- `strategy_id`
-- `benchmark_ticker`
-- `costs_bps`
-- `top_n`
-- `universe` (preset label)
-- `universe_symbols` (snapshotted symbol list — source of truth for execution)
-- `run_params` (JSON)
-- date range and status
+`runs` stores all parameters needed to reproduce execution:
+
+- `strategy_id`, `benchmark_ticker`, `costs_bps`, `top_n`
+- `universe` (preset label) and `universe_symbols` (snapshotted symbol list — source of truth for execution)
+- `run_params` (JSON), date range, and status
 
 At execution time the worker snapshots the resolved universe to `runs.universe_symbols`. This prevents config drift between the UI label and actual execution.
 
 ---
 
-## Auth & Email Verification Setup
-
-### Supabase Dashboard — URL Configuration
-
-Go to **Authentication → URL Configuration** in your Supabase project and set:
-
-| Setting | Value |
-|---|---|
-| Site URL (prod) | `https://factor-lab.vercel.app` |
-| Site URL (dev) | `http://localhost:3000` |
-| Additional redirect URLs | `https://factor-lab.vercel.app/**` and `http://localhost:3000/**` |
-
-> **Note:** The Site URL must match the environment you're testing. Change it when switching between local dev and production, or use the redirect URL wildcard patterns to cover both.
-
-### Environment Variables
-
-```bash
-# .env.local (production only — omit for local dev)
-NEXT_PUBLIC_SITE_URL=https://factor-lab.vercel.app
-```
-
-When `NEXT_PUBLIC_SITE_URL` is not set, the app derives the callback URL from the request `origin` header automatically (works for local dev).
-
-### How the Flow Works
-
-**Email confirmation disabled (dev default):**
-1. User signs up → Supabase auto-confirms and returns a live session
-2. User is redirected straight to `/dashboard`
-
-**Email confirmation enabled (production):**
-1. User signs up → Supabase sends a verification email, returns `session: null`
-2. User is redirected to `/login?tab=verify&email=<address>` — verify tab shows instructions + resend button
-3. User clicks the email link → lands on `/auth/callback?code=...`
-4. Callback exchanges the code for a session and redirects to `/dashboard`
-5. **Expired link**: `/auth/callback` redirects to `/login?tab=verify&error=expired` — user can enter their email and resend
-
-### Manual Test Steps
-
-```
-# Dev (confirm email OFF in Supabase dashboard)
-1. Sign up with a new email → should land on /dashboard immediately
-
-# Prod (confirm email ON)
-1. Sign up → redirected to /login?tab=verify
-2. Check inbox, click verification link → redirected to /dashboard while signed in
-3. Resend: click "Resend verification email" → success message
-4. Expired link: paste an old verification URL → /login?tab=verify with error + email input to resend
-```
-
----
-
-## Strategy Glossary & Methodology
-
-### Common Framework
-
-All strategies share the following framework:
-
-| Dimension | Value |
-|-----------|-------|
-| **Rebalance frequency** | Monthly (calendar month boundaries) |
-| **Portfolio construction** | Equal weight — each selected asset receives weight 1/k |
-| **Transaction cost model** | `cost = (costs_bps / 10,000) × turnover`, deducted at each rebalance |
-| **Default costs** | 10 bps (configurable per run) |
-| **Benchmark** | SPY, rebased to starting NAV of $100,000 |
-| **Starting NAV** | $100,000 for both portfolio and benchmark |
-
-**Universe resolution** (priority order):
-1. `runs.universe_symbols` snapshot (if already set — the source of truth)
-2. Named preset from `runs.universe` (ETF8 / SP100 / NASDAQ100)
-3. `FACTORLAB_UNIVERSE` env variable
-4. Default: ETF8
-
-**Available universe presets:**
-- **ETF8**: 8 cross-asset ETFs — SPY, QQQ, IWM, EFA, EEM, TLT, GLD, VNQ
-- **SP100**: 20 large-cap S&P 500 members (AAPL, MSFT, AMZN, GOOGL…)
-- **NASDAQ100**: 20 Nasdaq-100 technology leaders (AAPL, MSFT, NVDA, AMZN…)
-
----
-
-### equal_weight
-
-**Rule:** At each monthly rebalance, assign weight 1/N to all N assets in the universe. No selection filtering — every asset is held.
-
-| Field | Detail |
-|-------|--------|
-| Selection | All N assets in the universe |
-| Weight per asset | 1/N (e.g., 12.5% each for ETF8) |
-| Signal | None |
-| Monthly turnover | ~8% (small drift correction) |
-
-**How it works:** Weights drift as prices move over the month. On the first day of each new month the portfolio is reset to 1/N for all assets. This systematic buy-low/sell-high behaviour provides a mild contrarian tilt.
-
-**Expectations:** Captures broad market beta. Studies (DeMiguel et al., 2009) show equal weighting often competes with optimized portfolios out-of-sample, particularly in regimes where the covariance matrix is difficult to estimate.
-
----
-
-### momentum_12_1
-
-**Rule:** At each rebalance, score assets by 12-month return skipping the most recent month, then hold the top 50% with a positive score.
-
-| Field | Detail |
-|-------|--------|
-| Signal | `score = price(t−21) / price(t−252) − 1` |
-| Why skip 1 month? | Short-term price reversal contaminates the signal; momentum is a 2–12 month phenomenon |
-| Selection | Top 50% by score, positive scores only |
-| Weight per asset | Equal weight among selected assets (1/k) |
-| Monthly turnover | Moderate — changes as rankings shift |
-
-**How it works:** `price(t−21)` is the price ~21 trading days ago (≈ 1 month). `price(t−252)` is the price ~252 trading days ago (≈ 12 months). The ratio captures 12-month price appreciation while deliberately excluding the most recent month's return.
-
-**Expectations:** Tends to outperform in trending markets. Suffers in sharp regime reversals (e.g., crisis recoveries) — a known risk of cross-sectional momentum strategies. (Jegadeesh & Titman, 1993.)
-
----
-
-### ml_ridge (Walk-Forward)
-
-**Rule:** Walk-forward Ridge regression. Retrained monthly on expanding history. Ranks assets by predicted next-month return and holds the top N equal-weighted.
-
-| Field | Detail |
-|-------|--------|
-| Features | 5 cross-sectional monthly factors (see below) |
-| Target | Next month total return |
-| Model | `Ridge(α=1.0)` with `StandardScaler` |
-| Selection | Top N by predicted return (default N=10) |
-| Weight | Equal weight among top N |
-| Min training | 24 months before first prediction |
-| Price warmup | 5 years before `run.start_date` |
-
-**Features:**
-| Name | Definition |
-|------|-----------|
-| `momentum` | 12-month trailing return |
-| `reversal` | Inverted prior-month return (short-term mean reversion) |
-| `volatility` | Annualized 6-month rolling standard deviation |
-| `beta` | Rolling 12-month beta to benchmark |
-| `drawdown` | Rolling 12-month max drawdown (price / rolling-max − 1) |
-
-**Walk-forward discipline:** The model is retrained from scratch at each rebalance date using all available history before that date. There is zero look-ahead bias. This mirrors realistic out-of-sample deployment.
-
----
-
-### ml_lightgbm (Walk-Forward)
-
-Same framework as `ml_ridge`, substituting gradient-boosted trees for the linear model.
-
-| Field | Detail |
-|-------|--------|
-| Model | `LGBMRegressor(n_estimators=300, learning_rate=0.05, num_leaves=31, min_child_samples=20)` |
-| Failure mode | Fails loudly if LightGBM is unavailable (no fallback to Ridge) |
-| Features / Target / Walk-Forward | Identical to ml_ridge |
-
-**Expectations:** May outperform Ridge when factor relationships are non-linear or interaction effects matter. More sensitive to small dataset sizes.
-
----
-
-### How Rebalancing Works (example)
-
-1. **Start of January:** ETF8 at equal weight — 12.5% in each of 8 ETFs.
-2. **During January:** QQQ rallies +8%; TLT falls −3%. By month-end, QQQ ≈ 13.5%, TLT ≈ 12.1%.
-3. **Month-end rebalance:** Engine computes turnover = sum(|new_weight − old_weight|) / 2. Sell 1% of QQQ, buy 0.4% of TLT (and smaller adjustments for others). Two-way turnover ≈ a few percent.
-4. **Transaction cost deducted:** `10 bps × 0.03 turnover = 0.003%` drag on that day's return.
-5. **February begins** with all assets back at 12.5%.
-
-For momentum strategies, turnover is higher because the *set* of held assets can change entirely between months.
-
----
-
-### Metrics Glossary
-
-| Metric | Definition |
-|--------|-----------|
-| **CAGR** | Compound Annual Growth Rate. `(final_NAV / 100,000)^(252/n_days) − 1`. |
-| **Sharpe** | `(mean_daily_return / std_daily_return) × √252`. Risk-adjusted return. > 1.0 is strong. |
-| **Max Drawdown** | Largest peak-to-trough NAV decline (expressed as %). Lower magnitude is better. |
-| **Turnover (Ann.)** | `mean(rebalance_turnover) × 12`. Annual portfolio replacement rate. 100% = entire book replaced once/year. |
-| **Volatility** | `std(daily_returns) × √252`. Annualized total risk. |
-| **Win Rate** | Fraction of periods with a positive return. > 50% means more up days than down. |
-| **Profit Factor** | Total gains ÷ total losses. > 1.0 means gains exceed losses. |
-| **Calmar** | `CAGR / |Max Drawdown|`. Return per unit of drawdown risk. |
-
----
-
-## Known Limitations
-
-- **Survivorship bias:** Universe presets are static. They do not account for assets delisted or replaced during the backtest window. This may overstate performance for long windows.
-- **Simplified costs:** The cost model applies a flat `bps × turnover` rate. It does not model market impact, bid-ask spread, slippage, or short-selling costs.
-- **Data quality:** Price data is sourced from Yahoo Finance via `yfinance`. Gaps are forward-filled; significant coverage gaps may affect results.
-- **Research only:** No live brokerage integration. Results are historical simulations and should not be taken as a guarantee of future returns.
-
----
-
-## Environment Variables
-
-### Required
-
-| Variable | Where used | Description |
-|----------|-----------|-------------|
-| `NEXT_PUBLIC_SUPABASE_URL` | Client + Server | Your Supabase project URL |
-| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Client + Server | Supabase anon key (public) |
-| `SUPABASE_SERVICE_ROLE_KEY` | Server only — **never expose to browser** | Supabase service role key for admin operations (create runs, write results) |
-| `SUPABASE_REPORTS_BUCKET` | Server only | Storage bucket name for HTML tearsheets (default: `reports`) |
-
-### Auth — Account Creation Rate Limiting (Upstash Redis)
-
-| Variable | Description |
-|----------|-------------|
-| `UPSTASH_REDIS_REST_URL` | Upstash Redis REST endpoint |
-| `UPSTASH_REDIS_REST_TOKEN` | Upstash Redis REST token |
-
-Rate limiting is **skipped gracefully** when these are not set (useful for local dev). Create a free Redis database at [upstash.com](https://upstash.com) for production.
-
-**Rate limit defaults:** 10 account creations per IP per hour (covers both sign-up and guest creation).
-
----
-
 ## Authentication
 
-All app routes require authentication. The `/login` page offers:
+All routes require authentication. `/login` offers:
 - **Sign in** — email + password
-- **Create account** — email + password (rate-limited)
-- **Continue as Guest** — one click creates an isolated guest account (rate-limited)
+- **Create account** — email + password (rate-limited: 10 per IP per hour via Upstash Redis)
+- **Continue as Guest** — one-click guest account (`guest_<uuid>@factorlab.local`); rate-limited
 
-Guest accounts are full accounts: `guest_<uuid>@factorlab.local`, never exposed to the user, fully private via RLS.
+Guest accounts are full accounts with complete RLS isolation. Upgrade to a named account at any time in Settings → Account.
 
-### Supabase Auth Setup
-
-1. In your Supabase project → **Authentication** → **URL Configuration**:
-
-   | Setting | Local dev | Production |
-   |---------|-----------|------------|
-   | **Site URL** | `http://localhost:3000` | `https://factor-lab.vercel.app` |
-   | **Redirect URLs** | `http://localhost:3000/**` | `https://factor-lab.vercel.app/**` |
-
-   Add both environments to **Redirect URLs** so verification links work in both contexts.
-
-2. Under **Email** provider settings:
-   - **Dev**: disable "Confirm email" for fast local iteration (auto-confirms, lands on `/dashboard`)
-   - **Prod**: enable "Confirm email" — sign-up redirects to `/login?tab=verify&email=...` where users can see instructions and resend the link
-
-3. Guest accounts use `email_confirm: true` via the admin API and are never affected by the confirm-email setting.
-
-#### Email verification flow (when "Confirm email" is ON)
+### Auth Flow (email confirmation ON)
 
 ```
 Sign Up → signUpAction → Supabase signUp (emailRedirectTo: /auth/callback)
-                      ↓ session = null (email not confirmed yet)
+                      ↓ session = null
         redirect /login?tab=verify&email=user@example.com
-                      ↓
-        Verify panel: instructions + Resend button
                       ↓ user clicks email link
         /auth/callback?code=... → exchangeCodeForSession → redirect /dashboard
                       ↓ expired link
@@ -335,53 +201,94 @@ Sign Up → signUpAction → Supabase signUp (emailRedirectTo: /auth/callback)
 
 ---
 
+## Environment Variables
+
+### Required
+
+| Variable | Where Used | Description |
+|----------|-----------|-------------|
+| `NEXT_PUBLIC_SUPABASE_URL` | Client + Server | Supabase project URL |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Client + Server | Supabase anon key (public) |
+| `SUPABASE_SERVICE_ROLE_KEY` | Server only — **never expose to browser** | Service role key for admin operations |
+| `SUPABASE_REPORTS_BUCKET` | Server only | Storage bucket name for HTML tearsheets (default: `reports`) |
+| `CRON_SECRET` | Server only | Secret to authenticate Vercel Cron requests |
+
+### Optional
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `NEXT_PUBLIC_SITE_URL` | Derived from request `origin` | Canonical site URL; set for production Vercel deployments |
+| `WORKER_TRIGGER_URL` | — | Worker webhook URL (if using trigger-based invocation) |
+| `WORKER_TRIGGER_SECRET` | — | Secret for worker trigger |
+| `ENABLE_DAILY_UPDATES` | `false` | Set to `true` to enable the nightly data patch |
+| `UPSTASH_REDIS_REST_URL` | — | Upstash Redis REST endpoint (rate limiting) |
+| `UPSTASH_REDIS_REST_TOKEN` | — | Upstash Redis REST token |
+| `SKIP_FACTORLAB_WORKER` | — | Set to `1` to skip starting the local worker alongside the dev server |
+| `JOB_TIMEOUT_SECONDS` | `600` | Per-job wall-clock timeout for baseline strategies |
+| `JOB_TIMEOUT_SECONDS_ML_RIDGE` | `900` | Per-job timeout for ml_ridge |
+| `JOB_TIMEOUT_SECONDS_ML_LIGHTGBM` | `1800` | Per-job timeout for ml_lightgbm |
+| `FACTORLAB_FALLBACK_PROVIDER` | — | Set to `stooq` to enable the Stooq.com fallback data provider |
+
+Rate limiting is **skipped gracefully** if Upstash env vars are not set (useful for local dev). Create a free Redis database at [upstash.com](https://upstash.com) for production.
+
+---
+
 ## Local Setup
 
-1. Install JS deps: `npm install`
-2. Copy and fill in env vars:
-   ```bash
-   cp .env.example .env.local
-   ```
-   Required minimum:
-   ```
-   NEXT_PUBLIC_SUPABASE_URL=https://xxx.supabase.co
-   NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJ...
-   SUPABASE_SERVICE_ROLE_KEY=eyJ...
-   SUPABASE_REPORTS_BUCKET=reports
-   CRON_SECRET=change-me
-   WORKER_TRIGGER_URL=https://your-worker-host
-   WORKER_TRIGGER_SECRET=change-me
-   ENABLE_DAILY_UPDATES=false
-   # Optional but recommended for rate limiting:
-   UPSTASH_REDIS_REST_URL=https://xxx.upstash.io
-   UPSTASH_REDIS_REST_TOKEN=AXxx...
-   ```
-3. Apply SQL in Supabase SQL Editor (in order):
-   - `supabase/schema.sql`
-   - `supabase/migrations/20260302_auth_rls.sql` ← **new: auth + RLS**
-   - other migrations in `supabase/migrations/`
-4. Run app + worker together: `npm run dev`
-   - Set `SKIP_FACTORLAB_WORKER=1` to run web app only.
-5. (Optional) Run worker manually:
-   - `cd services/engine && factorlab-engine-worker`
+### 1. Install JS dependencies
 
-### Testing Auth Locally
+```bash
+npm install
+```
 
-| Flow | Steps |
-|------|-------|
-| Create account | Visit `localhost:3000` (redirects to `/login`) → Create account tab → fill email + password → submit |
-| Sign in | Sign out → Sign in tab → same credentials |
-| Guest | Visit `/login` → "Continue as Guest" → land on `/dashboard` |
-| Sign out | Click user avatar (top-right) → Sign out → back to `/login` |
-| RLS isolation | Log in as User A, create a run. Open incognito, sign in as User B → `/runs` shows 0 runs |
+### 2. Configure environment variables
 
-### Testing on Vercel
+```bash
+cp .env.example .env.local
+```
 
-1. Add all env vars in Vercel project → Settings → Environment Variables
-2. In Supabase Auth → URL Configuration, add your Vercel preview and production domains to Redirect URLs
-3. Deploy: `git push` → Vercel builds automatically
+Minimum required:
+```
+NEXT_PUBLIC_SUPABASE_URL=https://xxx.supabase.co
+NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJ...
+SUPABASE_SERVICE_ROLE_KEY=eyJ...
+SUPABASE_REPORTS_BUCKET=reports
+CRON_SECRET=change-me
+ENABLE_DAILY_UPDATES=false
+```
 
-## Running the Worker
+### 3. Apply database schema
+
+Run in Supabase SQL Editor, in order:
+1. `supabase/schema.sql`
+2. All files in `supabase/migrations/` in filename order
+
+### 4. Configure Supabase Auth
+
+In your Supabase project → **Authentication → URL Configuration**:
+
+| Setting | Local dev | Production |
+|---------|-----------|------------|
+| **Site URL** | `http://localhost:3000` | `https://your-domain.com` |
+| **Redirect URLs** | `http://localhost:3000/**` | `https://your-domain.com/**` |
+
+Add both environments to **Redirect URLs** so verification links work in both.
+
+Under **Email** provider:
+- **Dev**: disable "Confirm email" for instant sign-in
+- **Prod**: enable "Confirm email" for email verification flow
+
+### 5. Start the development server
+
+```bash
+npm run dev
+```
+
+This starts the Next.js app. Set `SKIP_FACTORLAB_WORKER=1` to run the web app only (without the local Python worker).
+
+---
+
+## Running the Python Worker
 
 ### Install
 
@@ -390,34 +297,32 @@ cd services/engine
 pip install -e ".[dev]"
 ```
 
-This installs all runtime dependencies (NumPy, pandas, scikit-learn, LightGBM, yfinance, supabase) and pytest.
+This installs all runtime dependencies: NumPy, pandas, scikit-learn, LightGBM, yfinance, supabase-py, and pytest.
 
 ### Start the worker
 
 ```bash
-# From repo root — reads NEXT_PUBLIC_SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY from env
+# From the worker directory — reads env vars from shell
 factorlab-engine-worker
 
 # Or via Python module
 python -m factorlab_engine.worker
 ```
 
-The worker polls `jobs` WHERE `status = 'queued'`, claims each job atomically, runs all backtest stages, and writes results to `equity_curve`, `run_metrics`, `positions`, and `model_predictions`.
+The worker polls `jobs WHERE status = 'queued'`, claims each job atomically, executes all stages, and writes results.
 
 ### Run a manual ingest
 
 ```bash
-# Full 10-year history (SP100, ~104 tickers)
+# Full 10-year history
 factorlab-engine-ingest
 
-# Rolling 7-day update (useful for daily cron)
+# Rolling 7-day update
 factorlab-engine-ingest --start-date $(date -u -d "7 days ago" +%Y-%m-%d)
 
 # Custom tickers and date range
 factorlab-engine-ingest --tickers "AAPL,MSFT,NVDA" --start-date 2020-01-01
 ```
-
-The scheduled GitHub Actions workflow ([`.github/workflows/ingest.yml`](.github/workflows/ingest.yml)) runs this automatically Monday–Friday at 21:00 UTC. Requires `NEXT_PUBLIC_SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` in GitHub Secrets.
 
 ---
 
@@ -425,77 +330,71 @@ The scheduled GitHub Actions workflow ([`.github/workflows/ingest.yml`](.github/
 
 A [`render.yaml`](render.yaml) at the repo root defines a Render background worker service.
 
-### Deploy to Render
-
-1. Connect the repo at [render.com](https://render.com) → **New** → **Blueprint** → select this repo.
-2. Render reads `render.yaml` and creates a **Background Worker** service (`factorlab-engine-worker`).
-3. Set the two environment variables in the Render dashboard (they are marked `sync: false` so they are never committed):
+1. Connect the repo at [render.com](https://render.com) → **New → Blueprint** → select this repo
+2. Render creates a **Background Worker** (`factorlab-engine-worker`)
+3. Set these environment variables in the Render dashboard (`sync: false` — not committed):
 
    | Variable | Description |
    |----------|-------------|
-   | `NEXT_PUBLIC_SUPABASE_URL` | Your Supabase project URL |
+   | `NEXT_PUBLIC_SUPABASE_URL` | Supabase project URL |
    | `SUPABASE_SERVICE_ROLE_KEY` | Service role key — bypasses RLS, never expose in browser |
 
-4. Click **Deploy** — the worker starts and polls the `jobs` table on a 5-second loop.
+4. Click **Deploy** — the worker starts polling the `jobs` table on a 5-second loop
 
-Render restarts the process automatically if it crashes. Jobs are claimed atomically (`queued → running`), so running multiple replicas will not double-process a job.
+Render restarts automatically on crash. Multiple replicas are safe — atomic job claiming prevents double-processing.
 
 ### Alternative: GitHub Actions (polling cron)
 
-If you prefer zero infrastructure cost, you can run the worker as a scheduled GitHub Actions job that polls once per invocation and exits. Add `NEXT_PUBLIC_SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` to GitHub Secrets and create a workflow with `schedule: [{cron: "*/10 * * * *"}]` calling `factorlab-engine-worker --once`. The trade-off is higher latency (up to 10 minutes between queue and execution) and GitHub Actions minute consumption.
-
----
-
-## Data Pipeline
-
-### Data Cutoff Mode (Monthly refresh)
-FactorLab uses a singleton `data_state` row to define the effective dataset boundary:
-
-- `data_cutoff_date`: the global "Current through" date shown in the UI.
-- `last_update_at`: when the cutoff was last advanced.
-- `update_mode`: `monthly`, `daily`, or `manual`.
-- `updated_by`: the actor that last moved the cutoff.
-
-Coverage, missingness, benchmark diagnostics, run gating, and run end-date selection all cap at `data_cutoff_date`. Dates after the cutoff are ignored rather than treated as missing.
-
-### Scheduled refreshes
-- Monthly refresh is required and runs via Vercel Cron on `/api/cron/monthly-refresh` at `0 0 1 * *` (start of month UTC).
-- Daily patch is optional and runs via `/api/cron/daily-refresh` at `0 1 * * *`. Set `ENABLE_DAILY_UPDATES=true` to enable it; when `false`, the route exits without queuing jobs.
-- Required tickers = every universe preset ticker plus every supported benchmark.
-- Refresh windows are overlap-based:
-  - Monthly: replay the last ~10 trading days plus a ~30 trading day gap-repair window.
-  - Daily: replay the last ~5 trading days plus a ~10 trading day gap-repair window.
-- The cutoff only advances after every job in the scheduled batch succeeds.
-
-### How auto-ingestion avoids stuck states
-- Every 10 s the worker writes a heartbeat (`updated_at`) to the running job.
-- Every 10 s the worker also writes `last_heartbeat_at` on `data_ingest_jobs`.
-- If the heartbeat goes stale for 2 min the stall scanner moves the job to `retrying` and schedules a retry.
-- Exponential backoff: 60 s → 300 s → 900 s → 3600 s (up to 5 attempts).
-- Permanent errors (invalid ticker, delisted symbol) go to `blocked` — no retry, run fails with a diagnostic message.
-- Legacy `/api/data/auto-maintain` now delegates to the cutoff-aware daily refresh route for backward compatibility.
-
-### How run gating works
-On `createRun()`:
-1. Preflight check queries coverage for all universe symbols + benchmark over the warmup-adjusted window.
-2. If all symbols meet their threshold (benchmark ≥ 99%, universe ≥ 98%/99%) → run is `queued` immediately.
-3. Otherwise → run is `waiting_for_data`; data ingest jobs are auto-queued with `preflight_run_id` linking them to the run.
-4. When every preflight ingest job settles, the worker chains to the backtest automatically — no user action required.
-
-### How to add a new benchmark or universe ticker
-1. Add the ticker to `lib/universe-config.ts` (`UNIVERSE_PRESETS`) and/or `BENCHMARK_OPTIONS` in `lib/benchmark.ts`.
-2. Add its inception date to `TICKER_INCEPTION_DATES` in `lib/supabase/types.ts`.
-3. Mirror the change in `services/engine/factorlab_engine/worker.py` (`UNIVERSE_PRESETS`).
-4. The next scheduled refresh (or a run preflight that needs the ticker) will queue the required ingest automatically.
-
-### Fallback data provider
-Set `FACTORLAB_FALLBACK_PROVIDER=stooq` on the worker to enable a Stooq.com fallback. When the primary yfinance download returns fewer than 50% of expected business days, the worker fetches the same range from Stooq and merges the results (primary preferred, fallback fills gaps). No additional packages required beyond `requests`.
+Add `NEXT_PUBLIC_SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` to GitHub Secrets and create a workflow with `schedule: [{cron: "*/10 * * * *"}]` calling `factorlab-engine-worker --once`. Trade-off: up to 10-minute queue latency and GitHub Actions minute consumption.
 
 ---
 
 ## Test Commands
 
-- Web typecheck: `npm run typecheck`
-- Web lint: `npm run lint`
-- Web tests: `npm run test:run`
-- Engine tests: `cd services/engine && pip install -e ".[dev]" && pytest ../engine/tests -q`
+```bash
+# TypeScript type check
+npm run typecheck
+
+# Lint (zero warnings allowed)
+npm run lint
+
+# Web tests (Vitest)
+npm run test:run
+
+# Engine tests (pytest)
+cd services/engine && pip install -e ".[dev]" && pytest -q
+```
+
+---
+
+## Playwright QA Audit Suite
+
+A browser-based QA harness in `playwright-audit/` executes every strategy × universe × benchmark combination (162 total) and verifies:
+- Identity consistency across runs list → detail page → tearsheet
+- Preflight correctness — blocks are truthful and actionable
+- KPI sanity and UI/tearsheet agreement
+- ML Insights completeness for ML runs
+- Encoding correctness (no mojibake in tearsheets)
+
+See [`playwright-audit/README.md`](playwright-audit/README.md) for full setup, filtering, and artifact documentation.
+
+---
+
+## Strategy Glossary
+
+See [docs/strategies.md](docs/strategies.md) for full methodology including selection logic, features, warmup requirements, strengths, weaknesses, and metric definitions.
+
+---
+
+## User Guide
+
+See [docs/user-guide.md](docs/user-guide.md) for step-by-step instructions on creating runs, reading results, using the Data page, and account management.
+
+---
+
+## Known Limitations
+
+- **Survivorship bias:** Universe presets are static. Assets delisted or replaced during the backtest window are not removed. This may overstate performance for long windows.
+- **Simplified costs:** The cost model applies a flat `bps × turnover` rate. It does not model market impact, bid-ask spread, slippage, or short-selling costs.
+- **Data quality:** Price data is sourced from Yahoo Finance via `yfinance`. Gaps are forward-filled in the engine; significant coverage gaps will affect results and may trigger preflight blocks.
+- **Research only:** No live brokerage integration. All results are historical simulations.

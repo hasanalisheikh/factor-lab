@@ -52,9 +52,7 @@ AS $$
     COUNT(*) FILTER (WHERE date >= '2015-01-02'),
     COALESCE(
       (
-        SELECT MAX(
-          EXTRACT(EPOCH FROM (next_dt - date)) / 86400
-        )::INT
+        SELECT MAX(next_dt - date)::INT
         FROM (
           SELECT
             date,
@@ -64,7 +62,7 @@ AS $$
             AND date >= '2015-01-02'
         ) gaps
         WHERE next_dt IS NOT NULL
-          AND next_dt - date > INTERVAL '7 days'
+          AND next_dt - date > 7
       ),
       0
     ),

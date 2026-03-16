@@ -6,6 +6,7 @@ import { AlertCircle, CheckCircle2, Mail } from "lucide-react"
 import {
   signInAction,
   signUpAction,
+  upgradeGuestAction,
   resendVerificationAction,
   forgotPasswordAction,
   type AuthState,
@@ -27,12 +28,17 @@ export function LoginForm({
   initialEmail,
   verifyError,
   forgotError,
+  sessionUser,
 }: {
   authError?: string
   initialTab?: "signin" | "signup" | "verify" | "forgot"
   initialEmail?: string
   verifyError?: string
   forgotError?: string
+  sessionUser?: {
+    email: string | null
+    isGuest: boolean
+  } | null
 }) {
   const [signInState, signInAction_, isSignInPending] = useActionState<AuthState, FormData>(
     signInAction,
@@ -40,6 +46,10 @@ export function LoginForm({
   )
   const [signUpState, signUpAction_, isSignUpPending] = useActionState<AuthState, FormData>(
     signUpAction,
+    null
+  )
+  const [upgradeState, upgradeAction_, isUpgradePending] = useActionState<AuthState, FormData>(
+    upgradeGuestAction,
     null
   )
   const [resendState, resendAction_, isResendPending] = useActionState<ResendState, FormData>(
@@ -122,7 +132,21 @@ export function LoginForm({
     }
   }, [])
 
-  const isAnyPending = isSignInPending || isSignUpPending || isGuestPending
+  const isGuestSession = sessionUser?.isGuest === true
+  const createAccountAction = isGuestSession ? upgradeAction_ : signUpAction_
+  const createAccountState = isGuestSession ? upgradeState : signUpState
+  const isCreateAccountPending = isGuestSession ? isUpgradePending : isSignUpPending
+  const isAnyPending =
+    isSignInPending || isSignUpPending || isUpgradePending || isGuestPending
+
+  const isExistingAccountError = (error: string) => {
+    const message = error.toLowerCase()
+    return (
+      message.includes("already exists") ||
+      message.includes("already registered") ||
+      message.includes("sign in to that account instead")
+    )
+  }
 
   const formatFriendlyError = (error: string) => {
     const message = error.toLowerCase()
@@ -130,6 +154,24 @@ export function LoginForm({
       return "Too many attempts right now. Please wait a bit and try again."
     }
     return error
+  }
+
+  function getCreateAccountErrorMessage(error: string) {
+    if (!isExistingAccountError(error)) {
+      return formatFriendlyError(error)
+    }
+
+    if (isGuestSession) {
+      return "An account with this email already exists. Sign in to that account instead. Your guest runs and settings are still safe in this guest session."
+    }
+
+    return "An account with this email already exists. Sign in to that account instead."
+  }
+
+  function switchToSignInTab() {
+    setSignInEmail(signUpEmail.trim())
+    setSignInPassword("")
+    switchTab("signin")
   }
 
   async function handleGuest() {
@@ -167,7 +209,12 @@ export function LoginForm({
 
   const unverifiedEmail = signInState && "unverifiedEmail" in signInState ? signInState.unverifiedEmail : null
   const signInError = signInState && "error" in signInState ? formatFriendlyError(signInState.error) : null
-  const signUpError = signUpState && "error" in signUpState ? formatFriendlyError(signUpState.error) : null
+  const createAccountRawError =
+    createAccountState && "error" in createAccountState ? createAccountState.error : null
+  const showSignInInsteadButton =
+    createAccountRawError != null && isExistingAccountError(createAccountRawError)
+  const signUpError =
+    createAccountRawError != null ? getCreateAccountErrorMessage(createAccountRawError) : null
 
   const inputClassName =
     "h-9 border-white/10 bg-white/5 text-white/90 placeholder:text-white/45 focus-visible:border-primary/70 focus-visible:ring-primary/40"
@@ -186,13 +233,17 @@ export function LoginForm({
             {activeTab === "signin"
               ? "Sign in"
               : activeTab === "signup"
-                ? "Create account"
+                ? isGuestSession
+                  ? "Create account and keep my runs"
+                  : "Create account"
                 : activeTab === "forgot"
                   ? "Reset password"
                   : "Verify your email"}
           </h1>
           <p className="text-sm text-white/60">
-            Quant research dashboard for backtests and reports.
+            {activeTab === "signup" && isGuestSession
+              ? "Upgrade this guest session in place. Your runs and settings stay attached to the same account."
+              : "Quant research dashboard for backtests and reports."}
           </p>
         </div>
 
@@ -497,7 +548,7 @@ export function LoginForm({
 
             <TabsContent value="signup" className="mt-0 min-h-[240px] sm:min-h-[252px]">
               <form
-                action={signUpAction_}
+                action={createAccountAction}
                 onSubmit={(event) => {
                   setGuestError(null)
                   if (signUpPassword !== confirmPassword) {
@@ -509,6 +560,15 @@ export function LoginForm({
                 }}
                 className="space-y-2.5"
               >
+                {isGuestSession && (
+                  <Alert className="border-primary/30 bg-primary/10 text-primary">
+                    <CheckCircle2 className="size-4" />
+                    <AlertDescription className="text-primary/90">
+                      You&apos;re upgrading your current guest session. Existing runs and settings stay on this account.
+                    </AlertDescription>
+                  </Alert>
+                )}
+
                 <div className="space-y-1.5">
                   <Label htmlFor="signup-email" className="text-xs font-medium text-white/60">
                     Email
@@ -573,19 +633,30 @@ export function LoginForm({
                   </Alert>
                 )}
 
+                {showSignInInsteadButton && !passwordMismatchError && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={switchToSignInTab}
+                    className="h-9 w-full border-white/15 bg-transparent text-white/75 hover:border-primary/40 hover:bg-primary/10 hover:text-primary"
+                  >
+                    Sign in instead
+                  </Button>
+                )}
+
                 <Button
                   type="submit"
                   disabled={isAnyPending}
                   aria-disabled={isAnyPending}
                   className={primaryButtonClassName}
                 >
-                  {isSignUpPending ? (
+                  {isCreateAccountPending ? (
                     <>
                       <Spinner className="size-4" />
-                      Creating account...
+                      {isGuestSession ? "Upgrading account..." : "Creating account..."}
                     </>
                   ) : (
-                    "Create account"
+                    isGuestSession ? "Create account and keep my runs" : "Create account"
                   )}
                 </Button>
 
@@ -607,7 +678,7 @@ export function LoginForm({
           </Tabs>
         )}
 
-        {activeTab !== "verify" && activeTab !== "forgot" && (
+        {activeTab !== "verify" && activeTab !== "forgot" && !isGuestSession && (
           <>
             {guestError && (
               <Alert variant="destructive" className="border-destructive/40 bg-destructive/10">

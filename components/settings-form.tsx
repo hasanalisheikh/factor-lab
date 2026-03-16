@@ -512,7 +512,7 @@ function GuestUpgradeForm() {
             </Label>
             <Input
               id="upgrade_password"
-              name="new_password"
+              name="password"
               type="password"
               autoComplete="new-password"
               placeholder="Min 8 chars, 1 uppercase, 1 special"

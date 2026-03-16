@@ -4,6 +4,8 @@ export interface EquityCurvePoint {
   benchmark: number
 }
 
+export const DEFAULT_EQUITY_CHART_MAX_POINTS = 1000
+
 export const dashboardTimeframes = [
   { label: "1W", days: 7 },
   { label: "1M", days: 30 },
@@ -27,22 +29,37 @@ export function getDefaultTimeframe(data: EquityCurvePoint[]): string {
 }
 
 /**
- * Stride-based downsampling that always preserves the first and last point.
- * Applied automatically when the series exceeds maxPoints (default 500).
+ * Deterministic index-based downsampling that spans the full range and always
+ * preserves the final point.
  */
+export function getDownsampleIndices(
+  length: number,
+  maxPoints = DEFAULT_EQUITY_CHART_MAX_POINTS,
+): number[] {
+  if (length <= 0 || maxPoints <= 0) return []
+
+  const k = Math.min(length, maxPoints)
+  if (k === length) {
+    return Array.from({ length }, (_, index) => index)
+  }
+  if (k === 1) {
+    return [length - 1]
+  }
+
+  return Array.from({ length: k }, (_, index) =>
+    Math.round((index * (length - 1)) / (k - 1))
+  )
+}
+
+export function pickByIndices<T>(data: T[], indices: number[]): T[] {
+  return indices.map((index) => data[index]).filter((value): value is T => value != null)
+}
+
 export function downsampleEquityCurve(
   data: EquityCurvePoint[],
-  maxPoints = 500,
+  maxPoints = DEFAULT_EQUITY_CHART_MAX_POINTS,
 ): EquityCurvePoint[] {
-  if (data.length <= maxPoints) return data
-  const stride = Math.ceil(data.length / maxPoints)
-  const result: EquityCurvePoint[] = []
-  for (let i = 0; i < data.length; i++) {
-    if (i === 0 || i === data.length - 1 || i % stride === 0) {
-      result.push(data[i])
-    }
-  }
-  return result
+  return pickByIndices(data, getDownsampleIndices(data.length, maxPoints))
 }
 
 export function sliceEquityCurveByTimeframe(
@@ -115,4 +132,42 @@ export function getAlignedTimeframeEquityCurve(
   timeframe: string,
 ): EquityCurvePoint[] {
   return alignEquityCurveByDate(sliceEquityCurveByTimeframe(data, timeframe))
+}
+
+export type ChartDateLabels = {
+  start: string
+  mid: string
+  end: string
+}
+
+export function getChartDateLabels<T extends { date: string }>(data: T[]): ChartDateLabels {
+  if (data.length === 0) {
+    return { start: "", mid: "", end: "" }
+  }
+
+  const lastIndex = data.length - 1
+  return {
+    start: data[0].date,
+    mid: data[Math.floor(lastIndex / 2)].date,
+    end: data[lastIndex].date,
+  }
+}
+
+export function prepareTimeframeEquityCurve(
+  data: EquityCurvePoint[],
+  timeframe: string,
+  maxPoints = DEFAULT_EQUITY_CHART_MAX_POINTS,
+) {
+  const raw = getAlignedTimeframeEquityCurve(data, timeframe)
+  const plottedIndices = getDownsampleIndices(raw.length, maxPoints)
+  const plotted = pickByIndices(raw, plottedIndices)
+
+  return {
+    raw,
+    plotted,
+    plottedIndices,
+    rawCount: raw.length,
+    plottedCount: plotted.length,
+    dateLabels: getChartDateLabels(plotted),
+  }
 }

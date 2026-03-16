@@ -98,6 +98,35 @@ export async function runScheduledRefresh(
   const currentUpdateMode =
     (currentState as { update_mode?: string } | null)?.update_mode ?? null
 
+  // ── No-op guard (daily only) ──────────────────────────────────────────────
+  // The daily patch must not create ingest jobs when no new complete trading
+  // day is available (weekends, market holidays, or already-current cutoff).
+  //
+  // getLastCompleteTradingDayUtc() always returns the most recent complete
+  // weekday that is at least 1 calendar day in the past — so on Saturday and
+  // Sunday it returns Friday, which the Friday cron already processed.
+  //
+  // If targetCutoffDate <= currentCutoffDate the dataset is already up to date.
+  // Record the check timestamp (for UI "scheduler is alive" indicator) and
+  // return without touching data_ingest_jobs.
+  if (requestMode === "daily" && currentCutoffDate && targetCutoffDate <= currentCutoffDate) {
+    await admin
+      .from("data_state")
+      .update({ last_noop_check_at: new Date().toISOString() })
+      .eq("id", 1)
+    console.log(
+      `[cron:daily] no-op — target=${targetCutoffDate} already <= current=${currentCutoffDate}`
+    )
+    return NextResponse.json({
+      ok: true,
+      skipped: true,
+      reason: "cutoff_already_current",
+      mode: requestMode,
+      targetCutoffDate,
+      currentCutoffDate,
+    })
+  }
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const dataIngestJobs = (admin as any).from("data_ingest_jobs")
 

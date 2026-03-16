@@ -1,5 +1,7 @@
 "use server"
 
+import { revalidatePath } from "next/cache"
+import { redirect } from "next/navigation"
 import { z } from "zod"
 import { createAdminClient } from "@/lib/supabase/admin"
 import {
@@ -17,18 +19,15 @@ import {
 } from "@/lib/supabase/queries"
 import { BENCHMARK_OPTIONS } from "@/lib/benchmark"
 import {
-  buildBenchmarkCoverageStatus,
   buildUniverseCoverageStatus,
   evaluateRunPreflightSnapshot,
   finalizeRunPreflightResult,
-  type MissingnessCoverageRow,
   type RunPreflightIssue,
   type RunPreflightResult,
   type RunPreflightSnapshot,
 } from "@/lib/coverage-check"
 import { UNIVERSE_PRESETS, type UniverseId } from "@/lib/universe-config"
 import { TICKER_INCEPTION_DATES } from "@/lib/supabase/types"
-import { STRATEGY_WARMUP_CALENDAR_DAYS } from "@/lib/strategy-warmup"
 import type { StrategyId } from "@/lib/types"
 
 export type { RunPreflightResult } from "@/lib/coverage-check"
@@ -164,6 +163,8 @@ export type RetryPreflightRepairsResult =
   | ({ ok: true } & RepairBatchResult)
   | { ok: false; error: string }
 
+export type DeleteRunActionResult = { error: string }
+
 type ActiveIngestJobRow = {
   id: string
   symbol: string
@@ -197,9 +198,8 @@ const RANKING_STRATEGIES = new Set<StrategyId>([
 ])
 const TREND_DEFENSIVE_PRIMARY = "TLT"
 const TREND_DEFENSIVE_FALLBACK = "BIL"
-const MOMENTUM_LOOKBACK_CALENDAR_DAYS = STRATEGY_WARMUP_CALENDAR_DAYS.momentum_12_1
-const LOW_VOL_LOOKBACK_CALENDAR_DAYS = STRATEGY_WARMUP_CALENDAR_DAYS.low_vol
-const TREND_BENCHMARK_LOOKBACK_CALENDAR_DAYS = 290
+const REPORTS_BUCKET = process.env.SUPABASE_REPORTS_BUCKET ?? "reports"
+const RUN_DELETE_BLOCKED_STATUSES = new Set(["queued", "running", "waiting_for_data"])
 
 function isMissingBenchmarkColumnError(message?: string): boolean {
   if (!message) return false
@@ -224,6 +224,10 @@ function addCalendarDays(dateStr: string, days: number): string {
   return next.toISOString().slice(0, 10)
 }
 
+function subtractCalendarDays(dateStr: string, days: number): string {
+  return addCalendarDays(dateStr, -days)
+}
+
 function nextDate(dateStr: string): string {
   return addCalendarDays(dateStr, 1)
 }
@@ -244,6 +248,10 @@ function getMinTrainDays(): number {
 
 function getTrainWindowDays(): number {
   return Number(process.env.ML_TRAIN_WINDOW_DAYS ?? "504")
+}
+
+function getTrainWindowCalendarDays(): number {
+  return Math.ceil((getTrainWindowDays() * 365) / 252)
 }
 
 function dayBefore(dateStr: string): string {
@@ -284,13 +292,22 @@ function buildErrorPreflightResult(
           : (constraints.universeEarliestStart ?? constraints.universeValidFrom ?? null),
       maxEndDate,
       missingTickers: constraints.missingTickers,
+      warmupStart: "",
+      requiredStart: "",
+      requiredEnd: maxEndDate,
     },
     coverage: {
       benchmark: {
         status: "blocked",
         reason: message,
+        metricSourceUsed: "db_wide",
         trueMissingRate: 1,
         symbol: "",
+        windowStartUsed: "",
+        windowEndUsed: maxEndDate,
+        expectedDays: 0,
+        actualDays: 0,
+        missingDays: 0,
       },
       universe: {
         status: "blocked",
@@ -300,11 +317,13 @@ function buildErrorPreflightResult(
         affectedShare: 0,
       },
       symbols: [],
+      benchmarkCandidates: [],
     },
+    warmupStart: "",
     requiredStart: "",
     requiredEnd: maxEndDate,
     issues: [{
-      severity: "block",
+      severity: "blocked",
       code: "config_error",
       reason: message,
       fix: "Update the run settings, then try again.",
@@ -636,7 +655,7 @@ function buildRepairIssue(params: {
   const names = formatSymbolList(symbols)
   if (failedSymbols.length > 0) {
     return {
-      severity: "block",
+      severity: "blocked",
       code,
       reason: `${reasonPrefix} for ${formatSymbolList(failedSymbols)}. We couldn't start that repair automatically.`,
       fix: retryLabel,
@@ -649,7 +668,7 @@ function buildRepairIssue(params: {
   }
 
   return {
-    severity: "block",
+    severity: "blocked",
     code,
     reason: `${reasonPrefix} for ${names}. We're downloading it now—this run will be available to start when data is ready.`,
     fix: waitingFix,
@@ -664,7 +683,7 @@ function buildDateIssues(snapshot: RunPreflightSnapshot, input: z.infer<typeof r
       .filter((row) => !row.isBenchmark && row.firstDate === snapshot.constraints.minStartDate)
       .sort((left, right) => left.symbol.localeCompare(right.symbol))[0]
     issues.push({
-      severity: "block",
+      severity: "blocked",
       code: "start_before_universe_min",
       reason: limitingUniverseRow
         ? `This universe can't start before ${snapshot.constraints.minStartDate} because ${limitingUniverseRow.symbol} did not exist yet.`
@@ -679,7 +698,7 @@ function buildDateIssues(snapshot: RunPreflightSnapshot, input: z.infer<typeof r
   }
   if (input.end_date > snapshot.constraints.maxEndDate) {
     issues.push({
-      severity: "block",
+      severity: "blocked",
       code: "end_after_cutoff",
       reason: `Your end date is after the current dataset cutoff (${snapshot.constraints.maxEndDate}).`,
       fix: `Choose ${snapshot.constraints.maxEndDate} or an earlier end date.`,
@@ -693,112 +712,6 @@ function buildDateIssues(snapshot: RunPreflightSnapshot, input: z.infer<typeof r
   return issues
 }
 
-function getStrategyEarliestStart(params: {
-  strategyId: StrategyId
-  universeRows: MissingnessCoverageRow[]
-  benchmarkRow: MissingnessCoverageRow | undefined
-}): { earliestStart: string | null; symbol: string | null; reason: string } {
-  const { strategyId, universeRows, benchmarkRow } = params
-  const validUniverseRows = universeRows.filter((row) => row.firstDate)
-
-  if (strategyId === "equal_weight" || validUniverseRows.length === 0) {
-    return { earliestStart: null, symbol: null, reason: "" }
-  }
-
-  if (strategyId === "momentum_12_1") {
-    const limiting = validUniverseRows.reduce((latest, row) =>
-      !latest || (row.firstDate ?? "") > (latest.firstDate ?? "") ? row : latest, null as MissingnessCoverageRow | null)
-    return limiting?.firstDate
-      ? {
-        earliestStart: addCalendarDays(limiting.firstDate, MOMENTUM_LOOKBACK_CALENDAR_DAYS),
-        symbol: limiting.symbol,
-        reason: `${limiting.symbol} needs about 12 months of history plus the skip month rule before Momentum 12-1 can trade.`,
-      }
-      : { earliestStart: null, symbol: null, reason: "" }
-  }
-
-  if (strategyId === "low_vol") {
-    const limiting = validUniverseRows.reduce((latest, row) =>
-      !latest || (row.firstDate ?? "") > (latest.firstDate ?? "") ? row : latest, null as MissingnessCoverageRow | null)
-    return limiting?.firstDate
-      ? {
-        earliestStart: addCalendarDays(limiting.firstDate, LOW_VOL_LOOKBACK_CALENDAR_DAYS),
-        symbol: limiting.symbol,
-        reason: `${limiting.symbol} needs about 60 trading days of history before Low Volatility can rank it.`,
-      }
-      : { earliestStart: null, symbol: null, reason: "" }
-  }
-
-  if (strategyId === "trend_filter") {
-    const universeLimiting = validUniverseRows.reduce((latest, row) =>
-      !latest || (row.firstDate ?? "") > (latest.firstDate ?? "") ? row : latest, null as MissingnessCoverageRow | null)
-    const universeEarliest = universeLimiting?.firstDate
-      ? addCalendarDays(universeLimiting.firstDate, MOMENTUM_LOOKBACK_CALENDAR_DAYS)
-      : null
-    const benchmarkEarliest = benchmarkRow?.firstDate
-      ? addCalendarDays(benchmarkRow.firstDate, TREND_BENCHMARK_LOOKBACK_CALENDAR_DAYS)
-      : null
-    if (universeEarliest && (!benchmarkEarliest || universeEarliest >= benchmarkEarliest)) {
-      return {
-        earliestStart: universeEarliest,
-        symbol: universeLimiting?.symbol ?? null,
-        reason: `${universeLimiting?.symbol ?? "This universe"} needs momentum lookback history before Trend Filter can make its first risk-on selection.`,
-      }
-    }
-    if (benchmarkEarliest) {
-      return {
-        earliestStart: benchmarkEarliest,
-        symbol: benchmarkRow?.symbol ?? null,
-        reason: `${benchmarkRow?.symbol ?? "The benchmark"} needs a 200-day SMA warmup before Trend Filter can evaluate the regime signal.`,
-      }
-    }
-    return { earliestStart: null, symbol: null, reason: "" }
-  }
-
-  if (ML_STRATEGIES.has(strategyId)) {
-    const limiting = validUniverseRows.reduce((latest, row) =>
-      !latest || (row.firstDate ?? "") > (latest.firstDate ?? "") ? row : latest, null as MissingnessCoverageRow | null)
-    return limiting?.firstDate
-      ? {
-        earliestStart: addCalendarDays(limiting.firstDate, STRATEGY_WARMUP_CALENDAR_DAYS[strategyId]),
-        symbol: limiting.symbol,
-        reason: `${limiting.symbol} does not have enough pre-start history for ML feature generation and training.`,
-      }
-      : { earliestStart: null, symbol: null, reason: "" }
-  }
-
-  return { earliestStart: null, symbol: null, reason: "" }
-}
-
-function buildStrategyWarmupIssues(params: {
-  input: z.infer<typeof runConfigSchema>
-  snapshot: RunPreflightSnapshot
-}): RunPreflightIssue[] {
-  const { input, snapshot } = params
-  const benchmarkRow = snapshot.coverage.symbols.find((row) => row.isBenchmark)
-  const universeRows = snapshot.coverage.symbols.filter((row) => !row.isBenchmark)
-  const strategyStart = getStrategyEarliestStart({
-    strategyId: input.strategy_id,
-    universeRows,
-    benchmarkRow,
-  })
-  if (!strategyStart.earliestStart || input.start_date >= strategyStart.earliestStart) {
-    return []
-  }
-
-  return [{
-    severity: "block",
-    code: "strategy_warmup_insufficient",
-    reason: `This ${input.strategy_id === "trend_filter" ? "strategy" : "run"} can't start before ${strategyStart.earliestStart} because ${strategyStart.reason}`,
-    fix: `Choose ${strategyStart.earliestStart} or a later start date.`,
-    action: {
-      kind: "clamp_start_date",
-      value: strategyStart.earliestStart,
-      label: "Use strategy-ready start",
-    },
-  }]
-}
-
 function buildTopNIssues(params: {
   input: z.infer<typeof runConfigSchema>
   universeSize: number
@@ -807,14 +720,14 @@ function buildTopNIssues(params: {
   if (!RANKING_STRATEGIES.has(input.strategy_id)) return []
   if (input.top_n <= universeSize) return []
   return [{
-    severity: "block",
+    severity: "blocked",
     code: "top_n_above_universe_size",
     reason: `Top N is ${input.top_n}, but ${input.universe} only has ${universeSize} assets available for this strategy.`,
     fix: `Reduce Top N to ${universeSize} or lower.`,
     action: {
-      kind: "set_top_n",
+      kind: "reduce_top_n",
       value: universeSize,
-      label: `Set Top N to ${universeSize}`,
+      label: `Reduce Top N to ${universeSize}`,
     },
   }]
 }
@@ -833,12 +746,13 @@ function buildMlIssues(params: {
 
   const minTrainDays = getMinTrainDays()
   const trainWindowDays = getTrainWindowDays()
+  const trainWindowCalendarDays = getTrainWindowCalendarDays()
   const featureLookbackDays = 252
   const benchmarkFeatureLookbackDays = 60
   const lastTrainDate = dayBefore(input.start_date)
   if (lastTrainDate < benchmarkFirstDate) {
     return [{
-      severity: "block",
+      severity: "blocked",
       code: "ml_insufficient_training_history",
       reason: "This ML strategy needs more training history before the selected start date.",
       fix: "Pick a later start date, a smaller Top N, or a universe with longer history.",
@@ -846,8 +760,12 @@ function buildMlIssues(params: {
     }]
   }
 
-  const benchmarkReadyDate = addCalendarDays(benchmarkFirstDate, benchmarkFeatureLookbackDays)
-  const trainDays = benchmarkReadyDate <= lastTrainDate
+  const trainWindowStart = subtractCalendarDays(lastTrainDate, trainWindowCalendarDays)
+  const benchmarkReadyDate = pickLaterDate(
+    trainWindowStart,
+    addCalendarDays(benchmarkFirstDate, benchmarkFeatureLookbackDays),
+  )
+  const trainDays = benchmarkReadyDate && benchmarkReadyDate <= lastTrainDate
     ? countBusinessDays(benchmarkReadyDate, lastTrainDate)
     : 0
 
@@ -870,29 +788,29 @@ function buildMlIssues(params: {
 
   if (investableCount < input.top_n && investableCount > 0) {
     issues.push({
-      severity: "block",
+      severity: "blocked",
       code: "top_n_above_investable_count",
       reason: `Top N is ${input.top_n}, but only ${investableCount} symbols have enough ML training history on this start date.`,
       fix: `Reduce Top N to ${investableCount} or choose a later start date.`,
       action: {
-        kind: "set_top_n",
+        kind: "reduce_top_n",
         value: investableCount,
-        label: `Set Top N to ${investableCount}`,
+        label: `Reduce Top N to ${investableCount}`,
       },
     })
   }
 
   if (investableCount === 0 || trainDays < minTrainDays || trainRows < requiredRows || avgSymbolsPerDay < Math.max(input.top_n, 2)) {
     issues.push({
-      severity: "block",
+      severity: "blocked",
       code: "ml_insufficient_training_history",
       reason: `This ML strategy needs more training history. We found ${trainDays} train days, ${trainRows} train rows, and ${avgSymbolsPerDay.toFixed(1)} symbols per day.`,
       fix: `Pick a later start date or reduce Top N. Current requirements are at least ${minTrainDays} train days, ${requiredRows} train rows, and ${Math.max(input.top_n, 2)} symbols per day.`,
       action: investableCount > 0 && investableCount < input.top_n
         ? {
-          kind: "set_top_n",
+          kind: "reduce_top_n",
           value: investableCount,
-          label: `Set Top N to ${investableCount}`,
+          label: `Reduce Top N to ${investableCount}`,
         }
         : null,
     })
@@ -900,7 +818,7 @@ function buildMlIssues(params: {
 
   if (trainWindowDays > 0 && trainDays < trainWindowDays) {
     issues.push({
-      severity: "warn",
+      severity: "warning",
       code: "ml_training_window_short",
       reason: `This ML run has ${trainDays} pre-start train days, which is shorter than the configured ${trainWindowDays}-day rolling window.`,
       fix: "You can continue, but the model will begin with a smaller-than-configured training window.",
@@ -1039,6 +957,25 @@ function getRepairableBenchmarkSymbol(snapshot: RunPreflightSnapshot): string | 
   return null
 }
 
+function getStatusRank(status: "ok" | "warn" | "block"): number {
+  if (status === "ok") return 0
+  if (status === "warn") return 1
+  return 2
+}
+
+function pickBenchmarkSuggestion(params: {
+  snapshot: RunPreflightSnapshot
+  currentBenchmark: string
+  currentStatus: "ok" | "warn" | "block"
+}): string | null {
+  const { snapshot, currentBenchmark, currentStatus } = params
+  const currentRank = getStatusRank(currentStatus)
+  const suggestion = snapshot.coverage.benchmarkCandidates.find((candidate) =>
+    candidate.symbol !== currentBenchmark && getStatusRank(candidate.status) < currentRank
+  )
+  return suggestion?.symbol ?? null
+}
+
 function buildCoverageIssues(params: {
   input: z.infer<typeof runConfigSchema>
   snapshot: RunPreflightSnapshot
@@ -1052,44 +989,84 @@ function buildCoverageIssues(params: {
     (row) => !row.isBenchmark && !repairableUniverseSymbols.has(row.symbol)
   )
   const benchmarkCoverage = repairableBenchmarkSymbol
-    ? { status: "good", reason: null }
-    : buildBenchmarkCoverageStatus(input.benchmark, benchmarkRow)
+    ? {
+      status: "good",
+      reason: null,
+      metricSourceUsed: snapshot.coverage.benchmark.metricSourceUsed,
+      trueMissingRate: 0,
+      symbol: input.benchmark,
+      windowStartUsed: benchmarkRow?.windowStart ?? snapshot.coverage.benchmark.windowStartUsed,
+      windowEndUsed: snapshot.coverage.benchmark.windowEndUsed,
+      expectedDays: benchmarkRow?.expectedDays ?? 0,
+      actualDays: benchmarkRow?.actualDays ?? 0,
+      missingDays: benchmarkRow?.trueMissingDays ?? 0,
+    }
+    : snapshot.coverage.benchmark
   const universeCoverage = buildUniverseCoverageStatus({
     strategyId: input.strategy_id,
     universeRows,
   })
+  const combinedStatus: "ok" | "warn" | "block" =
+    benchmarkCoverage.status === "blocked" || universeCoverage.status === "blocked"
+      ? "block"
+      : benchmarkCoverage.status === "warning" || universeCoverage.status === "warning"
+        ? "warn"
+        : "ok"
+  const benchmarkSuggestion = pickBenchmarkSuggestion({
+    snapshot,
+    currentBenchmark: input.benchmark,
+    currentStatus: combinedStatus,
+  })
 
   if (benchmarkCoverage.status === "blocked" && benchmarkCoverage.reason) {
     issues.push({
-      severity: "block",
+      severity: "blocked",
       code: "benchmark_missingness_blocked",
       reason: benchmarkCoverage.reason,
-      fix: `Pick an earlier end date or choose another benchmark instead of ${input.benchmark}.`,
-      action: null,
+      fix: benchmarkSuggestion
+        ? `Choose ${benchmarkSuggestion} instead of ${input.benchmark}, or pick an earlier end date.`
+        : `Pick an earlier end date or choose another benchmark instead of ${input.benchmark}.`,
+      action: benchmarkSuggestion
+        ? {
+          kind: "change_benchmark",
+          value: benchmarkSuggestion,
+          label: `Use ${benchmarkSuggestion}`,
+        }
+        : null,
     })
   } else if (benchmarkCoverage.status === "warning" && benchmarkCoverage.reason) {
     issues.push({
-      severity: "warn",
+      severity: "warning",
       code: "benchmark_missingness_warning",
       reason: benchmarkCoverage.reason,
-      fix: `You can continue, but comparisons versus ${input.benchmark} may be noisy.`,
+      fix: benchmarkSuggestion
+        ? `You can continue, but comparisons versus ${input.benchmark} may be noisy. ${benchmarkSuggestion} is a cleaner alternative for this window.`
+        : `You can continue, but comparisons versus ${input.benchmark} may be noisy.`,
       action: null,
     })
   }
 
   if (universeCoverage.status === "blocked" && universeCoverage.reason) {
     issues.push({
-      severity: "block",
+      severity: "blocked",
       code: universeCoverage.over10Percent.length > 0
         ? "universe_missingness_per_ticker_blocked"
         : "universe_missingness_share_blocked",
       reason: universeCoverage.reason,
-      fix: "Choose a later start date, an earlier end date, or a different universe.",
-      action: null,
+      fix: benchmarkSuggestion
+        ? `Choose ${benchmarkSuggestion}, a later start date, an earlier end date, or a different universe.`
+        : "Choose a later start date, an earlier end date, or a different universe.",
+      action: benchmarkSuggestion
+        ? {
+          kind: "change_benchmark",
+          value: benchmarkSuggestion,
+          label: `Use ${benchmarkSuggestion}`,
+        }
+        : null,
     })
   } else if (universeCoverage.status === "warning" && universeCoverage.reason) {
     issues.push({
-      severity: "warn",
+      severity: "warning",
       code: "universe_missingness_warning",
       reason: universeCoverage.reason,
       fix: "You can continue, but this missingness may affect rankings and risk estimates.",
@@ -1108,8 +1085,12 @@ function buildPersistedPreflightSnapshot(preflight: RunPreflightResult, acknowle
     min_start_date: preflight.constraints.minStartDate,
     max_end_date: preflight.constraints.maxEndDate,
     missing_tickers: preflight.constraints.missingTickers,
+    warmup_start: preflight.warmupStart,
+    required_start: preflight.requiredStart,
+    required_end: preflight.requiredEnd,
     benchmark_coverage_health: preflight.coverage.benchmark,
     universe_missingness_summary: preflight.coverage.universe,
+    benchmark_candidates: preflight.coverage.benchmarkCandidates,
     issues: preflight.issues,
     reasons: preflight.reasons,
     warnings_acknowledged: acknowledged,
@@ -1152,11 +1133,6 @@ async function preflightRunInternal(
     missingTickers: constraints.missingTickers,
   })
 
-  const warmupIssues = buildStrategyWarmupIssues({
-    input: parsed.data,
-    snapshot,
-  })
-
   const issues = dedupeIssues([
     ...buildDateIssues(snapshot, parsed.data),
     ...(await buildRepairIssues({
@@ -1168,20 +1144,20 @@ async function preflightRunInternal(
       input: parsed.data,
       snapshot,
     }),
-    ...warmupIssues,
     ...buildTopNIssues({
       input: parsed.data,
       universeSize: resolveUniverseSymbols(parsed.data.universe as UniverseId).length,
     }),
-    ...(warmupIssues.length === 0 ? buildMlIssues({
+    ...buildMlIssues({
       input: parsed.data,
       snapshot,
-    }) : []),
+    }),
   ])
 
   return finalizeRunPreflightResult({
     constraints: snapshot.constraints,
     coverage: snapshot.coverage,
+    warmupStart: snapshot.warmupStart,
     requiredStart: snapshot.requiredStart,
     requiredEnd: snapshot.requiredEnd,
     issues,
@@ -1363,16 +1339,16 @@ export async function createRun(
     run_params: runParams,
   }
 
-  const admin = createAdminClient()
+  const serverClient = await createClient()
 
-  let { data: run, error: runError } = await admin
+  let { data: run, error: runError } = await serverClient
     .from("runs")
     .insert({ ...basePayload, status: "queued", benchmark })
     .select("id")
     .single()
 
   if (runError && isMissingBenchmarkColumnError(runError.message)) {
-    const fallback = await admin
+    const fallback = await serverClient
       .from("runs")
       .insert({ ...basePayload, status: "queued" })
       .select("id")
@@ -1386,7 +1362,7 @@ export async function createRun(
     return { ok: false, error: "Failed to create run. Check server env + database config.", preflight }
   }
 
-  const { error: jobError } = await admin.from("jobs").insert({
+  const { error: jobError } = await serverClient.from("jobs").insert({
     run_id: run.id,
     name,
     status: "queued",
@@ -1396,10 +1372,95 @@ export async function createRun(
 
   if (jobError) {
     console.error("createRun job insert error:", jobError.message)
-    await admin.from("runs").delete().eq("id", run.id)
+    await serverClient.from("runs").delete().eq("id", run.id)
     return { ok: false, error: "Failed to queue run for processing. Please try again.", preflight }
   }
 
   triggerWorker()
   return { ok: true, runId: run.id, preflight }
+}
+
+export async function deleteRunAction(runId: string): Promise<DeleteRunActionResult | never> {
+  const parsedRunId = z.string().uuid().safeParse(runId)
+  if (!parsedRunId.success) {
+    return { error: "Invalid run ID." }
+  }
+
+  const serverClient = await createClient()
+  const { data: { user }, error: userError } = await serverClient.auth.getUser()
+  if (userError || !user) {
+    return { error: "Authentication required. Please sign in." }
+  }
+
+  const { data: run, error: runError } = await serverClient
+    .from("runs")
+    .select("id, status, user_id")
+    .eq("id", parsedRunId.data)
+    .maybeSingle()
+
+  if (runError) {
+    console.error("deleteRunAction run lookup error:", runError.message)
+    return { error: "Unable to load this run right now." }
+  }
+
+  if (!run || run.user_id !== user.id) {
+    return { error: "You can only delete your own runs." }
+  }
+
+  if (RUN_DELETE_BLOCKED_STATUSES.has(run.status)) {
+    return { error: "Delete is disabled while this run is queued, running, or waiting for data." }
+  }
+
+  const admin = createAdminClient()
+  const { data: reportRow, error: reportError } = await admin
+    .from("reports")
+    .select("storage_path")
+    .eq("run_id", parsedRunId.data)
+    .maybeSingle()
+
+  if (reportError) {
+    console.error("deleteRunAction report lookup error:", reportError.message)
+    return { error: "Unable to clean up this run's report." }
+  }
+
+  if (reportRow?.storage_path) {
+    const { error: storageError } = await admin.storage
+      .from(REPORTS_BUCKET)
+      .remove([reportRow.storage_path])
+
+    if (storageError) {
+      const message = storageError.message.toLowerCase()
+      const isMissingObject = message.includes("not found") || message.includes("does not exist")
+      if (!isMissingObject) {
+        console.error("deleteRunAction storage cleanup error:", storageError.message)
+        return { error: "Unable to delete the stored report for this run." }
+      }
+    }
+  }
+
+  // data_ingest_jobs links use ON DELETE SET NULL, so delete them explicitly
+  // before removing the run to avoid leaving orphaned preflight jobs behind.
+  const { error: ingestDeleteError } = await admin
+    .from("data_ingest_jobs")
+    .delete()
+    .eq("requested_by_run_id", parsedRunId.data)
+
+  if (ingestDeleteError && !ingestDeleteError.message.toLowerCase().includes("could not find the table")) {
+    console.error("deleteRunAction data_ingest_jobs cleanup error:", ingestDeleteError.message)
+    return { error: "Unable to delete linked ingest jobs for this run." }
+  }
+
+  const { error: deleteError } = await serverClient
+    .from("runs")
+    .delete()
+    .eq("id", parsedRunId.data)
+
+  if (deleteError) {
+    console.error("deleteRunAction run delete error:", deleteError.message)
+    return { error: "Unable to delete this run right now." }
+  }
+
+  revalidatePath("/runs")
+  revalidatePath("/dashboard")
+  redirect("/runs?deleted=1")
 }

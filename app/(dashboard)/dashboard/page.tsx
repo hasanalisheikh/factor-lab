@@ -14,7 +14,7 @@ import {
 } from "@/lib/supabase/queries"
 import { getRunBenchmark } from "@/lib/benchmark"
 
-export const revalidate = 30
+export const dynamic = "force-dynamic"
 
 function getMetrics(value: RunMetricsRow[] | RunMetricsRow | null): RunMetricsRow | null {
   if (Array.isArray(value)) return value[0] ?? null

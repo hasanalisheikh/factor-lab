@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import {
   buildRunPreflightResult,
+  computeBenchmarkCoverage,
   type MissingnessCoverageRow,
   type RunPreflightConstraints,
 } from "@/lib/coverage-check"
@@ -13,6 +14,9 @@ function makeConstraints(overrides: Partial<RunPreflightConstraints> = {}): RunP
     minStartDate: "2014-04-03",
     maxEndDate: "2026-03-12",
     missingTickers: [],
+    warmupStart: "2014-01-01",
+    requiredStart: "2014-04-03",
+    requiredEnd: "2026-03-12",
     ...overrides,
   }
 }
@@ -25,6 +29,8 @@ function makeUniverseRows(
     symbol: `T${index}`,
     isBenchmark: false,
     firstDate: "2014-04-03",
+    lastDate: "2026-03-12",
+    windowStart: "2014-04-03",
     expectedDays: 100,
     actualDays: 100,
     trueMissingDays: 0,
@@ -34,6 +40,30 @@ function makeUniverseRows(
 }
 
 describe("buildRunPreflightResult", () => {
+  it("computes zero benchmark missingness when expected and actual benchmark dates match", () => {
+    const result = computeBenchmarkCoverage({
+      benchmarkTicker: "SPY",
+      windowStart: "2021-01-04",
+      windowEnd: "2021-01-08",
+      cutoffDate: "2021-01-08",
+      stats: {
+        firstDate: "1993-01-29",
+        lastDate: "2026-03-12",
+      },
+      benchmarkDates: ["2021-01-04", "2021-01-05", "2021-01-06", "2021-01-07", "2021-01-08"],
+    })
+
+    expect(result).toMatchObject({
+      windowStartUsed: "2021-01-04",
+      windowEndUsed: "2021-01-08",
+      expectedDays: 5,
+      actualDays: 5,
+      missingDays: 0,
+      trueMissingRate: 0,
+      status: "good",
+    })
+  })
+
   it("blocks when the start date is before the minimum start date", () => {
     const result = buildRunPreflightResult({
       strategyId: "equal_weight",
@@ -46,6 +76,8 @@ describe("buildRunPreflightResult", () => {
           symbol: "SPY",
           isBenchmark: true,
           firstDate: "1993-01-29",
+          lastDate: "2026-03-12",
+          windowStart: "2014-01-01",
           expectedDays: 100,
           actualDays: 100,
           trueMissingDays: 0,
@@ -73,6 +105,8 @@ describe("buildRunPreflightResult", () => {
           symbol: "SPY",
           isBenchmark: true,
           firstDate: "1993-01-29",
+          lastDate: "2026-03-12",
+          windowStart: "2014-01-01",
           expectedDays: 100,
           actualDays: 100,
           trueMissingDays: 0,
@@ -101,6 +135,8 @@ describe("buildRunPreflightResult", () => {
           symbol: "SPY",
           isBenchmark: true,
           firstDate: "1993-01-29",
+          lastDate: "2026-03-12",
+          windowStart: "2014-01-01",
           expectedDays: 100,
           actualDays: 100,
           trueMissingDays: 0,
@@ -129,6 +165,8 @@ describe("buildRunPreflightResult", () => {
           symbol: "SPY",
           isBenchmark: true,
           firstDate: "1993-01-29",
+          lastDate: "2026-03-12",
+          windowStart: "2014-01-01",
           expectedDays: 100,
           actualDays: 100,
           trueMissingDays: 0,
@@ -142,5 +180,47 @@ describe("buildRunPreflightResult", () => {
 
     expect(result.status).toBe("block")
     expect(result.coverage.universe.over10Percent).toEqual(["T0"])
+  })
+
+  it("warns when benchmark true missingness is between 3% and 5%", () => {
+    const result = buildRunPreflightResult({
+      strategyId: "equal_weight",
+      startDate: "2021-01-04",
+      endDate: "2026-03-01",
+      benchmark: "SPY",
+      constraints: makeConstraints({
+        warmupStart: "2021-01-04",
+        requiredStart: "2021-01-04",
+        requiredEnd: "2026-03-01",
+      }),
+      symbolRows: [
+        {
+          symbol: "SPY",
+          isBenchmark: true,
+          firstDate: "1993-01-29",
+          lastDate: "2026-03-01",
+          windowStart: "2021-01-04",
+          expectedDays: 100,
+          actualDays: 96,
+          trueMissingDays: 4,
+          trueMissingRate: 0.04,
+        },
+        ...makeUniverseRows(8),
+      ],
+    })
+
+    expect(result.status).toBe("warn")
+    expect(result.coverage.benchmark.status).toBe("warning")
+    expect(result.reasons[0]).toContain("4.0%")
+    expect(result.reasons[0]).toContain("2021-01-04 -> 2026-03-01")
+    expect(result.coverage.benchmark).toMatchObject({
+      metricSourceUsed: "run_window",
+      windowStartUsed: "2021-01-04",
+      windowEndUsed: "2026-03-01",
+      expectedDays: 100,
+      actualDays: 96,
+      missingDays: 4,
+      trueMissingRate: 0.04,
+    })
   })
 })

@@ -1,0 +1,12 @@
+node_modules/
+dist/
+playwright-report/
+artifacts/results/*.json
+artifacts/results/*.csv
+artifacts/results/*.md
+artifacts/results/.auth.json
+artifacts/screenshots/*.png
+artifacts/reports/*.html
+!artifacts/screenshots/.gitkeep
+!artifacts/reports/.gitkeep
+!artifacts/results/.gitkeep

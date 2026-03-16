@@ -20,6 +20,8 @@ UPDATE public.data_ingest_jobs
 SET deferred_to_monthly = FALSE
 WHERE deferred_to_monthly IS NULL;
 
+DROP FUNCTION IF EXISTS public.get_latest_data_ingest_jobs(TEXT[]);
+
 CREATE OR REPLACE FUNCTION public.get_latest_data_ingest_jobs(p_symbols TEXT[])
 RETURNS TABLE (
   id                  UUID,

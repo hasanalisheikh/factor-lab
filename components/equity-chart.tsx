@@ -13,9 +13,8 @@ import { Area, AreaChart, CartesianGrid, XAxis, YAxis } from "recharts"
 import { cn } from "@/lib/utils"
 import {
   dashboardTimeframes as timeframes,
-  getAlignedTimeframeEquityCurve,
   getDefaultTimeframe,
-  downsampleEquityCurve,
+  prepareTimeframeEquityCurve,
 } from "@/lib/equity-curve"
 
 interface EquityPoint {
@@ -58,25 +57,15 @@ export function EquityChart({
     }
   }
 
-  const chartData = useMemo(() => {
-    const aligned = getAlignedTimeframeEquityCurve(data, selectedTf)
-    return downsampleEquityCurve(aligned)
+  const chartState = useMemo(() => {
+    return prepareTimeframeEquityCurve(data, selectedTf)
   }, [selectedTf, data])
-
-  // Use "MMM 'YY" when the visible span exceeds one year, "MMM DD" otherwise.
-  const xTickFormatter = useMemo(() => {
-    if (chartData.length < 2) return (v: string) => v
-    const spanDays =
-      (new Date(`${chartData[chartData.length - 1].date}T00:00:00Z`).getTime() -
-        new Date(`${chartData[0].date}T00:00:00Z`).getTime()) /
-      86400000
-    if (spanDays > 365) {
-      return (v: string) =>
-        new Date(v + "T00:00:00Z").toLocaleDateString("en-US", { month: "short", year: "2-digit", timeZone: "UTC" })
-    }
-    return (v: string) =>
-      new Date(v + "T00:00:00Z").toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" })
-  }, [chartData])
+  const chartData = chartState.plotted
+  const equityDomain = useMemo(() => {
+    const values = chartState.raw.flatMap((point) => [point.portfolio, point.benchmark])
+    if (values.length === 0) return undefined
+    return [Math.min(...values), Math.max(...values)] as [number, number]
+  }, [chartState.raw])
 
   return (
     <Card className="bg-card border-border min-w-0 overflow-hidden">
@@ -123,71 +112,74 @@ export function EquityChart({
             No equity data available
           </div>
         ) : (
-          <ChartContainer config={chartConfig} className="h-[280px] lg:h-[320px] w-full min-w-0">
-            <AreaChart data={chartData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
-              <defs>
-                <linearGradient id="eqPortfolio" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="var(--color-chart-1)" stopOpacity={0.25} />
-                  <stop offset="95%" stopColor="var(--color-chart-1)" stopOpacity={0} />
-                </linearGradient>
-                <linearGradient id="eqBenchmark" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="var(--color-chart-5)" stopOpacity={0.08} />
-                  <stop offset="95%" stopColor="var(--color-chart-5)" stopOpacity={0} />
-                </linearGradient>
-              </defs>
-              <CartesianGrid strokeDasharray="3 3" className="stroke-border/20" vertical={false} />
-              <XAxis
-                dataKey="date"
-                tickLine={false}
-                axisLine={false}
-                tickMargin={8}
-                tickFormatter={xTickFormatter}
-                interval="preserveStartEnd"
-                className="text-[10px]"
-                stroke="var(--color-muted-foreground)"
-                opacity={0.5}
-              />
-              <YAxis
-                tickLine={false}
-                axisLine={false}
-                tickMargin={8}
-                tickFormatter={(v) => `$${(v / 1000).toFixed(1)}k`}
-                className="text-[10px]"
-                stroke="var(--color-muted-foreground)"
-                opacity={0.5}
-              />
-              <ChartTooltip
-                content={
-                  <ChartTooltipContent
-                    labelFormatter={(value) =>
-                      new Date(value).toLocaleDateString("en-US", {
-                        month: "long",
-                        day: "numeric",
-                        year: "numeric",
-                      })
-                    }
-                    formatter={(value) => [`$${Number(value).toLocaleString()}`, ""]}
-                  />
-                }
-              />
-              <Area
-                dataKey="benchmark"
-                type="monotone"
-                fill="url(#eqBenchmark)"
-                stroke="var(--color-chart-5)"
-                strokeWidth={1.2}
-                dot={false}
-              />
-              <Area
-                dataKey="portfolio"
-                type="monotone"
-                fill="url(#eqPortfolio)"
-                stroke="var(--color-chart-1)"
-                strokeWidth={1.8}
-                dot={false}
-              />
-            </AreaChart>
-          </ChartContainer>
+          <>
+            <ChartContainer config={chartConfig} className="h-[280px] lg:h-[320px] w-full min-w-0">
+              <AreaChart data={chartData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+                <defs>
+                  <linearGradient id="eqPortfolio" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="var(--color-chart-1)" stopOpacity={0.25} />
+                    <stop offset="95%" stopColor="var(--color-chart-1)" stopOpacity={0} />
+                  </linearGradient>
+                  <linearGradient id="eqBenchmark" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="var(--color-chart-5)" stopOpacity={0.08} />
+                    <stop offset="95%" stopColor="var(--color-chart-5)" stopOpacity={0} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" className="stroke-border/20" vertical={false} />
+                <XAxis
+                  dataKey="date"
+                  tick={false}
+                  tickLine={false}
+                  axisLine={false}
+                />
+                <YAxis
+                  tickLine={false}
+                  axisLine={false}
+                  tickMargin={8}
+                  tickFormatter={(v) => `$${(v / 1000).toFixed(1)}k`}
+                  domain={equityDomain}
+                  className="text-[10px]"
+                  stroke="var(--color-muted-foreground)"
+                  opacity={0.5}
+                />
+                <ChartTooltip
+                  content={
+                    <ChartTooltipContent
+                      labelFormatter={(value) =>
+                        new Date(value).toLocaleDateString("en-US", {
+                          month: "long",
+                          day: "numeric",
+                          year: "numeric",
+                        })
+                      }
+                      formatter={(value) => [`$${Number(value).toLocaleString()}`, ""]}
+                    />
+                  }
+                />
+                <Area
+                  dataKey="benchmark"
+                  type="monotone"
+                  fill="url(#eqBenchmark)"
+                  stroke="var(--color-chart-5)"
+                  strokeWidth={1.2}
+                  dot={false}
+                />
+                <Area
+                  dataKey="portfolio"
+                  type="monotone"
+                  fill="url(#eqPortfolio)"
+                  stroke="var(--color-chart-1)"
+                  strokeWidth={1.8}
+                  dot={false}
+                />
+              </AreaChart>
+            </ChartContainer>
+            <div className="flex items-center justify-between px-4 pt-1 text-[10px] font-mono text-muted-foreground">
+              <span data-testid="chart-start-date">{chartState.dateLabels.start}</span>
+              <span>{chartState.dateLabels.mid}</span>
+              <span data-testid="chart-end-date">{chartState.dateLabels.end}</span>
+            </div>
+          </>
         )}
       </CardContent>
     </Card>

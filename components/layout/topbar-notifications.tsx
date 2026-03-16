@@ -57,11 +57,32 @@ function relativeTime(iso: string): string {
 export function TopbarNotifications() {
   const [open, setOpen] = useState(false)
   const [items, setItems] = useState<NotifItem[]>([])
-  const [lastSeen, setLastSeen] = useState<string>(
-    () => (typeof window !== "undefined" ? (localStorage.getItem(LS_KEY) ?? "") : "")
-  )
+  const [storageKey, setStorageKey] = useState<string>(LS_KEY)
+  const [lastSeen, setLastSeen] = useState<string>("")
   const [loading, setLoading] = useState(false)
   const router = useRouter()
+
+  useEffect(() => {
+    let cancelled = false
+    const supabase = createClient()
+
+    supabase.auth.getUser()
+      .then(({ data }) => {
+        if (cancelled) return
+        const nextKey = data.user?.id ? `${LS_KEY}:${data.user.id}` : LS_KEY
+        setStorageKey(nextKey)
+        setLastSeen(typeof window !== "undefined" ? (localStorage.getItem(nextKey) ?? "") : "")
+      })
+      .catch(() => {
+        if (cancelled) return
+        setStorageKey(LS_KEY)
+        setLastSeen(typeof window !== "undefined" ? (localStorage.getItem(LS_KEY) ?? "") : "")
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   // Fetch notifications whenever popover opens
   useEffect(() => {
@@ -118,7 +139,7 @@ export function TopbarNotifications() {
 
   function markAllRead() {
     const now = new Date().toISOString()
-    localStorage.setItem(LS_KEY, now)
+    localStorage.setItem(storageKey, now)
     setLastSeen(now)
   }
 

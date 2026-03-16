@@ -5,6 +5,7 @@ import { redirect } from "next/navigation"
 import { createAdminClient } from "@/lib/supabase/admin"
 import { createClient } from "@/lib/supabase/server"
 import {
+  fetchAllEquityCurve,
   getBenchmarkOverlapStateForRun,
   type EquityCurveRow,
   type RunMetricsRow,
@@ -29,39 +30,22 @@ export async function ensureRunReport(runId: string): Promise<void> {
     throw new Error("Authentication required.")
   }
 
-  const supabase = createAdminClient()
-
-  // Confirm ownership before generating
-  const { data: ownerCheck, error: ownerError } = await supabase
-    .from("runs")
-    .select("id")
-    .eq("id", runId)
-    .eq("user_id", user.id)
-    .maybeSingle()
-  if (ownerError || !ownerCheck) {
-    throw new Error("Run not found or access denied.")
-  }
-
   const [
     { data: run, error: runError },
     { data: metrics, error: metricsError },
-    { data: equity, error: equityError },
+    equity,
   ] = await Promise.all([
-    supabase
+    serverClient
       .from("runs")
       .select("*")
       .eq("id", runId)
       .maybeSingle(),
-    supabase
+    serverClient
       .from("run_metrics")
       .select("*")
       .eq("run_id", runId)
       .maybeSingle(),
-    supabase
-      .from("equity_curve")
-      .select("*")
-      .eq("run_id", runId)
-      .order("date", { ascending: true }),
+    fetchAllEquityCurve(runId),
   ])
 
   if (runError || !run) {
@@ -70,15 +54,12 @@ export async function ensureRunReport(runId: string): Promise<void> {
   if (metricsError || !metrics) {
     throw new Error(`Failed to load run metrics: ${metricsError?.message ?? "not found"}`)
   }
-  if (equityError) {
-    throw new Error(`Failed to load equity curve: ${equityError.message}`)
-  }
   const runRow = run as RunRow
   const benchmarkTicker = getRunBenchmark(runRow)
   const overlapState = await getBenchmarkOverlapStateForRun(runRow)
   let benchmarkOverlapDetected = overlapState.confirmed
   if (!benchmarkOverlapDetected) {
-    const { data: overlapRows, error: overlapError } = await supabase
+    const { data: overlapRows, error: overlapError } = await serverClient
       .from("positions")
       .select("date")
       .eq("run_id", runId)
@@ -129,8 +110,9 @@ export async function ensureRunReport(runId: string): Promise<void> {
 
   const storagePath = `${runId}/tearsheet.html`
   const fileData = new Blob([html], { type: "text/html; charset=utf-8" })
+  const admin = createAdminClient()
 
-  let { error: uploadError } = await supabase.storage
+  let { error: uploadError } = await admin.storage
     .from(REPORTS_BUCKET)
     .upload(storagePath, fileData, {
       upsert: true,
@@ -138,14 +120,14 @@ export async function ensureRunReport(runId: string): Promise<void> {
     })
 
   if (uploadError && uploadError.message.toLowerCase().includes("bucket")) {
-    const { error: createBucketError } = await supabase.storage.createBucket(
+    const { error: createBucketError } = await admin.storage.createBucket(
       REPORTS_BUCKET,
       { public: true }
     )
     if (createBucketError) {
       throw new Error(`Failed to create reports bucket: ${createBucketError.message}`)
     }
-    const retry = await supabase.storage.from(REPORTS_BUCKET).upload(storagePath, fileData, {
+    const retry = await admin.storage.from(REPORTS_BUCKET).upload(storagePath, fileData, {
       upsert: true,
       contentType: "text/html; charset=utf-8",
     })
@@ -156,11 +138,11 @@ export async function ensureRunReport(runId: string): Promise<void> {
     throw new Error(`Failed to upload report: ${uploadError.message}`)
   }
 
-  const { data: urlData } = supabase.storage
+  const { data: urlData } = admin.storage
     .from(REPORTS_BUCKET)
     .getPublicUrl(storagePath)
 
-  const { error: reportError } = await supabase.from("reports").upsert(
+  const { error: reportError } = await admin.from("reports").upsert(
     {
       run_id: runId,
       storage_path: storagePath,

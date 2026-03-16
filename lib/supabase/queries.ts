@@ -50,6 +50,8 @@ import {
   summarizeUniverseConstraints,
   type UniverseId,
 } from "@/lib/universe-config"
+import { computeBenchmarkCoverage, type CoverageStatsSnapshot } from "@/lib/coverage-check"
+import type { RunStatus } from "@/lib/types"
 
 // Re-export for server-side consumers that import types from this module
 export type {
@@ -92,6 +94,8 @@ export type DataStateSummary = {
   updatedBy: string | null
   nextMonthlyRefresh: string
   dailyUpdatesEnabled: boolean
+  /** Set by the daily cron on no-op runs (weekend, holiday, already current). */
+  lastNoopCheckAt: string | null
 }
 
 export type ScheduledRefreshActivity = {
@@ -274,6 +278,7 @@ export async function getRuns(options: GetRunsOptions = {}): Promise<RunWithMetr
         name,
         strategy_id,
         status,
+        universe,
         benchmark,
         benchmark_ticker,
         start_date,
@@ -308,6 +313,7 @@ export async function getRuns(options: GetRunsOptions = {}): Promise<RunWithMetr
           name,
           strategy_id,
           status,
+          universe,
           benchmark_ticker,
           start_date,
           end_date,
@@ -398,32 +404,39 @@ export async function getRunById(id: string): Promise<RunWithMetrics | null> {
   }
 }
 
+const EQUITY_CURVE_PAGE_SIZE = 1000
+
+export async function fetchAllEquityCurve(runId: string): Promise<EquityCurveRow[]> {
+  const supabase = await createClient()
+  const all: EquityCurveRow[] = []
+  let offset = 0
+
+  while (true) {
+    const { data, error } = await supabase
+      .from("equity_curve")
+      .select("*")
+      .eq("run_id", runId)
+      .order("date", { ascending: true })
+      .range(offset, offset + EQUITY_CURVE_PAGE_SIZE - 1)
+
+    if (error) {
+      throw new Error(`Failed to load equity curve: ${error.message}`)
+    }
+
+    const page = (data ?? []) as EquityCurveRow[]
+    if (page.length === 0) break
+
+    all.push(...page)
+    if (page.length < EQUITY_CURVE_PAGE_SIZE) break
+    offset += EQUITY_CURVE_PAGE_SIZE
+  }
+
+  return all
+}
+
 export async function getEquityCurve(runId: string): Promise<EquityCurveRow[]> {
   try {
-    const supabase = await createClient()
-    // PostgREST hard-caps responses at 1000 rows. A 5-year daily run has ~1255
-    // rows, so we must paginate to avoid silently truncating the series.
-    const PAGE = 1000
-    const all: EquityCurveRow[] = []
-    let offset = 0
-    while (true) {
-      const { data, error } = await supabase
-        .from("equity_curve")
-        .select("*")
-        .eq("run_id", runId)
-        .order("date", { ascending: true })
-        .range(offset, offset + PAGE - 1)
-
-      if (error) {
-        console.error("getEquityCurve error:", error.message)
-        return []
-      }
-      const page = (data ?? []) as EquityCurveRow[]
-      all.push(...page)
-      if (page.length < PAGE) break
-      offset += PAGE
-    }
-    return all
+    return await fetchAllEquityCurve(runId)
   } catch (err) {
     console.error("getEquityCurve exception:", err)
     return []
@@ -467,6 +480,36 @@ export async function getReportByRunId(runId: string): Promise<ReportRow | null>
   } catch (err) {
     console.error("getReportByRunId exception:", err)
     return null
+  }
+}
+
+export async function getReportUrlsByRunIds(runIds: string[]): Promise<Record<string, string>> {
+  if (runIds.length === 0) {
+    return {}
+  }
+
+  try {
+    const supabase = await createClient()
+    const { data, error } = await supabase
+      .from("reports")
+      .select("run_id, url, created_at")
+      .in("run_id", runIds)
+      .order("created_at", { ascending: false })
+
+    if (error || !data) {
+      return {}
+    }
+
+    const reportUrls: Record<string, string> = {}
+    for (const row of data as Array<Pick<ReportRow, "run_id" | "url">>) {
+      if (!row.run_id || !row.url || row.run_id in reportUrls) continue
+      reportUrls[row.run_id] = row.url
+    }
+
+    return reportUrls
+  } catch (err) {
+    console.error("getReportUrlsByRunIds exception:", err)
+    return {}
   }
 }
 
@@ -647,13 +690,13 @@ export type DataCoverage = {
 
 export async function getDataState(): Promise<DataStateSummary> {
   try {
-    const supabase = createAdminClient()
+    const supabase = await createClient()
     const { data, error } = await supabase
       .from("data_state")
-      .select("data_cutoff_date, last_update_at, update_mode, updated_by")
+      .select("data_cutoff_date, last_update_at, update_mode, updated_by, last_noop_check_at")
       .eq("id", DATA_STATE_SINGLETON_ID)
       .maybeSingle() as {
-        data: Pick<DataStateRow, "data_cutoff_date" | "last_update_at" | "update_mode" | "updated_by"> | null
+        data: Pick<DataStateRow, "data_cutoff_date" | "last_update_at" | "update_mode" | "updated_by" | "last_noop_check_at"> | null
         error: { message: string } | null
       }
 
@@ -665,6 +708,7 @@ export async function getDataState(): Promise<DataStateSummary> {
         updatedBy: data.updated_by,
         nextMonthlyRefresh: getNextMonthStartUtc(),
         dailyUpdatesEnabled: isDailyUpdatesEnabled(),
+        lastNoopCheckAt: data.last_noop_check_at ?? null,
       }
     }
 
@@ -687,6 +731,7 @@ export async function getDataState(): Promise<DataStateSummary> {
       updatedBy: null,
       nextMonthlyRefresh: getNextMonthStartUtc(),
       dailyUpdatesEnabled: isDailyUpdatesEnabled(),
+      lastNoopCheckAt: null,
     }
   } catch {
     return {
@@ -696,13 +741,14 @@ export async function getDataState(): Promise<DataStateSummary> {
       updatedBy: null,
       nextMonthlyRefresh: getNextMonthStartUtc(),
       dailyUpdatesEnabled: isDailyUpdatesEnabled(),
+      lastNoopCheckAt: null,
     }
   }
 }
 
 export async function getDataCoverage(): Promise<DataCoverage> {
   try {
-    const supabase = createAdminClient()
+    const supabase = await createClient()
     const [dataState, firstStatsRes] = await Promise.all([
       getDataState(),
       supabase
@@ -739,9 +785,9 @@ export async function getDataCoverage(): Promise<DataCoverage> {
 
 export async function getActiveScheduledRefreshActivity(): Promise<ScheduledRefreshActivity> {
   try {
-    const admin = createAdminClient()
+    const supabase = await createClient()
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { data, error } = await (admin as any)
+    const { data, error } = await (supabase as any)
       .from("data_ingest_jobs")
       .select("request_mode, status, next_retry_at, batch_id")
       .in("request_mode", ["monthly", "daily"])
@@ -781,9 +827,9 @@ export async function getRecentDataIngestJobHistory(
   limit = 15
 ): Promise<DataIngestJobHistoryEntry[]> {
   try {
-    const admin = createAdminClient()
+    const supabase = await createClient()
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let { data, error } = await (admin as any)
+    let { data, error } = await (supabase as any)
       .from("data_ingest_jobs")
       .select("id, symbol, status, stage, request_mode, requested_by, created_at, started_at, finished_at, next_retry_at, attempt_count, rows_inserted, target_cutoff_date, error")
       .order("created_at", { ascending: false })
@@ -791,7 +837,7 @@ export async function getRecentDataIngestJobHistory(
 
     if (error && isMissingDataIngestExtendedColumnError(error.message)) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const legacyFallback = await (admin as any)
+      const legacyFallback = await (supabase as any)
         .from("data_ingest_jobs")
         .select("id, symbol, status, stage, created_at, started_at, finished_at, next_retry_at, attempt_count, target_cutoff_date, error")
         .order("created_at", { ascending: false })
@@ -855,8 +901,8 @@ export async function getRequiredTickerResearchSummary(
   const minResearchStart = [...researchStarts.values()].sort()[0] ?? COVERAGE_WINDOW_START
 
   try {
-    const admin = createAdminClient()
-    const { data, error } = await admin
+    const supabase = await createClient()
+    const { data, error } = await supabase
       .from("prices")
       .select("ticker, date")
       .in("ticker", requiredTickers)
@@ -940,6 +986,108 @@ export async function getRequiredTickerResearchSummary(
   } catch (err) {
     console.error("getRequiredTickerResearchSummary exception:", err)
     return empty
+  }
+}
+
+export async function getMonitoredBenchmarkCoverage(
+  dataCutoffDate: string | null,
+  prefetchedRanges?: TickerDateRange[]
+): Promise<BenchmarkCoverage[] | null> {
+  const researchEnd = dataCutoffDate ?? getLastCompleteTradingDayUtc()
+  const ranges = prefetchedRanges ?? await getAllTickerStats()
+  const researchStarts = buildRequiredTickerResearchStarts(ranges)
+  const benchmarkStarts = new Map<string, string>()
+
+  for (const ticker of BENCHMARK_OPTIONS) {
+    benchmarkStarts.set(ticker, researchStarts.get(ticker) ?? COVERAGE_WINDOW_START)
+  }
+
+  const minResearchStart = [...benchmarkStarts.values()].sort()[0] ?? COVERAGE_WINDOW_START
+  const rangeByTicker = new Map<string, TickerDateRange>(
+    ranges.map((row) => [row.ticker.toUpperCase(), row])
+  )
+
+  try {
+    const supabase = await createClient()
+    const { data, error } = await supabase
+      .from("prices")
+      .select("ticker, date")
+      .in("ticker", [...BENCHMARK_OPTIONS])
+      .gte("date", minResearchStart)
+      .lte("date", researchEnd)
+      .order("date", { ascending: true })
+
+    if (error) {
+      console.error("getMonitoredBenchmarkCoverage error:", error.message)
+      return null
+    }
+
+    const observedByTicker = new Map<string, string[]>()
+    for (const ticker of BENCHMARK_OPTIONS) {
+      observedByTicker.set(ticker, [])
+    }
+
+    for (const row of data ?? []) {
+      const ticker = String(row.ticker ?? "").toUpperCase()
+      const date = String(row.date ?? "")
+      const bucket = observedByTicker.get(ticker)
+      if (!bucket || !date) continue
+      if (bucket.at(-1) !== date) {
+        bucket.push(date)
+      }
+    }
+
+    return BENCHMARK_OPTIONS.map((ticker) => {
+      const range = rangeByTicker.get(ticker) ?? null
+      const stats: CoverageStatsSnapshot | undefined = range
+        ? {
+          firstDate: range.firstDate,
+          lastDate: range.lastDate,
+        }
+        : undefined
+      const benchmarkCoverage = computeBenchmarkCoverage({
+        benchmarkTicker: ticker,
+        windowStart: benchmarkStarts.get(ticker) ?? COVERAGE_WINDOW_START,
+        windowEnd: researchEnd,
+        cutoffDate: researchEnd,
+        stats,
+        benchmarkDates: observedByTicker.get(ticker) ?? [],
+      })
+      const inceptionDate = TICKER_INCEPTION_DATES[ticker] ?? null
+      const coveragePercent =
+        benchmarkCoverage.expectedDays > 0
+          ? Math.min((benchmarkCoverage.actualDays / benchmarkCoverage.expectedDays) * 100, 100)
+          : 0
+      const status: BenchmarkCoverage["status"] =
+        benchmarkCoverage.status === "good"
+          ? "ok"
+          : benchmarkCoverage.actualDays === 0
+            ? "not_ingested"
+            : benchmarkCoverage.status === "warning"
+              ? "partial"
+              : "missing"
+
+      return {
+        ticker,
+        actualDays: benchmarkCoverage.actualDays,
+        expectedDays: benchmarkCoverage.expectedDays,
+        missingDays: benchmarkCoverage.missingDays,
+        coveragePercent,
+        trueMissingRate: benchmarkCoverage.trueMissingRate,
+        windowStart: benchmarkCoverage.windowStartUsed,
+        windowEnd: benchmarkCoverage.windowEndUsed,
+        latestDate: range?.lastDate ?? null,
+        earliestDate: range?.firstDate ?? null,
+        needsHistoricalBackfill:
+          range?.firstDate != null && inceptionDate != null
+            ? range.firstDate > inceptionDate
+            : false,
+        status,
+      }
+    })
+  } catch (err) {
+    console.error("getMonitoredBenchmarkCoverage exception:", err)
+    return null
   }
 }
 
@@ -1047,7 +1195,7 @@ export async function getDataHealthSummary(): Promise<DataHealthSummary> {
   }
 
   try {
-    const supabase = createAdminClient()
+    const supabase = await createClient()
     type StatsRow = {
       symbol: string
       first_date: string
@@ -1470,7 +1618,7 @@ export async function getLatestDataIngestJobs(
 
   try {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const supabase = createAdminClient() as any
+    const supabase = await createClient() as any
 
     // Try RPC first (returns 1 row per symbol, no LIMIT needed)
     const { data: rpcData, error: rpcError } = await supabase.rpc(
@@ -1568,7 +1716,7 @@ export async function getLatestDataIngestJobs(
 
 export async function getRecentIngestionHistory(limit = 5): Promise<IngestionLogEntry[]> {
   try {
-    const supabase = createAdminClient()
+    const supabase = await createClient()
     const { data, error } = await supabase
       .from("data_ingestion_log")
       .select("*")
@@ -1852,24 +2000,117 @@ export async function autoQueueUniverseIngestions(
 
 export const BACKTEST_MIN_SPAN_DAYS = 730
 export const BACKTEST_MIN_DATA_POINTS = 500
+export const BACKTEST_END_DATE_TOLERANCE_TRADING_DAYS = 5
+
+export type BacktestAuditOutcome = "pass" | "fail" | "skip"
 
 export type BacktestWindowSummaryRow = {
   run_id: string
   name: string
   strategy_id: string
+  status: RunStatus
   start_date: string
   end_date: string
   span_days: number
+  requested_span_days: number
+  equity_start_date: string | null
+  equity_end_date: string | null
+  equity_span_days: number | null
+  end_gap_trading_days: number | null
   data_points: number
-  data_points_with_benchmark: number
   meets_min_span: boolean
   meets_min_points: boolean
+  meets_end_tolerance: boolean
+  audit_outcome: BacktestAuditOutcome
+}
+
+type BacktestAuditRunRow = {
+  id: string
+  name: string
+  strategy_id: string
+  status: RunStatus
+  start_date: string
+  end_date: string
+}
+
+type EquityCurveAuditStats = {
+  data_points: number
+  equity_start_date: string | null
+  equity_end_date: string | null
+}
+
+function getCalendarDaySpan(startDate: string, endDate: string): number {
+  if (!startDate || !endDate || endDate < startDate) return 0
+  const startMs = new Date(`${startDate}T00:00:00Z`).getTime()
+  const endMs = new Date(`${endDate}T00:00:00Z`).getTime()
+  return Math.floor((endMs - startMs) / (1000 * 60 * 60 * 24))
+}
+
+function getTradingDayGap(dateA: string | null, dateB: string | null): number | null {
+  if (!dateA || !dateB) return null
+  if (dateA === dateB) return 0
+  const startDate = dateA <= dateB ? dateA : dateB
+  const endDate = dateA <= dateB ? dateB : dateA
+  return Math.max(countBusinessDays(startDate, endDate) - 1, 0)
+}
+
+async function getEquityCurveAuditStats(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  admin: any,
+  runId: string,
+): Promise<EquityCurveAuditStats> {
+  const { count, error: countError } = await admin
+    .from("equity_curve")
+    .select("date", { count: "exact", head: true })
+    .eq("run_id", runId)
+
+  if (countError) {
+    throw new Error(`count failed for run ${runId}: ${countError.message}`)
+  }
+
+  const dataPoints = count ?? 0
+  if (dataPoints === 0) {
+    return {
+      data_points: 0,
+      equity_start_date: null,
+      equity_end_date: null,
+    }
+  }
+
+  const [minResult, maxResult] = await Promise.all([
+    admin
+      .from("equity_curve")
+      .select("date")
+      .eq("run_id", runId)
+      .order("date", { ascending: true })
+      .limit(1),
+    admin
+      .from("equity_curve")
+      .select("date")
+      .eq("run_id", runId)
+      .order("date", { ascending: false })
+      .limit(1),
+  ])
+
+  if (minResult.error) {
+    throw new Error(`min(date) failed for run ${runId}: ${minResult.error.message}`)
+  }
+  if (maxResult.error) {
+    throw new Error(`max(date) failed for run ${runId}: ${maxResult.error.message}`)
+  }
+
+  return {
+    data_points: dataPoints,
+    equity_start_date: minResult.data?.[0]?.date ?? null,
+    equity_end_date: maxResult.data?.[0]?.date ?? null,
+  }
 }
 
 /**
- * Returns a per-run backtest-window summary for all completed runs.
- * Span is computed from runs.start_date / end_date; data_points are counted
- * from equity_curve rows fetched in a single batch query.
+ * Returns a per-run backtest-window summary for visible runs.
+ * Row counts and coverage dates come directly from equity_curve using the
+ * service-role client so the audit cannot silently truncate at 1000 rows or
+ * collapse to zero under RLS.
  */
 export async function getRunsBacktestWindowSummary(): Promise<BacktestWindowSummaryRow[]> {
   try {
@@ -1877,8 +2118,7 @@ export async function getRunsBacktestWindowSummary(): Promise<BacktestWindowSumm
 
     const { data: runs, error: runsError } = await supabase
       .from("runs")
-      .select("id, name, strategy_id, start_date, end_date")
-      .eq("status", "completed")
+      .select("id, name, strategy_id, status, start_date, end_date")
       .order("created_at", { ascending: false })
 
     if (runsError) {
@@ -1887,55 +2127,75 @@ export async function getRunsBacktestWindowSummary(): Promise<BacktestWindowSumm
     }
     if (!runs?.length) return []
 
-    const runIds = runs.map((r) => r.id)
+    const admin = createAdminClient()
+    const summary: BacktestWindowSummaryRow[] = await Promise.all(
+      (runs as BacktestAuditRunRow[]).map(async (run) => {
+        const stats = await getEquityCurveAuditStats(admin, run.id)
+        const requestedSpanDays = getCalendarDaySpan(run.start_date, run.end_date)
+        const equitySpanDays =
+          stats.equity_start_date && stats.equity_end_date
+            ? getCalendarDaySpan(stats.equity_start_date, stats.equity_end_date)
+            : null
+        const spanDays = Math.max(requestedSpanDays, equitySpanDays ?? 0)
+        const endGapTradingDays = getTradingDayGap(stats.equity_end_date, run.end_date)
+        const meetsMinPoints = stats.data_points >= BACKTEST_MIN_DATA_POINTS
+        const meetsMinSpan = spanDays >= BACKTEST_MIN_SPAN_DAYS
+        const meetsEndTolerance =
+          endGapTradingDays != null &&
+          endGapTradingDays <= BACKTEST_END_DATE_TOLERANCE_TRADING_DAYS
 
-    // Fetch only the columns needed for aggregation — avoids loading full curve.
-    const { data: ecRows, error: ecError } = await supabase
-      .from("equity_curve")
-      .select("run_id, date, benchmark")
-      .in("run_id", runIds)
+        let auditOutcome: BacktestAuditOutcome = "skip"
+        if (run.status === "completed") {
+          auditOutcome =
+            stats.data_points > 0 && meetsMinPoints && meetsMinSpan && meetsEndTolerance
+              ? "pass"
+              : "fail"
+        }
 
-    if (ecError) {
-      console.error("getRunsBacktestWindowSummary equity_curve error:", ecError.message)
-    }
-
-    // Aggregate counts per run_id.
-    type Counts = { total: number; withBenchmark: number }
-    const countsMap = new Map<string, Counts>()
-    for (const row of (ecRows ?? []) as { run_id: string; date: string; benchmark: number | null }[]) {
-      const c = countsMap.get(row.run_id) ?? { total: 0, withBenchmark: 0 }
-      c.total += 1
-      if (row.benchmark != null) c.withBenchmark += 1
-      countsMap.set(row.run_id, c)
-    }
-
-    const summary: BacktestWindowSummaryRow[] = runs.map((run) => {
-      const startMs = new Date(run.start_date + "T00:00:00Z").getTime()
-      const endMs = new Date(run.end_date + "T00:00:00Z").getTime()
-      const spanDays = Math.floor((endMs - startMs) / (1000 * 60 * 60 * 24))
-      const c = countsMap.get(run.id) ?? { total: 0, withBenchmark: 0 }
-      return {
-        run_id: run.id,
-        name: run.name,
-        strategy_id: run.strategy_id,
-        start_date: run.start_date,
-        end_date: run.end_date,
-        span_days: spanDays,
-        data_points: c.total,
-        data_points_with_benchmark: c.withBenchmark,
-        meets_min_span: spanDays >= BACKTEST_MIN_SPAN_DAYS,
-        meets_min_points: c.total >= BACKTEST_MIN_DATA_POINTS,
-      }
-    })
+        return {
+          run_id: run.id,
+          name: run.name,
+          strategy_id: run.strategy_id,
+          status: run.status,
+          start_date: run.start_date,
+          end_date: run.end_date,
+          span_days: spanDays,
+          requested_span_days: requestedSpanDays,
+          equity_start_date: stats.equity_start_date,
+          equity_end_date: stats.equity_end_date,
+          equity_span_days: equitySpanDays,
+          end_gap_trading_days: endGapTradingDays,
+          data_points: stats.data_points,
+          meets_min_span: meetsMinSpan,
+          meets_min_points: meetsMinPoints,
+          meets_end_tolerance: meetsEndTolerance,
+          audit_outcome: auditOutcome,
+        }
+      })
+    )
 
     // Console-log summary for server-side audit visibility.
     console.log("[backtest-audit]", JSON.stringify(
-      summary.map(({ run_id, name, span_days, data_points, meets_min_span, meets_min_points }) => ({
+      summary.map(({
         run_id,
         name,
+        status,
         span_days,
         data_points,
-        pass: meets_min_span && meets_min_points,
+        equity_start_date,
+        equity_end_date,
+        end_gap_trading_days,
+        audit_outcome,
+      }) => ({
+        run_id,
+        name,
+        status,
+        span_days,
+        data_points,
+        equity_start_date,
+        equity_end_date,
+        end_gap_trading_days,
+        audit_outcome,
       }))
     ))
 
@@ -1958,9 +2218,9 @@ export async function getRunsBacktestWindowSummary(): Promise<BacktestWindowSumm
  */
 export async function getActiveIngestJobCount(): Promise<number> {
   try {
-    const admin = createAdminClient()
+    const supabase = await createClient()
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { count, error } = await (admin as any)
+    const { count, error } = await (supabase as any)
       .from("data_ingest_jobs")
       .select("*", { count: "exact", head: true })
       .in("status", ["queued", "running", "retrying"])
@@ -2080,7 +2340,7 @@ export async function getBenchmarkOverlapStateForRun(
  */
 export async function getAllTickerStats(): Promise<TickerDateRange[]> {
   try {
-    const supabase = createAdminClient()
+    const supabase = await createClient()
     type StatsRow = {
       symbol: string
       first_date: string
@@ -2132,7 +2392,7 @@ export async function getAllTickerStats(): Promise<TickerDateRange[]> {
  */
 export async function getTickerDateRanges(): Promise<TickerDateRange[]> {
   try {
-    const supabase = createAdminClient()
+    const supabase = await createClient()
     type RawRow = { ticker: string; first_date: string; last_date: string; actual_days: string | number }
     const { data, error } = await supabase.rpc("get_ticker_date_ranges") as unknown as {
       data: RawRow[] | null
@@ -2296,9 +2556,9 @@ export type IngestProgress = {
 export async function getIngestProgressForRun(
   runId: string
 ): Promise<IngestProgress | null> {
-  const admin = createAdminClient()
+  const supabase = await createClient()
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { data, error } = await (admin as any)
+  const { data, error } = await (supabase as any)
     .from("data_ingest_jobs")
     .select("symbol, status, progress, started_at")
     .eq("requested_by_run_id", runId)
@@ -2337,9 +2597,9 @@ export async function getUniverseBatchStatus(
 ): Promise<UniverseBatchStatusSummary | null> {
   if (!batchId) return null
 
-  const admin = createAdminClient()
+  const supabase = await createClient()
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { data, error } = await (admin as any)
+  const { data, error } = await (supabase as any)
     .from("data_ingest_jobs")
     .select("symbol, status, progress, next_retry_at")
     .eq("batch_id", batchId)
@@ -2395,12 +2655,12 @@ export async function getActiveRunsProgress(
   runIds: string[]
 ): Promise<RunProgressMap> {
   if (runIds.length === 0) return new Map()
-  const admin = createAdminClient()
+  const supabase = await createClient()
 
   const [jobsResult, ingestResult] = await Promise.all([
     // Backtest jobs: latest job per run_id
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (admin as any)
+    (supabase as any)
       .from("jobs")
       .select("run_id, progress")
       .in("run_id", runIds)
@@ -2408,7 +2668,7 @@ export async function getActiveRunsProgress(
       .order("created_at", { ascending: false }),
     // Ingest jobs: all linked jobs so we can average per run
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (admin as any)
+    (supabase as any)
       .from("data_ingest_jobs")
       .select("requested_by_run_id, status, progress")
       .in("requested_by_run_id", runIds),

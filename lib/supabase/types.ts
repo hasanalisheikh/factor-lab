@@ -189,6 +189,32 @@ export type Database = {
         Update: Partial<Database['public']['Tables']['jobs']['Insert']>
         Relationships: []
       }
+      notifications: {
+        Row: {
+          id: string
+          user_id: string
+          run_id: string | null
+          job_id: string | null
+          title: string
+          body: string | null
+          level: "info" | "success" | "warning" | "error"
+          read_at: string | null
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          user_id: string
+          run_id?: string | null
+          job_id?: string | null
+          title: string
+          body?: string | null
+          level?: "info" | "success" | "warning" | "error"
+          read_at?: string | null
+          created_at?: string
+        }
+        Update: Partial<Database['public']['Tables']['notifications']['Insert']>
+        Relationships: []
+      }
       prices: {
         Row: {
           id: string
@@ -236,6 +262,7 @@ export type Database = {
           last_update_at: string
           update_mode: "monthly" | "daily" | "manual"
           updated_by: string | null
+          last_noop_check_at: string | null
         }
         Insert: {
           id?: number
@@ -243,6 +270,7 @@ export type Database = {
           last_update_at?: string
           update_mode?: "monthly" | "daily" | "manual"
           updated_by?: string | null
+          last_noop_check_at?: string | null
         }
         Update: Partial<Database["public"]["Tables"]["data_state"]["Insert"]>
         Relationships: []
@@ -390,6 +418,7 @@ export type DataLastUpdatedRow = Database["public"]["Tables"]["data_last_updated
 export type DataStateRow = Database["public"]["Tables"]["data_state"]["Row"]
 export type ModelMetadataRow = Database["public"]["Tables"]["model_metadata"]["Row"]
 export type ModelPredictionRow = Database["public"]["Tables"]["model_predictions"]["Row"]
+export type NotificationRow = Database["public"]["Tables"]["notifications"]["Row"]
 export type PositionRow = Database["public"]["Tables"]["positions"]["Row"]
 export type UserSettings = Database["public"]["Tables"]["user_settings"]["Row"]
 
@@ -411,6 +440,9 @@ export type BenchmarkCoverage = {
   expectedDays: number
   missingDays: number
   coveragePercent: number
+  trueMissingRate?: number
+  windowStart?: string | null
+  windowEnd?: string | null
   /** Latest date this ticker has data for (YYYY-MM-DD), null if not ingested */
   latestDate: string | null
   /** Earliest date this ticker has data for (YYYY-MM-DD), null if not ingested */

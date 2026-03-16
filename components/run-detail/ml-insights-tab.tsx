@@ -213,7 +213,7 @@ export function MlInsightsTab({ metadata, predictions, runMetadata }: MlInsights
                     >
                       <span className="text-muted-foreground">#{row.rank}</span>
                       <span className="text-card-foreground">{row.ticker}</span>
-                      <span className="text-muted-foreground">{formatPct(row.weight)}</span>
+                      <span className="text-muted-foreground" data-testid="ml-pick-weight">{formatPct(row.weight)}</span>
                       <span className="text-card-foreground">{formatPct(row.predicted_return)}</span>
                     </div>
                   ))}

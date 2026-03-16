@@ -6,6 +6,7 @@ import {
   getDataState,
   getLatestDataIngestJobs,
   getAllTickerStats,
+  getMonitoredBenchmarkCoverage,
   getNotIngestedUniverseTickers,
   getRecentDataIngestJobHistory,
   getRequiredTickerResearchSummary,
@@ -14,7 +15,6 @@ import {
 } from "@/lib/supabase/queries"
 import { BENCHMARK_OPTIONS, normalizeBenchmark } from "@/lib/benchmark"
 import {
-  TICKER_INCEPTION_DATES,
   type BenchmarkCoverage,
   type TickerMissingnessV2,
 } from "@/lib/supabase/types"
@@ -144,9 +144,19 @@ function formatScheduleStatus(activeJobs: number): { label: string; cls: string 
   }
 }
 
-function getBenchmarkRepairStatus(rows: RequiredTickerResearchRow[]) {
-  const issues = rows.filter((row) => row.isBenchmark && (!row.isIngested || row.trueMissingDays > 0))
+function getBenchmarkRepairStatus(rows: BenchmarkCoverage[] | null) {
+  if (rows === null) {
+    return {
+      available: false,
+      issues: [],
+      label: "Unavailable",
+      cls: "text-muted-foreground",
+    }
+  }
+
+  const issues = rows.filter((row) => row.status !== "ok")
   return {
+    available: true,
     issues,
     label: issues.length === 0 ? "OK" : "Needs repair",
     cls: issues.length === 0 ? "text-emerald-400" : "text-amber-400",
@@ -253,6 +263,7 @@ export default async function DataPage({
 
   const currentThrough = dataState.dataCutoffDate ?? health.dateEnd
   const requiredResearch = await getRequiredTickerResearchSummary(currentThrough, tickerRanges)
+  const monitoredBenchmarkCoverage = await getMonitoredBenchmarkCoverage(currentThrough, tickerRanges)
   const universeNotIngested = await getNotIngestedUniverseTickers(tickerRanges)
 
   const advancedDiagnostics = mode === "full"
@@ -291,10 +302,13 @@ export default async function DataPage({
 
   const selectedBenchmarkRow =
     requiredResearch.rows.find((row) => row.ticker === selectedBenchmark) ?? null
+  const selectedBenchmarkCoverage =
+    monitoredBenchmarkCoverage?.find((row) => row.ticker === selectedBenchmark) ?? null
   const benchmarkTrueMissingRate =
-    selectedBenchmarkRow && selectedBenchmarkRow.expectedDays > 0
+    selectedBenchmarkCoverage?.trueMissingRate ??
+    (selectedBenchmarkRow && selectedBenchmarkRow.expectedDays > 0
       ? selectedBenchmarkRow.trueMissingDays / selectedBenchmarkRow.expectedDays
-      : 1
+      : 1)
   const benchmarkMaxGapDays = selectedBenchmarkRow?.maxGapDays ?? 0
   const healthAssessment = assessDataHealth({
     completeness: requiredResearch.completeness,
@@ -311,44 +325,31 @@ export default async function DataPage({
   const refreshTotals = scheduledActivity.monthlyActiveJobs + scheduledActivity.dailyActiveJobs
   const monthlyStatus = formatScheduleStatus(scheduledActivity.monthlyActiveJobs)
   const dailyStatus = formatScheduleStatus(scheduledActivity.dailyActiveJobs)
-  const benchmarkStatus = getBenchmarkRepairStatus(requiredResearch.rows)
+  const benchmarkStatus = getBenchmarkRepairStatus(monitoredBenchmarkCoverage)
+
+  // Show "no update needed" hint when the last cron run was a no-op (checked
+  // but found no new complete trading day) and no real ingest is active.
+  const dailyNoopCheckAt = dataState.lastNoopCheckAt
+  const dailyLastRealUpdate = dataState.lastUpdateAt
+  const dailyShowNoopHint =
+    dataState.dailyUpdatesEnabled &&
+    scheduledActivity.dailyActiveJobs === 0 &&
+    dailyNoopCheckAt !== null &&
+    (dailyLastRealUpdate === null || dailyNoopCheckAt > dailyLastRealUpdate)
+  const backtestReadyWindowHealthy =
+    requiredResearch.notIngestedTickers.length === 0 &&
+    requiredResearch.totalTrueMissing === 0 &&
+    benchmarkStatus.available &&
+    benchmarkStatus.issues.length === 0
 
   const benchmarkRows = mode === "full"
-    ? BENCHMARK_OPTIONS.map((ticker) => {
-        const researchRow = requiredResearch.rows.find((row) => row.ticker === ticker) ?? null
-        const range = tickerRanges.find((row) => row.ticker === ticker) ?? null
-        const inceptionDate = TICKER_INCEPTION_DATES[ticker] ?? null
-        const actualDays = researchRow?.actualDays ?? 0
-        const expectedDays = researchRow?.expectedDays ?? 0
-        const coveragePercent = researchRow?.coveragePercent ?? 0
-        const status: BenchmarkCoverage["status"] =
-          actualDays === 0
-            ? "not_ingested"
-            : coveragePercent < 50
-              ? "missing"
-              : coveragePercent < 99
-                ? "partial"
-                : "ok"
-
-        return {
+    ? (monitoredBenchmarkCoverage
+      ? BENCHMARK_OPTIONS.map((ticker) => ({
           ticker,
-          coverage: {
-            ticker,
-            actualDays,
-            expectedDays,
-            missingDays: researchRow?.trueMissingDays ?? expectedDays,
-            coveragePercent,
-            latestDate: range?.lastDate ?? researchRow?.lastObservedDate ?? null,
-            earliestDate: range?.firstDate ?? researchRow?.firstObservedDate ?? null,
-            needsHistoricalBackfill:
-              range?.firstDate != null && inceptionDate != null
-                ? range.firstDate > inceptionDate
-                : false,
-            status,
-          },
+          coverage: monitoredBenchmarkCoverage.find((row) => row.ticker === ticker) ?? null,
           initialJob: benchmarkJobs[ticker] ?? null,
-        }
-      })
+        }))
+      : null)
     : []
 
   function buildDataHref(nextMode: "backtest" | "full") {
@@ -435,7 +436,9 @@ export default async function DataPage({
       <div className="mb-4">
         <p className="text-xs text-muted-foreground">
           {mode === "backtest"
-            ? <>Backtest-ready watches only required universe and benchmark tickers inside the research window, capped at <span className="font-mono text-foreground">{formatISODate(currentThrough)}</span>.</>
+            ? backtestReadyWindowHealthy
+              ? <>Backtest-ready: required tickers are fully covered in the research window through <span className="font-mono font-semibold text-emerald-400">{formatISODate(currentThrough)}</span>.</>
+              : <>Backtest-ready tracks required tickers inside the research window through <span className="font-mono text-foreground">{formatISODate(currentThrough)}</span>.</>
             : <>Advanced expands into DB-wide coverage, benchmark repair state, and recent ingestion jobs while keeping the same global cutoff at <span className="font-mono text-foreground">{formatISODate(currentThrough)}</span>.</>}
         </p>
       </div>
@@ -551,6 +554,11 @@ export default async function DataPage({
                     : "Daily patch: Disabled"}
                 </p>
                 <p className={`mt-0.5 text-xs ${dailyStatus.cls}`}>Status: {dailyStatus.label}</p>
+                {dailyShowNoopHint && (
+                  <p className="mt-0.5 text-[11px] text-muted-foreground">
+                    Checked {formatISOTimestamp(dailyNoopCheckAt!)} · No update needed
+                  </p>
+                )}
               </div>
               <div className="rounded-md border border-border/60 bg-muted/20 px-3 py-2">
                 <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Benchmarks</p>
@@ -558,7 +566,9 @@ export default async function DataPage({
                   {benchmarkStatus.label}
                 </p>
                 <p className="mt-0.5 text-xs text-muted-foreground">
-                  {benchmarkStatus.issues.length === 0
+                  {!benchmarkStatus.available
+                    ? "Benchmark coverage is temporarily unavailable."
+                    : benchmarkStatus.issues.length === 0
                     ? "All supported benchmarks are healthy inside the research window."
                     : `${benchmarkStatus.issues.length} benchmark${benchmarkStatus.issues.length !== 1 ? "s" : ""} still need repair. Details live in Advanced.`}
                 </p>
@@ -652,6 +662,12 @@ export default async function DataPage({
                     : "Daily patch: Disabled"}
                   <br />
                   <span className={dailyStatus.cls}>Status: {dailyStatus.label}</span>
+                  {dailyShowNoopHint && (
+                    <>
+                      <br />
+                      <span>Checked {formatISOTimestamp(dailyNoopCheckAt!)} · No update needed</span>
+                    </>
+                  )}
                 </>
               }
               valueClassName={`text-lg font-semibold ${dataState.dailyUpdatesEnabled ? "text-emerald-400" : "text-muted-foreground"}`}
@@ -690,6 +706,9 @@ export default async function DataPage({
                 </CardTitle>
                 <p className="text-xs text-muted-foreground">
                   DB-wide true missing days within each ticker&apos;s own window through the current cutoff. Pre-inception history is shown separately.
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  These are historical gaps since inception and may not affect backtests in the research window.
                 </p>
               </CardHeader>
               <CardContent>

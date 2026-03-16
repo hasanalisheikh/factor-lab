@@ -1,0 +1,60 @@
+{
+  "description": "7-point daily series [100,120,90,95,130,110,140] with a known 25% max drawdown.",
+  "dataFrequency": "daily",
+  "annFactor": 252,
+
+  "dates": [
+    "2023-01-02",
+    "2023-01-03",
+    "2023-01-04",
+    "2023-01-05",
+    "2023-01-06",
+    "2023-01-09",
+    "2023-01-10"
+  ],
+
+  "portfolioValues": [100, 120, 90, 95, 130, 110, 140],
+
+  "impliedDailyReturns": [0.2, -0.25, 0.055556, 0.368421, -0.153846, 0.272727],
+  "impliedDailyReturnsNote": "Rounded to 6dp. Actual = v[i]/v[i-1]-1.",
+
+  "benchmarkValues": [100, 105, 102, 107, 112, 109, 116],
+
+  "conventions": {
+    "maxDrawdownSign": "positive fraction returned by TypeScript (e.g. 0.25 = 25% decline from peak)",
+    "drawdownSeriesSign": "negative fraction in sparkline (e.g. -0.25 = 25% below running peak)"
+  },
+
+  "expectedMetrics": {
+    "maxDrawdown": 0.25,
+    "maxDrawdownDerivation": "(120 - 90) / 120 = 30 / 120 = 0.25",
+    "maxDrawdownPeak": 120,
+    "maxDrawdownTrough": 90,
+    "maxDrawdownPeakIndex": 1,
+    "maxDrawdownTroughIndex": 2,
+
+    "drawdownSeries": [
+      0,
+      0,
+      -0.25,
+      -0.20833333333333334,
+      0,
+      -0.15384615384615385,
+      0
+    ],
+    "drawdownSeriesDescription": [
+      "index 0: v=100, peak=100, dd=0",
+      "index 1: v=120, peak=120, dd=0",
+      "index 2: v=90,  peak=120, dd=(90-120)/120=-0.25",
+      "index 3: v=95,  peak=120, dd=(95-120)/120=-25/120=-0.20833...",
+      "index 4: v=130, peak=130, dd=0",
+      "index 5: v=110, peak=130, dd=(110-130)/130=-20/130=-0.15385...",
+      "index 6: v=140, peak=140, dd=0"
+    ],
+
+    "equitySparklineStart": 1.0,
+    "equitySparklineNote": "sparklines.equity[0] = portfolioValues[0]/portfolioValues[0] = 1.0",
+
+    "cagrNote": "CAGR over 8 calendar days (2023-01-02 to 2023-01-10) is meaningless for this fixture. Only maxDD and drawdown series are tested."
+  }
+}

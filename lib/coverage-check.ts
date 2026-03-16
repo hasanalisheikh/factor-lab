@@ -1,8 +1,10 @@
 import "server-only"
 import { createAdminClient } from "@/lib/supabase/admin"
+import { BENCHMARK_OPTIONS } from "@/lib/benchmark"
+import { subtractTradingDays } from "@/lib/data-cutoff"
 import { isActiveDataIngestStatus } from "@/lib/data-ingest-jobs"
 import { STRATEGY_WARMUP_CALENDAR_DAYS } from "@/lib/strategy-warmup"
-import { TICKER_INCEPTION_DATES } from "@/lib/supabase/types"
+import { COVERAGE_WINDOW_START, TICKER_INCEPTION_DATES } from "@/lib/supabase/types"
 import type { StrategyId } from "@/lib/types"
 
 // ---------------------------------------------------------------------------
@@ -30,6 +32,7 @@ export const HIGH_SENSITIVITY_UNIVERSE_THRESHOLD = 0.99
 /** Strategies that require HIGH_SENSITIVITY_UNIVERSE_THRESHOLD */
 const HIGH_SENSITIVITY_STRATEGIES = new Set<StrategyId>([
   "momentum_12_1",
+  "trend_filter",
   "ml_ridge",
   "ml_lightgbm",
 ])
@@ -93,6 +96,301 @@ export function subtractCalendarDays(dateStr: string, days: number): string {
   return d.toISOString().slice(0, 10)
 }
 
+function getMinTrainDays(): number {
+  return Number(process.env.ML_MIN_TRAIN_DAYS ?? "252")
+}
+
+export function getStrategyWarmupTradingDays(strategyId: StrategyId): number {
+  if (strategyId === "momentum_12_1") return 252
+  if (strategyId === "low_vol") return 60
+  if (strategyId === "trend_filter") return 200
+  if (strategyId === "ml_ridge" || strategyId === "ml_lightgbm") {
+    return 252 + getMinTrainDays()
+  }
+  return 0
+}
+
+export function resolveRunPreflightWindow(params: {
+  strategyId: StrategyId
+  startDate: string
+  endDate: string
+  dataCutoffDate: string
+  minStartDate: string | null
+}): {
+  warmupStart: string
+  requiredStart: string
+  requiredEnd: string
+} {
+  const requiredStart =
+    params.minStartDate && params.minStartDate > params.startDate
+      ? params.minStartDate
+      : params.startDate
+  const requiredEnd = params.endDate > params.dataCutoffDate
+    ? params.dataCutoffDate
+    : params.endDate
+  const warmupStart = subtractTradingDays(
+    requiredStart,
+    getStrategyWarmupTradingDays(params.strategyId)
+  )
+  return {
+    warmupStart,
+    requiredStart,
+    requiredEnd,
+  }
+}
+
+function countDatesInRange(
+  dates: readonly string[],
+  startDate: string,
+  endDate: string
+): number {
+  if (!startDate || !endDate || endDate < startDate) return 0
+  let count = 0
+  for (const date of dates) {
+    if (date < startDate) continue
+    if (date > endDate) break
+    count += 1
+  }
+  return count
+}
+
+export type CoverageStatsSnapshot = {
+  firstDate: string | null
+  lastDate: string | null
+}
+
+export type BenchmarkCoverageStatus = "good" | "warning" | "blocked"
+export type BenchmarkMetricSource = "research_window" | "run_window" | "db_wide"
+
+export type BenchmarkCoverageComputation = {
+  benchmarkTicker: string
+  firstDate: string | null
+  lastDate: string | null
+  metricSourceUsed: BenchmarkMetricSource
+  windowStartUsed: string
+  windowEndUsed: string
+  expectedDays: number
+  actualDays: number
+  missingDays: number
+  trueMissingRate: number
+  status: BenchmarkCoverageStatus
+}
+
+async function fetchTickerStats(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  admin: any,
+  symbols: string[],
+): Promise<Map<string, CoverageStatsSnapshot>> {
+  const stats = new Map<string, CoverageStatsSnapshot>()
+  if (symbols.length === 0) return stats
+
+  type StatsRow = { symbol: string; first_date: string | null; last_date: string | null }
+  const { data, error } = await admin
+    .from("ticker_stats")
+    .select("symbol, first_date, last_date")
+    .in("symbol", symbols) as { data: StatsRow[] | null; error: { message: string } | null }
+
+  if (error) {
+    console.error("[coverage-check] ticker_stats error:", error.message)
+    return stats
+  }
+
+  for (const row of data ?? []) {
+    stats.set(row.symbol.toUpperCase(), {
+      firstDate: row.first_date,
+      lastDate: row.last_date,
+    })
+  }
+
+  return stats
+}
+
+async function fetchObservedDatesByTicker(params: {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  admin: any
+  symbols: string[]
+  startDate: string
+  endDate: string
+}): Promise<Map<string, string[]>> {
+  const { admin, symbols, startDate, endDate } = params
+  const observedByTicker = new Map<string, string[]>()
+  for (const symbol of symbols) {
+    observedByTicker.set(symbol, [])
+  }
+  if (symbols.length === 0 || endDate < startDate) return observedByTicker
+
+  const pageSize = 1000
+  let offset = 0
+
+  while (true) {
+    const { data, error } = await admin
+      .from("prices")
+      .select("ticker, date")
+      .in("ticker", symbols)
+      .gte("date", startDate)
+      .lte("date", endDate)
+      .order("date", { ascending: true })
+      .range(offset, offset + pageSize - 1) as {
+        data: Array<{ ticker: string; date: string }> | null
+        error: { message: string } | null
+      }
+
+    if (error) {
+      console.error("[coverage-check] prices date fetch error:", error.message)
+      break
+    }
+
+    const rows = data ?? []
+    for (const row of rows) {
+      const symbol = String(row.ticker ?? "").toUpperCase()
+      const date = String(row.date ?? "")
+      const bucket = observedByTicker.get(symbol)
+      if (!bucket || !date) continue
+      if (bucket.at(-1) !== date) {
+        bucket.push(date)
+      }
+    }
+
+    if (rows.length < pageSize) break
+    offset += pageSize
+  }
+
+  return observedByTicker
+}
+
+function resolveCoverageWindowStart(params: {
+  windowFloor: string
+  windowEnd: string
+  firstDate: string | null
+}): string | null {
+  const { windowFloor, windowEnd, firstDate } = params
+  if (!firstDate) return null
+  const windowStart = firstDate > windowFloor ? firstDate : windowFloor
+  return windowStart <= windowEnd ? windowStart : null
+}
+
+function getBenchmarkCoverageStatus(params: {
+  actualDays: number
+  trueMissingRate: number
+}): BenchmarkCoverageStatus {
+  if (params.actualDays === 0) return "blocked"
+  if (params.trueMissingRate > 0.10) return "blocked"
+  if (params.trueMissingRate > 0.02) return "warning"
+  return "good"
+}
+
+export function computeBenchmarkCoverage(params: {
+  benchmarkTicker: string
+  windowStart: string
+  windowEnd: string
+  cutoffDate: string
+  metricSourceUsed?: BenchmarkMetricSource
+  stats: CoverageStatsSnapshot | undefined
+  benchmarkDates: readonly string[]
+}): BenchmarkCoverageComputation {
+  const {
+    benchmarkTicker,
+    windowStart,
+    windowEnd,
+    cutoffDate,
+    metricSourceUsed = "run_window",
+    stats,
+    benchmarkDates,
+  } = params
+  const firstDate = stats?.firstDate ?? null
+  const lastDate = stats?.lastDate ?? null
+  const windowEndUsed = windowEnd > cutoffDate ? cutoffDate : windowEnd
+  const windowStartUsed = resolveCoverageWindowStart({
+    windowFloor: windowStart,
+    windowEnd: windowEndUsed,
+    firstDate,
+  }) ?? windowStart
+  const expectedDays =
+    windowStartUsed > windowEndUsed
+      ? 0
+      : countDatesInRange(benchmarkDates, windowStartUsed, windowEndUsed)
+  const actualDays =
+    windowStartUsed > windowEndUsed
+      ? 0
+      : countDatesInRange(benchmarkDates, windowStartUsed, windowEndUsed)
+  const missingDays = expectedDays > 0 ? Math.max(expectedDays - actualDays, 0) : 0
+  const trueMissingRate = expectedDays > 0 ? missingDays / expectedDays : 0
+  const status = getBenchmarkCoverageStatus({
+    actualDays,
+    trueMissingRate,
+  })
+
+  return {
+    benchmarkTicker,
+    firstDate,
+    lastDate,
+    metricSourceUsed,
+    windowStartUsed,
+    windowEndUsed,
+    expectedDays,
+    actualDays,
+    missingDays,
+    trueMissingRate,
+    status,
+  }
+}
+
+function buildBenchmarkMissingnessRow(
+  coverage: BenchmarkCoverageComputation
+): MissingnessCoverageRow {
+  return {
+    symbol: coverage.benchmarkTicker,
+    isBenchmark: true,
+    firstDate: coverage.firstDate,
+    lastDate: coverage.lastDate,
+    windowStart: coverage.windowStartUsed,
+    expectedDays: coverage.expectedDays,
+    actualDays: coverage.actualDays,
+    trueMissingDays: coverage.missingDays,
+    trueMissingRate: coverage.trueMissingRate,
+  }
+}
+
+function buildUniverseMissingnessRow(params: {
+  symbol: string
+  benchmarkDates: readonly string[]
+  warmupStart: string
+  requiredEnd: string
+  stats: CoverageStatsSnapshot | undefined
+  observedDates: readonly string[]
+}): MissingnessCoverageRow {
+  const { symbol, benchmarkDates, warmupStart, requiredEnd, stats, observedDates } = params
+  const firstDate = stats?.firstDate ?? null
+  const lastDate = stats?.lastDate ?? null
+  const windowStart = resolveCoverageWindowStart({
+    windowFloor: warmupStart,
+    windowEnd: requiredEnd,
+    firstDate,
+  })
+  const expectedDays =
+    !windowStart
+      ? 0
+      : countDatesInRange(benchmarkDates, windowStart, requiredEnd)
+  const actualDays =
+    !windowStart
+      ? 0
+      : countDatesInRange(observedDates, windowStart, requiredEnd)
+  const trueMissingDays = expectedDays > 0 ? Math.max(expectedDays - actualDays, 0) : 0
+  const trueMissingRate = expectedDays > 0 ? trueMissingDays / expectedDays : 0
+
+  return {
+    symbol,
+    isBenchmark: false,
+    firstDate,
+    lastDate,
+    windowStart,
+    expectedDays,
+    actualDays,
+    trueMissingDays,
+    trueMissingRate,
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Coverage types
 // ---------------------------------------------------------------------------
@@ -131,20 +429,30 @@ export type SymbolCoverage = {
 export type CoverageHealthStatus = "good" | "warning" | "blocked"
 
 export type RunPreflightStatus = "ok" | "warn" | "block"
+export type RunPreflightIssueSeverity = "good" | "warning" | "blocked"
 
 export type PreflightSuggestedFix = {
-  kind: "clamp_start_date" | "clamp_end_date" | "queue_data_repairs" | "reduce_top_n" | "set_top_n" | "retry_repairs"
+  kind:
+    | "clamp_start_date"
+    | "clamp_end_date"
+    | "queue_data_repairs"
+    | "reduce_top_n"
+    | "set_top_n"
+    | "retry_repairs"
+    | "change_benchmark"
   value?: string | number | string[]
 }
 
 export type RunPreflightIssueAction =
   | { kind: "clamp_start_date"; value: string; label: string }
   | { kind: "clamp_end_date"; value: string; label: string }
+  | { kind: "reduce_top_n"; value: number; label: string }
   | { kind: "set_top_n"; value: number; label: string }
   | { kind: "retry_repairs"; value: string[]; label: string }
+  | { kind: "change_benchmark"; value: string; label: string }
 
 export type RunPreflightIssue = {
-  severity: Exclude<RunPreflightStatus, "ok">
+  severity: RunPreflightIssueSeverity
   code: string
   reason: string
   fix: string
@@ -158,6 +466,9 @@ export type RunPreflightConstraints = {
   minStartDate: string | null
   maxEndDate: string
   missingTickers: string[]
+  warmupStart: string
+  requiredStart: string
+  requiredEnd: string
 }
 
 export type MissingnessCoverageRow = {
@@ -165,18 +476,32 @@ export type MissingnessCoverageRow = {
   isBenchmark: boolean
   firstDate: string | null
   lastDate: string | null
+  windowStart: string | null
   expectedDays: number
   actualDays: number
   trueMissingDays: number
   trueMissingRate: number
 }
 
+export type BenchmarkSuggestionCandidate = {
+  symbol: string
+  status: RunPreflightStatus
+  benchmarkTrueMissingRate: number
+  affectedShare: number
+}
+
 export type RunPreflightCoverageSummary = {
   benchmark: {
     status: CoverageHealthStatus
     reason: string | null
+    metricSourceUsed: BenchmarkMetricSource
     trueMissingRate: number
     symbol: string
+    windowStartUsed: string
+    windowEndUsed: string
+    expectedDays: number
+    actualDays: number
+    missingDays: number
   }
   universe: {
     status: CoverageHealthStatus
@@ -186,6 +511,7 @@ export type RunPreflightCoverageSummary = {
     affectedShare: number
   }
   symbols: MissingnessCoverageRow[]
+  benchmarkCandidates: BenchmarkSuggestionCandidate[]
 }
 
 export type RunPreflightResult = {
@@ -195,6 +521,7 @@ export type RunPreflightResult = {
   suggested_fixes: PreflightSuggestedFix[]
   constraints: RunPreflightConstraints
   coverage: RunPreflightCoverageSummary
+  warmupStart: string
   requiredStart: string
   requiredEnd: string
 }
@@ -202,6 +529,7 @@ export type RunPreflightResult = {
 export type RunPreflightSnapshot = {
   constraints: RunPreflightConstraints
   coverage: RunPreflightCoverageSummary
+  warmupStart: string
   requiredStart: string
   requiredEnd: string
 }
@@ -481,10 +809,14 @@ function issueToSuggestedFix(issue: RunPreflightIssue): PreflightSuggestedFix | 
       return { kind: "clamp_start_date", value: issue.action.value }
     case "clamp_end_date":
       return { kind: "clamp_end_date", value: issue.action.value }
+    case "reduce_top_n":
+      return { kind: "reduce_top_n", value: issue.action.value }
     case "set_top_n":
       return { kind: "set_top_n", value: issue.action.value }
     case "retry_repairs":
       return { kind: "retry_repairs", value: issue.action.value }
+    case "change_benchmark":
+      return { kind: "change_benchmark", value: issue.action.value }
   }
 }
 
@@ -550,65 +882,83 @@ export function buildUniverseCoverageStatus(params: {
   }
 }
 
-export function buildBenchmarkCoverageStatus(
-  benchmark: string,
-  row: MissingnessCoverageRow | undefined
+function formatBenchmarkWindowLabel(windowStart: string, windowEnd: string): string {
+  return ` over ${windowStart} -> ${windowEnd}`
+}
+
+function buildBenchmarkCoverageSummary(
+  coverage: BenchmarkCoverageComputation
 ): RunPreflightCoverageSummary["benchmark"] {
-  if (!row || !row.firstDate) {
+  const base = {
+    metricSourceUsed: coverage.metricSourceUsed,
+    trueMissingRate: coverage.trueMissingRate,
+    symbol: coverage.benchmarkTicker,
+    windowStartUsed: coverage.windowStartUsed,
+    windowEndUsed: coverage.windowEndUsed,
+    expectedDays: coverage.expectedDays,
+    actualDays: coverage.actualDays,
+    missingDays: coverage.missingDays,
+  }
+  const windowLabel = formatBenchmarkWindowLabel(base.windowStartUsed, base.windowEndUsed)
+  const sourceLabel = ` (source: ${coverage.metricSourceUsed})`
+
+  if (!coverage.firstDate || coverage.actualDays === 0) {
     return {
       status: "blocked",
-      reason: `${benchmark} is not ingested yet.`,
+      reason: `${coverage.benchmarkTicker} is not ingested yet${windowLabel}${sourceLabel}.`,
+      ...base,
       trueMissingRate: 1,
-      symbol: benchmark,
     }
   }
 
-  if (row.expectedDays > 0 && row.trueMissingRate > 0.02) {
+  if (coverage.status === "blocked") {
     return {
       status: "blocked",
-      reason: `${benchmark} true missingness is ${formatPercent(row.trueMissingRate)} (must be ${formatPercent(0.02)} or lower).`,
-      trueMissingRate: row.trueMissingRate,
-      symbol: benchmark,
+      reason: `${coverage.benchmarkTicker} missingness is ${formatPercent(coverage.trueMissingRate)}${windowLabel}${sourceLabel} (${formatPercent(0.10)} max allowed).`,
+      ...base,
     }
   }
 
-  if (row.expectedDays > 0 && row.trueMissingRate > 0) {
+  if (coverage.status === "warning") {
     return {
       status: "warning",
-      reason: `${benchmark} true missingness is ${formatPercent(row.trueMissingRate)} but remains within the allowed threshold.`,
-      trueMissingRate: row.trueMissingRate,
-      symbol: benchmark,
+      reason: `${coverage.benchmarkTicker} missingness is ${formatPercent(coverage.trueMissingRate)}${windowLabel}${sourceLabel} (${formatPercent(0.02)} good threshold, ${formatPercent(0.10)} block threshold).`,
+      ...base,
     }
   }
 
   return {
     status: "good",
     reason: null,
-    trueMissingRate: row?.trueMissingRate ?? 0,
-    symbol: benchmark,
+    ...base,
   }
 }
 
 export function finalizeRunPreflightResult(params: {
   constraints: RunPreflightConstraints
   coverage: RunPreflightCoverageSummary
+  warmupStart: string
   requiredStart: string
   requiredEnd: string
   issues: RunPreflightIssue[]
 }): RunPreflightResult {
-  const { constraints, coverage, requiredStart, requiredEnd, issues } = params
-  const blockIssues = issues.filter((issue) => issue.severity === "block")
-  const warnIssues = issues.filter((issue) => issue.severity === "warn")
+  const { constraints, coverage, warmupStart, requiredStart, requiredEnd, issues } = params
+  const blockIssues = issues.filter((issue) => issue.severity === "blocked")
+  const warnIssues = issues.filter((issue) => issue.severity === "warning")
   const status: RunPreflightStatus = blockIssues.length > 0
     ? "block"
     : warnIssues.length > 0
       ? "warn"
       : "ok"
 
-  const visibleIssues = status === "warn" ? warnIssues : blockIssues
+  const visibleIssues = status === "block"
+    ? blockIssues
+    : status === "warn"
+      ? warnIssues
+      : []
   return {
     status,
-    issues: visibleIssues,
+    issues,
     reasons: visibleIssues.map((issue) => issue.reason),
     suggested_fixes: uniqueFixes(
       visibleIssues
@@ -617,6 +967,7 @@ export function finalizeRunPreflightResult(params: {
     ),
     constraints,
     coverage,
+    warmupStart,
     requiredStart,
     requiredEnd,
   }
@@ -629,13 +980,15 @@ export function buildRunPreflightResult(params: {
   benchmark: string
   constraints: RunPreflightConstraints
   symbolRows: MissingnessCoverageRow[]
+  benchmarkCoverage?: RunPreflightCoverageSummary["benchmark"]
+  benchmarkCandidates?: BenchmarkSuggestionCandidate[]
 }): RunPreflightResult {
   const { strategyId, startDate, endDate, benchmark, constraints, symbolRows } = params
   const issues: RunPreflightIssue[] = []
 
   if (constraints.minStartDate && startDate < constraints.minStartDate) {
     issues.push({
-      severity: "block",
+      severity: "blocked",
       code: "start_before_universe_min",
       reason: `Start date ${startDate} is earlier than the earliest valid start for this universe (${constraints.minStartDate}).`,
       fix: `Choose ${constraints.minStartDate} or a later start date.`,
@@ -649,7 +1002,7 @@ export function buildRunPreflightResult(params: {
 
   if (endDate > constraints.maxEndDate) {
     issues.push({
-      severity: "block",
+      severity: "blocked",
       code: "end_after_cutoff",
       reason: `End date ${endDate} is after the current data cutoff (${constraints.maxEndDate}).`,
       fix: `Choose ${constraints.maxEndDate} or an earlier end date.`,
@@ -663,12 +1016,31 @@ export function buildRunPreflightResult(params: {
 
   const benchmarkRow = symbolRows.find((row) => row.symbol === benchmark)
   const universeRows = symbolRows.filter((row) => !row.isBenchmark)
-  const benchmarkCoverage = buildBenchmarkCoverageStatus(benchmark, benchmarkRow)
+  const fallbackWindowStart = benchmarkRow?.windowStart ?? constraints.warmupStart
+  const fallbackWindowLabel = formatBenchmarkWindowLabel(fallbackWindowStart, constraints.requiredEnd)
+  const benchmarkCoverage = params.benchmarkCoverage ?? {
+    status: benchmarkRow && benchmarkRow.firstDate ? (benchmarkRow.trueMissingRate > 0.10 ? "blocked" : benchmarkRow.trueMissingRate > 0.02 ? "warning" : "good") : "blocked",
+    metricSourceUsed: "run_window" as BenchmarkMetricSource,
+    reason: !benchmarkRow || !benchmarkRow.firstDate
+      ? `${benchmark} is not ingested yet${fallbackWindowLabel} (source: run_window).`
+      : benchmarkRow.trueMissingRate > 0.10
+        ? `${benchmark} missingness is ${formatPercent(benchmarkRow.trueMissingRate)}${fallbackWindowLabel} (source: run_window) (${formatPercent(0.10)} max allowed).`
+        : benchmarkRow.trueMissingRate > 0.02
+          ? `${benchmark} missingness is ${formatPercent(benchmarkRow.trueMissingRate)}${fallbackWindowLabel} (source: run_window) (${formatPercent(0.02)} good threshold, ${formatPercent(0.10)} block threshold).`
+          : null,
+    trueMissingRate: benchmarkRow?.trueMissingRate ?? (benchmarkRow?.firstDate ? 0 : 1),
+    symbol: benchmark,
+    windowStartUsed: fallbackWindowStart,
+    windowEndUsed: constraints.requiredEnd,
+    expectedDays: benchmarkRow?.expectedDays ?? 0,
+    actualDays: benchmarkRow?.actualDays ?? 0,
+    missingDays: benchmarkRow?.trueMissingDays ?? 0,
+  }
   const universeCoverage = buildUniverseCoverageStatus({ strategyId, universeRows })
 
   if (benchmarkCoverage.status === "blocked" && benchmarkCoverage.reason) {
     issues.push({
-      severity: "block",
+      severity: "blocked",
       code: "benchmark_missingness_blocked",
       reason: benchmarkCoverage.reason,
       fix: `Choose another benchmark or an earlier date range for ${benchmark}.`,
@@ -678,7 +1050,7 @@ export function buildRunPreflightResult(params: {
 
   if (universeCoverage.status === "blocked" && universeCoverage.reason) {
     issues.push({
-      severity: "block",
+      severity: "blocked",
       code: universeCoverage.over10Percent.length > 0
         ? "universe_missingness_per_ticker_blocked"
         : "universe_missingness_share_blocked",
@@ -690,7 +1062,7 @@ export function buildRunPreflightResult(params: {
 
   if (benchmarkCoverage.status === "warning" && benchmarkCoverage.reason) {
     issues.push({
-      severity: "warn",
+      severity: "warning",
       code: "benchmark_missingness_warning",
       reason: benchmarkCoverage.reason,
       fix: `You can continue, but results versus ${benchmark} may be less reliable.`,
@@ -699,7 +1071,7 @@ export function buildRunPreflightResult(params: {
   }
   if (universeCoverage.status === "warning" && universeCoverage.reason) {
     issues.push({
-      severity: "warn",
+      severity: "warning",
       code: "universe_missingness_warning",
       reason: universeCoverage.reason,
       fix: "You can continue, but this data quality may affect the rankings.",
@@ -713,11 +1085,11 @@ export function buildRunPreflightResult(params: {
       benchmark: benchmarkCoverage,
       universe: universeCoverage,
       symbols: symbolRows,
+      benchmarkCandidates: params.benchmarkCandidates ?? [],
     },
-    requiredStart: symbolRows.length > 0
-      ? subtractCalendarDays(startDate, STRATEGY_WARMUP_CALENDAR_DAYS[strategyId] ?? 0)
-      : startDate,
-    requiredEnd: endDate > constraints.maxEndDate ? constraints.maxEndDate : endDate,
+    warmupStart: constraints.warmupStart,
+    requiredStart: constraints.requiredStart,
+    requiredEnd: constraints.requiredEnd,
     issues,
   })
 }
@@ -729,22 +1101,100 @@ export function buildRunPreflightSnapshot(params: {
   benchmark: string
   constraints: RunPreflightConstraints
   symbolRows: MissingnessCoverageRow[]
+  benchmarkCoverage: RunPreflightCoverageSummary["benchmark"]
+  benchmarkCandidates: BenchmarkSuggestionCandidate[]
 }): RunPreflightSnapshot {
-  const { strategyId, startDate, endDate, benchmark, constraints, symbolRows } = params
-  const benchmarkRow = symbolRows.find((row) => row.symbol === benchmark)
+  const { strategyId, constraints, symbolRows, benchmarkCoverage, benchmarkCandidates } = params
   const universeRows = symbolRows.filter((row) => !row.isBenchmark)
   return {
     constraints,
     coverage: {
-      benchmark: buildBenchmarkCoverageStatus(benchmark, benchmarkRow),
+      benchmark: benchmarkCoverage,
       universe: buildUniverseCoverageStatus({ strategyId, universeRows }),
       symbols: symbolRows,
+      benchmarkCandidates,
     },
-    requiredStart: symbolRows.length > 0
-      ? subtractCalendarDays(startDate, STRATEGY_WARMUP_CALENDAR_DAYS[strategyId] ?? 0)
-      : startDate,
-    requiredEnd: endDate > constraints.maxEndDate ? constraints.maxEndDate : endDate,
+    warmupStart: constraints.warmupStart,
+    requiredStart: constraints.requiredStart,
+    requiredEnd: constraints.requiredEnd,
   }
+}
+
+function statusFromCoverage(params: {
+  benchmarkStatus: CoverageHealthStatus
+  universeStatus: CoverageHealthStatus
+}): RunPreflightStatus {
+  if (params.benchmarkStatus === "blocked" || params.universeStatus === "blocked") {
+    return "block"
+  }
+  if (params.benchmarkStatus === "warning" || params.universeStatus === "warning") {
+    return "warn"
+  }
+  return "ok"
+}
+
+function buildBenchmarkCandidates(params: {
+  strategyId: StrategyId
+  universeSymbols: string[]
+  warmupStart: string
+  requiredEnd: string
+  statsBySymbol: Map<string, CoverageStatsSnapshot>
+  observedByTicker: Map<string, string[]>
+}): BenchmarkSuggestionCandidate[] {
+  const {
+    strategyId,
+    universeSymbols,
+    warmupStart,
+    requiredEnd,
+    statsBySymbol,
+    observedByTicker,
+  } = params
+
+  return [...BENCHMARK_OPTIONS]
+    .map((symbol) => {
+      const benchmarkCoverage = computeBenchmarkCoverage({
+        benchmarkTicker: symbol,
+        windowStart: warmupStart,
+        windowEnd: requiredEnd,
+        cutoffDate: requiredEnd,
+        stats: statsBySymbol.get(symbol),
+        benchmarkDates: observedByTicker.get(symbol) ?? [],
+      })
+      const benchmarkDates = observedByTicker.get(symbol) ?? []
+      const universeRows = universeSymbols
+        .filter((universeSymbol) => universeSymbol !== symbol)
+        .map((universeSymbol) =>
+          buildUniverseMissingnessRow({
+            symbol: universeSymbol,
+            benchmarkDates,
+            warmupStart,
+            requiredEnd,
+            stats: statsBySymbol.get(universeSymbol),
+            observedDates: observedByTicker.get(universeSymbol) ?? [],
+          })
+        )
+      const universeCoverage = buildUniverseCoverageStatus({
+        strategyId,
+        universeRows,
+      })
+      return {
+        symbol,
+        status: statusFromCoverage({
+          benchmarkStatus: benchmarkCoverage.status,
+          universeStatus: universeCoverage.status,
+        }),
+        benchmarkTrueMissingRate: benchmarkCoverage.trueMissingRate,
+        affectedShare: universeCoverage.affectedShare,
+      }
+    })
+    .sort((left, right) => {
+      const statusRank = { ok: 0, warn: 1, block: 2 } as const
+      const byStatus = statusRank[left.status] - statusRank[right.status]
+      if (byStatus !== 0) return byStatus
+      const byMissing = left.benchmarkTrueMissingRate - right.benchmarkTrueMissingRate
+      if (byMissing !== 0) return byMissing
+      return left.symbol.localeCompare(right.symbol)
+    })
 }
 
 export async function evaluateRunPreflightSnapshot(params: {
@@ -760,8 +1210,6 @@ export async function evaluateRunPreflightSnapshot(params: {
 }): Promise<RunPreflightSnapshot> {
   const {
     strategyId,
-    startDate,
-    endDate,
     universeSymbols,
     benchmark,
     dataCutoffDate,
@@ -775,6 +1223,14 @@ export async function evaluateRunPreflightSnapshot(params: {
       ? (universeEarliestStart > universeValidFrom ? universeEarliestStart : universeValidFrom)
       : (universeEarliestStart ?? universeValidFrom ?? null)
 
+  const { warmupStart, requiredStart, requiredEnd } = resolveRunPreflightWindow({
+    strategyId,
+    startDate: params.startDate,
+    endDate: params.endDate,
+    dataCutoffDate,
+    minStartDate,
+  })
+
   const constraints: RunPreflightConstraints = {
     dataCutoffDate,
     universeEarliestStart,
@@ -782,81 +1238,80 @@ export async function evaluateRunPreflightSnapshot(params: {
     minStartDate,
     maxEndDate: dataCutoffDate,
     missingTickers,
+    warmupStart,
+    requiredStart,
+    requiredEnd,
   }
 
-  const warmupDays = STRATEGY_WARMUP_CALENDAR_DAYS[strategyId] ?? 0
-  const requiredStart = subtractCalendarDays(startDate, warmupDays)
-  const requiredEnd = endDate > dataCutoffDate ? dataCutoffDate : endDate
-  const allSymbols = [...new Set([...universeSymbols, benchmark])]
+  const researchWindowStart = COVERAGE_WINDOW_START
+  const metricSourceUsed: BenchmarkMetricSource =
+    params.startDate >= researchWindowStart && requiredEnd <= dataCutoffDate
+      ? "research_window"
+      : "run_window"
+  const metricWindowStart = metricSourceUsed === "research_window"
+    ? researchWindowStart
+    : warmupStart
+
+  const snapshotSymbols = [...new Set([...universeSymbols, benchmark])]
+  const allSymbols = [...new Set([...universeSymbols, ...BENCHMARK_OPTIONS])]
 
   const admin = createAdminClient()
+  const statsBySymbol = await fetchTickerStats(admin, allSymbols)
+  const observedByTicker = await fetchObservedDatesByTicker({
+    admin,
+    symbols: allSymbols,
+    startDate: metricWindowStart,
+    endDate: requiredEnd,
+  })
 
-  type StatsRow = { symbol: string; first_date: string | null; last_date: string | null }
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { data: statsRows, error: statsError } = await (admin as any)
-    .from("ticker_stats")
-    .select("symbol, first_date, last_date")
-    .in("symbol", allSymbols) as { data: StatsRow[] | null; error: { message: string } | null }
+  const benchmarkDates = observedByTicker.get(benchmark) ?? []
+  const benchmarkCoverage = computeBenchmarkCoverage({
+    benchmarkTicker: benchmark,
+    windowStart: metricWindowStart,
+    windowEnd: requiredEnd,
+    cutoffDate: dataCutoffDate,
+    metricSourceUsed,
+    stats: statsBySymbol.get(benchmark),
+    benchmarkDates,
+  })
+  const benchmarkRow = buildBenchmarkMissingnessRow(benchmarkCoverage)
 
-  if (statsError) {
-    console.error("[coverage-check] ticker_stats error:", statsError.message)
-  }
+  const universeRows = universeSymbols
+    .filter((symbol) => symbol !== benchmark)
+    .map((symbol) =>
+      buildUniverseMissingnessRow({
+        symbol,
+        benchmarkDates,
+        warmupStart: metricWindowStart,
+        requiredEnd,
+        stats: statsBySymbol.get(symbol),
+        observedDates: observedByTicker.get(symbol) ?? [],
+      })
+    )
 
-  const firstDateMap = new Map<string, string>()
-  const lastDateMap = new Map<string, string>()
-  for (const row of statsRows ?? []) {
-    if (row.first_date) firstDateMap.set(row.symbol, row.first_date)
-    if (row.last_date) lastDateMap.set(row.symbol, row.last_date)
-  }
+  const symbolRows: MissingnessCoverageRow[] = [
+    benchmarkRow,
+    ...universeRows,
+  ]
 
-  type AggRow = { ticker: string; actual_days: string | number }
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { data: rpcData, error: rpcError } = await (admin as any).rpc(
-    "get_benchmark_coverage_agg",
-    { p_tickers: allSymbols, p_start: requiredStart, p_end: requiredEnd }
-  ) as { data: AggRow[] | null; error: { message: string } | null }
-
-  if (rpcError) {
-    console.error("[coverage-check] get_benchmark_coverage_agg error:", rpcError.message)
-  }
-
-  const actualDaysMap = new Map<string, number>()
-  for (const row of rpcData ?? []) {
-    actualDaysMap.set(row.ticker, Number(row.actual_days))
-  }
-
-  const symbolRows: MissingnessCoverageRow[] = allSymbols.map((symbol) => {
-    const firstDate = firstDateMap.get(symbol) ?? null
-    const actualStart =
-      firstDate && firstDate > requiredStart
-        ? firstDate
-        : requiredStart
-    const expectedDays =
-      firstDate === null || actualStart > requiredEnd
-        ? 0
-        : countBusinessDays(actualStart, requiredEnd)
-    const actualDays = actualDaysMap.get(symbol) ?? 0
-    const trueMissingDays = expectedDays > 0 ? Math.max(expectedDays - actualDays, 0) : 0
-    const trueMissingRate = expectedDays > 0 ? trueMissingDays / expectedDays : 0
-    return {
-      symbol,
-      isBenchmark: symbol === benchmark,
-      firstDate,
-      lastDate: lastDateMap.get(symbol) ?? null,
-      expectedDays,
-      actualDays,
-      trueMissingDays,
-      trueMissingRate,
-    }
+  const benchmarkCandidates = buildBenchmarkCandidates({
+    strategyId,
+    universeSymbols,
+    warmupStart: metricWindowStart,
+    requiredEnd,
+    statsBySymbol,
+    observedByTicker,
   })
 
   return buildRunPreflightSnapshot({
     strategyId,
-    startDate,
-    endDate,
+    startDate: params.startDate,
+    endDate: params.endDate,
     benchmark,
     constraints,
-    symbolRows,
+    symbolRows: symbolRows.filter((row) => snapshotSymbols.includes(row.symbol)),
+    benchmarkCoverage: buildBenchmarkCoverageSummary(benchmarkCoverage),
+    benchmarkCandidates,
   })
 }
 
@@ -879,6 +1334,8 @@ export async function evaluateRunPreflight(params: {
     benchmark: params.benchmark,
     constraints: snapshot.constraints,
     symbolRows: snapshot.coverage.symbols,
+    benchmarkCoverage: snapshot.coverage.benchmark,
+    benchmarkCandidates: snapshot.coverage.benchmarkCandidates,
   })
 }
 

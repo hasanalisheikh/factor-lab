@@ -91,9 +91,47 @@ type Props = {
   defaults: UserSettings | null
   dataCoverage?: DataCoverage | null
   initialUniverseState: EnsureUniverseDataReadyResult
+  diagnostics?: boolean
 }
 
-export function RunForm({ defaults, dataCoverage, initialUniverseState }: Props) {
+function formatPreflightPercent(value: number): string {
+  return `${(value * 100).toFixed(1)}%`
+}
+
+function PreflightBenchmarkDiagnostics({
+  result,
+}: {
+  result: RunPreflightResult
+}) {
+  const benchmark = result.coverage.benchmark
+  if (!benchmark.windowStartUsed || !benchmark.windowEndUsed) return null
+
+  return (
+    <div className="rounded-md border border-border/60 bg-muted/20 px-3 py-2.5">
+      <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+        Benchmark Diagnostics
+      </p>
+      <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-[12px]">
+        <span className="text-muted-foreground">Window</span>
+        <span className="font-mono text-foreground">
+          {benchmark.windowStartUsed} to {benchmark.windowEndUsed}
+        </span>
+        <span className="text-muted-foreground">Source</span>
+        <span className="font-mono text-foreground">{benchmark.metricSourceUsed}</span>
+        <span className="text-muted-foreground">Expected days</span>
+        <span className="font-mono text-foreground">{benchmark.expectedDays}</span>
+        <span className="text-muted-foreground">Actual days</span>
+        <span className="font-mono text-foreground">{benchmark.actualDays}</span>
+        <span className="text-muted-foreground">Missing days</span>
+        <span className="font-mono text-foreground">{benchmark.missingDays}</span>
+        <span className="text-muted-foreground">True missing rate</span>
+        <span className="font-mono text-foreground">{formatPreflightPercent(benchmark.trueMissingRate)}</span>
+      </div>
+    </div>
+  )
+}
+
+export function RunForm({ defaults, dataCoverage, initialUniverseState, diagnostics = false }: Props) {
   const router = useRouter()
   const formRef = useRef<HTMLFormElement>(null)
   const lastLoadedUniverseRef = useRef(initialUniverseState.constraints.universe)
@@ -105,6 +143,9 @@ export function RunForm({ defaults, dataCoverage, initialUniverseState }: Props)
   )
 
   const [strategy, setStrategy] = useState<string>("")
+  const [benchmark, setBenchmark] = useState<typeof BENCHMARK_OPTIONS[number]>(
+    (defaults?.default_benchmark ?? "SPY") as typeof BENCHMARK_OPTIONS[number]
+  )
   const [universe, setUniverse] = useState<UniverseId>(
     (defaults?.default_universe ?? "ETF8") as UniverseId
   )
@@ -302,7 +343,7 @@ export function RunForm({ defaults, dataCoverage, initialUniverseState }: Props)
       strategy_id: String(formData.get("strategy_id") ?? "") as StrategyId,
       start_date: toInputDate(startDate),
       end_date: toInputDate(endDate),
-      benchmark: String(formData.get("benchmark") ?? BENCHMARK_OPTIONS[0]) as typeof BENCHMARK_OPTIONS[number],
+      benchmark,
       universe,
       costs_bps: Number(formData.get("costs_bps") ?? 0),
       top_n: Number(topNValue ?? 1),
@@ -399,6 +440,20 @@ export function RunForm({ defaults, dataCoverage, initialUniverseState }: Props)
       setWarnResult(null)
       return
     }
+    if (kind === "reduce_top_n" && typeof value === "number") {
+      setTopNValue(String(value))
+      setDateAdjustmentMessage(`We've reduced Top N to ${value}.`)
+      setBlockResult(null)
+      setWarnResult(null)
+      return
+    }
+    if (kind === "change_benchmark" && typeof value === "string") {
+      setBenchmark(value as typeof BENCHMARK_OPTIONS[number])
+      setDateAdjustmentMessage(`We've switched the benchmark to ${value}.`)
+      setBlockResult(null)
+      setWarnResult(null)
+      return
+    }
     if (kind === "retry_repairs" && Array.isArray(value)) {
       setSubmitError(null)
       const input = collectRunInput()
@@ -419,8 +474,8 @@ export function RunForm({ defaults, dataCoverage, initialUniverseState }: Props)
       setDateAdjustmentMessage("We restarted the data repair. Try queueing the run again once it finishes.")
     }
   }
-  const blockIssues = blockResult?.issues ?? []
-  const warnIssues = warnResult?.issues ?? []
+  const blockIssues = (blockResult?.issues ?? []).filter((issue) => issue.severity === "blocked")
+  const warnIssues = (warnResult?.issues ?? []).filter((issue) => issue.severity === "warning")
 
   return (
     <>
@@ -658,7 +713,9 @@ export function RunForm({ defaults, dataCoverage, initialUniverseState }: Props)
               <div className="space-y-0.5">
                 {maxEndDateStr && (
                   <p className="text-[11px] text-muted-foreground">
-                    Data current through <span className="font-mono text-foreground">{maxEndDateStr}</span>.
+                    Data current through{" "}
+                    <span className="font-mono font-medium text-foreground">{maxEndDateStr}</span>{" "}
+                    <span className="text-emerald-400">(Backtest-ready)</span>.
                   </p>
                 )}
                 {dataCoverage?.minDateStr && (
@@ -723,7 +780,8 @@ export function RunForm({ defaults, dataCoverage, initialUniverseState }: Props)
                 <NativeSelect
                   id="benchmark"
                   name="benchmark"
-                  defaultValue={defaults?.default_benchmark ?? "SPY"}
+                  value={benchmark}
+                  onChange={(e) => setBenchmark(e.target.value as typeof BENCHMARK_OPTIONS[number])}
                   hasValue
                   className="h-8 border-border bg-secondary/40 pl-3 pr-8 text-[13px]"
                 >
@@ -864,6 +922,7 @@ export function RunForm({ defaults, dataCoverage, initialUniverseState }: Props)
                 </div>
               )
             })}
+            {diagnostics && blockResult && <PreflightBenchmarkDiagnostics result={blockResult} />}
           </div>
           <AlertDialogFooter>
             <AlertDialogCancel>Close</AlertDialogCancel>
@@ -901,6 +960,7 @@ export function RunForm({ defaults, dataCoverage, initialUniverseState }: Props)
                 </div>
               )
             })}
+            {diagnostics && warnResult && <PreflightBenchmarkDiagnostics result={warnResult} />}
           </div>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => setWarnResult(null)}>

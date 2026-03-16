@@ -124,12 +124,12 @@ WHERE request_mode NOT IN ('monthly', 'daily', 'manual', 'preflight')
    OR target_cutoff_date IS NULL
    OR last_heartbeat_at IS NULL;
 
+ALTER TABLE public.data_ingest_jobs
+  DROP CONSTRAINT IF EXISTS data_ingest_jobs_status_check;
+
 UPDATE public.data_ingest_jobs
 SET status = 'succeeded'
 WHERE status = 'completed';
-
-ALTER TABLE public.data_ingest_jobs
-  DROP CONSTRAINT IF EXISTS data_ingest_jobs_status_check;
 
 ALTER TABLE public.data_ingest_jobs
   ADD CONSTRAINT data_ingest_jobs_status_check
@@ -160,6 +160,8 @@ CREATE INDEX IF NOT EXISTS idx_data_ingest_jobs_retrying_due
 -- ---------------------------------------------------------------------------
 -- 4. latest-job RPC: expose new metadata fields
 -- ---------------------------------------------------------------------------
+DROP FUNCTION IF EXISTS public.get_latest_data_ingest_jobs(TEXT[]);
+
 CREATE OR REPLACE FUNCTION public.get_latest_data_ingest_jobs(p_symbols TEXT[])
 RETURNS TABLE (
   id                  UUID,
@@ -248,7 +250,7 @@ BEGIN
     COALESCE(
       (
         SELECT MAX(
-          EXTRACT(EPOCH FROM (g.next_dt - g.date)) / 86400
+          (g.next_dt - g.date)
         )::INT
         FROM (
           SELECT
@@ -260,7 +262,7 @@ BEGIN
             AND p2.date >= DATE '2015-01-02'
         ) g
         WHERE g.next_dt IS NOT NULL
-          AND g.next_dt - g.date > INTERVAL '7 days'
+          AND g.next_dt - g.date > 7
       ),
       0
     )

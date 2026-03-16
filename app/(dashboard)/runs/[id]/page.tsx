@@ -28,6 +28,7 @@ import { RunStatusPoller } from "@/components/run-detail/run-status-poller"
 import { generateRunReport, ensureRunReport } from "@/app/actions/reports"
 import { getRunBenchmark } from "@/lib/benchmark"
 import { BenchmarkOverlapWarning } from "@/components/benchmark-overlap-warning"
+import { RunDeleteButton } from "@/components/run-delete-button"
 
 function getMetrics(value: RunMetricsRow[] | RunMetricsRow | null): RunMetricsRow | null {
   if (Array.isArray(value)) return value[0] ?? null
@@ -141,6 +142,8 @@ export default async function RunDetailPage({ params }: { params: Promise<{ id: 
   const benchmarkTicker = getRunBenchmark(run)
   const isMlRun = run.strategy_id === "ml_ridge" || run.strategy_id === "ml_lightgbm"
   const preflightSnapshot = getRunPreflightSnapshot(run)
+  const universeSymbols = Array.isArray(run.universe_symbols) ? (run.universe_symbols as string[]) : []
+  const dualClassDisclosure = universeSymbols.includes("GOOGL") && universeSymbols.includes("GOOG")
 
   const runConfig: RunConfig = {
     strategyLabel,
@@ -155,6 +158,7 @@ export default async function RunDetailPage({ params }: { params: Promise<{ id: 
     dataCutoffUsed: preflightSnapshot.dataCutoffUsed,
     universeEarliestStart: preflightSnapshot.universeEarliestStart,
     benchmarkCoverageHealth: preflightSnapshot.benchmarkCoverageHealth,
+    dualClassDisclosure,
   }
 
   return (
@@ -202,41 +206,44 @@ export default async function RunDetailPage({ params }: { params: Promise<{ id: 
             </div>
           </div>
         </div>
-        {resolvedReport?.url ? (
-          <Button
-            asChild
-            variant="outline"
-            size="sm"
-            className="h-8 text-[12px] font-medium border-border text-muted-foreground hover:text-foreground shrink-0"
-          >
-            <a href={resolvedReport.url} target="_blank" rel="noreferrer">
-              <Download className="w-3.5 h-3.5 mr-1.5" />
-              Download Report
-            </a>
-          </Button>
-        ) : canGenerateReport ? (
-          <form action={generateReportAction}>
+        <div className="flex items-center gap-2 shrink-0">
+          {resolvedReport?.url ? (
             <Button
-              type="submit"
+              asChild
               variant="outline"
               size="sm"
               className="h-8 text-[12px] font-medium border-border text-muted-foreground hover:text-foreground shrink-0"
             >
-              <Download className="w-3.5 h-3.5 mr-1.5" />
-              Generate Report
+              <a href={resolvedReport.url} target="_blank" rel="noreferrer">
+                <Download className="w-3.5 h-3.5 mr-1.5" />
+                Download Report
+              </a>
             </Button>
-          </form>
-        ) : (
-          <Button
-            variant="outline"
-            size="sm"
-            disabled
-            className="h-8 text-[12px] font-medium border-border text-muted-foreground shrink-0"
-          >
-            <Download className="w-3.5 h-3.5 mr-1.5" />
-            Report Unavailable
-          </Button>
-        )}
+          ) : canGenerateReport ? (
+            <form action={generateReportAction}>
+              <Button
+                type="submit"
+                variant="outline"
+                size="sm"
+                className="h-8 text-[12px] font-medium border-border text-muted-foreground hover:text-foreground shrink-0"
+              >
+                <Download className="w-3.5 h-3.5 mr-1.5" />
+                Generate Report
+              </Button>
+            </form>
+          ) : (
+            <Button
+              variant="outline"
+              size="sm"
+              disabled
+              className="h-8 text-[12px] font-medium border-border text-muted-foreground shrink-0"
+            >
+              <Download className="w-3.5 h-3.5 mr-1.5" />
+              Report Unavailable
+            </Button>
+          )}
+          <RunDeleteButton runId={id} status={status} />
+        </div>
       </div>
 
       {/* Job status panel — visible for queued / running / waiting_for_data runs */}

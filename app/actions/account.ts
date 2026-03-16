@@ -4,6 +4,7 @@ import { redirect } from "next/navigation"
 import { z } from "zod"
 import { createClient } from "@/lib/supabase/server"
 import { createAdminClient } from "@/lib/supabase/admin"
+import { upgradeGuestToEmailPassword } from "@/app/actions/auth"
 
 export type AccountActionState = { error?: string; success?: boolean } | null
 
@@ -63,68 +64,29 @@ export async function changePasswordAction(
 }
 
 // ─── Upgrade Guest Account ────────────────────────────────────────────────────
-// Uses admin client to update email + password in-place (same user_id).
-// Skips email confirmation so the guest keeps all their runs immediately.
-
-const upgradeSchema = z.object({
-  email: z.string().email("Invalid email address"),
-  new_password: z
-    .string()
-    .min(8, "Password must be at least 8 characters")
-    .regex(/[A-Z]/, "Must contain at least one uppercase letter")
-    .regex(/[^a-zA-Z0-9]/, "Must contain at least one special character"),
-  confirm_password: z.string(),
-})
+// Delegates to the shared auth upgrade flow so every guest upgrade path keeps
+// the same UID and active session.
 
 export async function upgradeGuestAction(
   _prev: AccountActionState,
   formData: FormData
 ): Promise<AccountActionState> {
-  const raw = {
-    email: formData.get("email"),
-    new_password: formData.get("new_password"),
-    confirm_password: formData.get("confirm_password"),
-  }
-
-  const parsed = upgradeSchema.safeParse(raw)
-  if (!parsed.success) {
-    return { error: parsed.error.issues[0].message }
-  }
-
-  if (parsed.data.new_password !== parsed.data.confirm_password) {
+  const password = String(formData.get("password") ?? "")
+  const confirmPassword = String(formData.get("confirm_password") ?? "")
+  if (password !== confirmPassword) {
     return { error: "Passwords do not match" }
   }
 
-  // Must be a guest user
-  const supabase = await createClient()
-  const { data: { user }, error: userError } = await supabase.auth.getUser()
-  if (userError || !user) {
-    return { error: "Not authenticated" }
-  }
-  if (!user.user_metadata?.is_guest) {
-    return { error: "Account is not a guest account" }
-  }
-
-  // Update via admin client (skips email confirmation, same user_id)
-  const admin = createAdminClient()
-  const { error: updateError } = await admin.auth.admin.updateUserById(user.id, {
-    email: parsed.data.email,
-    password: parsed.data.new_password,
-    user_metadata: { is_guest: false },
-    email_confirm: true,
+  const state = await upgradeGuestToEmailPassword({
+    email: String(formData.get("email") ?? "").trim(),
+    password,
   })
 
-  if (updateError) {
-    if (updateError.message.toLowerCase().includes("already been registered")) {
-      return { error: "That email is already in use. Please choose a different email." }
-    }
-    return { error: updateError.message }
+  if (state && "error" in state) {
+    return { error: state.error }
   }
 
-  // Sign out so the stale session token is replaced on next sign-in
-  await supabase.auth.signOut()
-
-  redirect("/login?upgraded=1")
+  return null
 }
 
 // ─── Delete Account ───────────────────────────────────────────────────────────
@@ -173,7 +135,7 @@ export async function deleteAccountAction(
   const runIds = (userRuns ?? []).map((r: { id: string }) => r.id)
 
   if (runIds.length > 0) {
-    await Promise.all([
+    const childDeletes = await Promise.all([
       admin.from("model_predictions").delete().in("run_id", runIds),
       admin.from("model_metadata").delete().in("run_id", runIds),
       admin.from("positions").delete().in("run_id", runIds),
@@ -182,7 +144,14 @@ export async function deleteAccountAction(
       admin.from("reports").delete().in("run_id", runIds),
       admin.from("jobs").delete().in("run_id", runIds),
     ])
-    await admin.from("runs").delete().in("id", runIds)
+    const childError = childDeletes.find((r) => r.error)?.error
+    if (childError) {
+      return { error: `Failed to delete account data: ${childError.message}` }
+    }
+    const { error: runsError } = await admin.from("runs").delete().in("id", runIds)
+    if (runsError) {
+      return { error: `Failed to delete account data: ${runsError.message}` }
+    }
   }
 
   await admin.from("user_settings").delete().eq("user_id", user.id)

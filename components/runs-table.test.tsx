@@ -21,6 +21,7 @@ const mockRuns: RunWithMetrics[] = [
     end_date: "2023-12-31",
     created_at: "2026-02-01T00:00:00Z",
     user_id: null,
+    executed_with_missing_data: false,
     run_metrics: {
       id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
       run_id: "11111111-1111-1111-1111-111111111111",
@@ -37,10 +38,12 @@ const mockRuns: RunWithMetrics[] = [
 ]
 
 describe("RunsTable", () => {
-  it("renders rows and links to run detail", () => {
+  it("renders the desktop table and mobile cards with run actions", () => {
     render(<RunsTable runs={mockRuns} />)
-    expect(screen.getByText("Momentum Test")).toBeInTheDocument()
+    expect(screen.getAllByText("Momentum Test")).not.toHaveLength(0)
     const link = screen.getByRole("link", { name: "Momentum Test" })
     expect(link).toHaveAttribute("href", "/runs/11111111-1111-1111-1111-111111111111")
+    expect(screen.getAllByRole("button", { name: "Open actions for Momentum Test" })).toHaveLength(2)
+    expect(screen.getByRole("combobox", { name: "Sort runs" })).toBeInTheDocument()
   })
 })

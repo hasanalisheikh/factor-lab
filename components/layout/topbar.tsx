@@ -40,8 +40,8 @@ export function Topbar({ title = "Dashboard" }: { title?: string }) {
           </SheetContent>
         </Sheet>
 
-        {/* Mobile logo */}
-        <div className="lg:hidden">
+        {/* Tablet logo; hidden on small mobile screens */}
+        <div className="hidden md:block lg:hidden">
           <Link href="/dashboard" aria-label="Go to dashboard">
             <Logo size={48} />
           </Link>
@@ -55,7 +55,7 @@ export function Topbar({ title = "Dashboard" }: { title?: string }) {
 
       <div className="flex items-center gap-1">
         <TopbarSearch />
-        {pathname === "/data" && <DiagnosticsToggle />}
+        {(pathname === "/data" || pathname === "/runs/new") && <DiagnosticsToggle />}
         <TopbarNotifications />
         <TopbarUserMenu />
       </div>

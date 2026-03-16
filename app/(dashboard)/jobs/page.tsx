@@ -6,6 +6,7 @@ import {
   getRunsBacktestWindowSummary,
   BACKTEST_MIN_SPAN_DAYS,
   BACKTEST_MIN_DATA_POINTS,
+  BACKTEST_END_DATE_TOLERANCE_TRADING_DAYS,
 } from "@/lib/supabase/queries"
 import type { RunStatus } from "@/lib/types"
 import { cn } from "@/lib/utils"
@@ -128,14 +129,16 @@ export default async function JobsPage() {
                 Backtest Window Audit
               </CardTitle>
               <span className="text-[11px] text-muted-foreground font-mono">
-                min {BACKTEST_MIN_SPAN_DAYS}d span · {BACKTEST_MIN_DATA_POINTS} pts
+                min {BACKTEST_MIN_SPAN_DAYS}d span · {BACKTEST_MIN_DATA_POINTS} pts · ≤{BACKTEST_END_DATE_TOLERANCE_TRADING_DAYS}td end gap
               </span>
             </div>
           </CardHeader>
           <CardContent className="px-0 pb-2">
             <div className="divide-y divide-border/40">
               {auditRows.map((row) => {
-                const pass = row.meets_min_span && row.meets_min_points
+                const outcome = row.audit_outcome
+                const outcomeLabel =
+                  outcome === "pass" ? "PASS" : outcome === "fail" ? "FAIL" : "SKIP"
                 return (
                   <div
                     key={row.run_id}
@@ -146,13 +149,18 @@ export default async function JobsPage() {
                         {row.name}
                       </span>
                       <span className="text-[11px] text-muted-foreground font-mono">
-                        {row.start_date} → {row.end_date}
+                        {row.status} · run {row.start_date} → {row.end_date}
+                        {row.equity_start_date && row.equity_end_date
+                          ? ` · eq ${row.equity_start_date} → ${row.equity_end_date}`
+                          : " · eq --"}
                       </span>
                     </div>
                     <div className="flex items-center gap-4 shrink-0 text-[11px] font-mono">
                       <span
                         className={cn(
-                          row.meets_min_span
+                          outcome === "skip"
+                            ? "text-muted-foreground"
+                            : row.meets_min_span
                             ? "text-muted-foreground"
                             : "text-destructive"
                         )}
@@ -161,7 +169,9 @@ export default async function JobsPage() {
                       </span>
                       <span
                         className={cn(
-                          row.meets_min_points
+                          outcome === "skip"
+                            ? "text-muted-foreground"
+                            : row.meets_min_points
                             ? "text-muted-foreground"
                             : "text-destructive"
                         )}
@@ -171,10 +181,14 @@ export default async function JobsPage() {
                       <span
                         className={cn(
                           "font-semibold",
-                          pass ? "text-success" : "text-destructive"
+                          outcome === "pass"
+                            ? "text-success"
+                            : outcome === "fail"
+                              ? "text-destructive"
+                              : "text-muted-foreground"
                         )}
                       >
-                        {pass ? "PASS" : "FAIL"}
+                        {outcomeLabel}
                       </span>
                     </div>
                   </div>

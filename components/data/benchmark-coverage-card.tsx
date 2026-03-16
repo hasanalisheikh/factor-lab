@@ -10,6 +10,7 @@ import {
 } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import type { BenchmarkCoverage, DataIngestJobStatus } from "@/lib/supabase/types"
 import { TICKER_INCEPTION_DATES, getIngestJobError } from "@/lib/supabase/types"
 import { isPollingDataIngestStatus } from "@/lib/data-ingest-jobs"
@@ -29,6 +30,42 @@ type Props = {
   /** null signals a query failure — renders "Coverage unavailable" instead of "Not ingested" */
   benchmarks: BenchmarkRowData[] | null
   isDev?: boolean
+}
+
+type BenchmarkCoverageActionState = {
+  status: BenchmarkCoverage["status"] | "not_ingested"
+  needsWindowBackfill: boolean
+  isBehindCutoff: boolean
+  hasOptionalFullHistoryBackfill: boolean
+}
+
+function getBenchmarkCoverageActionState(
+  coverage: BenchmarkCoverage | null
+): BenchmarkCoverageActionState {
+  const status = coverage?.status ?? "not_ingested"
+  const coveragePercent = coverage?.coveragePercent ?? 0
+  const latestDate = coverage?.latestDate ?? null
+  const windowEnd = coverage?.windowEnd ?? null
+  const needsHistoricalBackfill = coverage?.needsHistoricalBackfill ?? false
+
+  const needsWindowBackfill = status !== "not_ingested" && coveragePercent < 100
+  const isBehindCutoff =
+    status !== "not_ingested" &&
+    latestDate !== null &&
+    windowEnd !== null &&
+    latestDate < windowEnd
+  const hasOptionalFullHistoryBackfill =
+    status === "ok" &&
+    coveragePercent >= 100 &&
+    !isBehindCutoff &&
+    needsHistoricalBackfill
+
+  return {
+    status,
+    needsWindowBackfill,
+    isBehindCutoff,
+    hasOptionalFullHistoryBackfill,
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -56,7 +93,7 @@ function BenchmarkRow({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialJob?.id, initialJob?.status, initialJob?.progress])
 
-  const isPolling = isPollingDataIngestStatus(job?.status, job?.finished_at)
+  const isPolling = job ? isPollingDataIngestStatus(job.status, job.finished_at) : false
 
   // A running job is "stalled" when its heartbeat (updated_at) is older than 2 min.
   // This mirrors the Python stall_minutes=2 threshold.
@@ -163,6 +200,11 @@ function BenchmarkRow({
   const status = coverage?.status ?? "not_ingested"
   const needsBackfill = coverage?.needsHistoricalBackfill ?? false
   const coveragePct = coverage?.coveragePercent ?? 0
+  const {
+    needsWindowBackfill,
+    isBehindCutoff,
+    hasOptionalFullHistoryBackfill,
+  } = getBenchmarkCoverageActionState(coverage)
 
   const isBlocked = job?.status === "blocked"
   const hasScheduledRetry =
@@ -198,7 +240,13 @@ function BenchmarkRow({
           ? "text-red-400"
           : "text-amber-400"
 
-  const showBackfillBtn = !isPolling && !hasScheduledRetry && !isBlocked && (needsBackfill || status === "missing")
+  const canShowManualAction = !isPolling && !hasScheduledRetry && !isBlocked
+  const showRepairBackfillBtn =
+    canShowManualAction && (needsWindowBackfill || isBehindCutoff)
+  const showOptionalFullHistoryBtn =
+    diagnosticsEnabled && canShowManualAction && hasOptionalFullHistoryBackfill
+  const showBackfillBtn =
+    diagnosticsEnabled && (showRepairBackfillBtn || showOptionalFullHistoryBtn)
   const showIngestBtn = !isPolling && !hasScheduledRetry && !isBlocked && status === "not_ingested"
   const isFailed = job?.status === "failed" && !job?.next_retry_at
   // "Retry" for permanently-failed or stalled jobs
@@ -207,9 +255,20 @@ function BenchmarkRow({
   const showRetryNowBtn = isBlocked || hasScheduledRetry
   // "Cancel" for queued or running jobs (not stalled — stalled already shows Retry)
   const showCancelBtn = isPolling && !isStalled
+  const showUpToDateLabel =
+    diagnosticsEnabled &&
+    !showBackfillBtn &&
+    !showIngestBtn &&
+    !showRetryBtn &&
+    !showRetryNowBtn &&
+    !showCancelBtn &&
+    status === "ok"
+  const actionStartDate =
+    job?.start_date ??
+    (needsBackfill || needsWindowBackfill || showOptionalFullHistoryBtn ? inceptionDate : undefined)
 
   const canEnableDiagnostics = !diagnosticsEnabled && (
-    showBackfillBtn ||
+    showRepairBackfillBtn ||
     showIngestBtn ||
     showRetryBtn ||
     showRetryNowBtn
@@ -290,15 +349,29 @@ function BenchmarkRow({
         {diagnosticsEnabled && (
           <>
             {showBackfillBtn && (
-              <Button
-                size="sm"
-                variant="outline"
-                className="h-6 px-2 text-[11px] flex-shrink-0 border-amber-800/50 text-amber-400 hover:text-amber-300"
-                onClick={() => handleAction(inceptionDate)}
-                disabled={isSubmitting}
-              >
-                {isSubmitting ? <Loader2 className="w-3 h-3 animate-spin" /> : "Backfill"}
-              </Button>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-6 px-2 text-[11px] flex-shrink-0 border-amber-800/50 text-amber-400 hover:text-amber-300"
+                    onClick={() => handleAction(actionStartDate)}
+                    disabled={isSubmitting}
+                    title={showOptionalFullHistoryBtn ? "Optional. Research window is already healthy." : undefined}
+                  >
+                    {isSubmitting
+                      ? <Loader2 className="w-3 h-3 animate-spin" />
+                      : showOptionalFullHistoryBtn
+                        ? "Backfill full history"
+                        : "Backfill"}
+                  </Button>
+                </TooltipTrigger>
+                {showOptionalFullHistoryBtn && (
+                  <TooltipContent side="top" className="max-w-[220px] text-xs leading-relaxed">
+                    Optional. Research window is already healthy.
+                  </TooltipContent>
+                )}
+              </Tooltip>
             )}
             {showIngestBtn && (
               <Button
@@ -320,7 +393,7 @@ function BenchmarkRow({
                     ? "border-amber-800/50 text-amber-400 hover:text-amber-300"
                     : "border-red-800/50 text-red-400 hover:text-red-300"
                 }`}
-                onClick={() => handleAction(needsBackfill || (isFailed && !isStalled) ? inceptionDate : undefined)}
+                onClick={() => handleAction(actionStartDate)}
                 disabled={isSubmitting}
               >
                 {isSubmitting ? <Loader2 className="w-3 h-3 animate-spin" /> : "Retry"}
@@ -335,7 +408,7 @@ function BenchmarkRow({
                     ? "border-red-800/50 text-red-400 hover:text-red-300"
                     : "border-amber-800/50 text-amber-400 hover:text-amber-300"
                 }`}
-                onClick={() => handleAction(needsBackfill ? inceptionDate : undefined)}
+                onClick={() => handleAction(actionStartDate)}
                 disabled={isSubmitting}
               >
                 {isSubmitting ? <Loader2 className="w-3 h-3 animate-spin" /> : "Retry now"}
@@ -351,6 +424,11 @@ function BenchmarkRow({
               >
                 {isSubmitting ? <Loader2 className="w-3 h-3 animate-spin" /> : "Cancel"}
               </Button>
+            )}
+            {showUpToDateLabel && (
+              <span className="text-[10px] text-muted-foreground flex-shrink-0">
+                Up to date
+              </span>
             )}
           </>
         )}
@@ -381,14 +459,19 @@ export function BenchmarkCoverageCard({ benchmarks, isDev: _isDev = false }: Pro
   const { enabled: diagnosticsEnabled } = useDiagnosticsMode()
   const [isCancellingAll, setIsCancellingAll] = useState(false)
 
-  const anyNeedsBackfill = (benchmarks ?? []).some(
-    (b) =>
-      b.coverage?.needsHistoricalBackfill ||
-      b.coverage?.status === "missing" ||
-      b.coverage?.status === "not_ingested"
+  const hasRepairableBenchmarks = (benchmarks ?? []).some((benchmark) => {
+    const actionState = getBenchmarkCoverageActionState(benchmark.coverage)
+    return (
+      actionState.status === "not_ingested" ||
+      actionState.needsWindowBackfill ||
+      actionState.isBehindCutoff
+    )
+  })
+  const hasOptionalFullHistoryBenchmarks = (benchmarks ?? []).some(
+    (benchmark) => getBenchmarkCoverageActionState(benchmark.coverage).hasOptionalFullHistoryBackfill
   )
   const queuedCount = (benchmarks ?? []).filter(
-    (b) => isPollingDataIngestStatus(b.initialJob?.status, b.initialJob?.finished_at)
+    (b) => (b.initialJob ? isPollingDataIngestStatus(b.initialJob.status, b.initialJob.finished_at) : false)
   ).length
 
   const handleCancelAll = async () => {
@@ -439,13 +522,21 @@ export function BenchmarkCoverageCard({ benchmarks, isDev: _isDev = false }: Pro
           </div>
         ) : (
           <>
-            {anyNeedsBackfill && (
+            {hasRepairableBenchmarks && (
               <div className="flex items-start gap-1.5 rounded-md bg-amber-950/30 border border-amber-800/40 px-2.5 py-2 mb-3">
                 <AlertTriangle className="w-3.5 h-3.5 text-amber-400 flex-shrink-0 mt-0.5" />
                 <p className="text-[11px] text-amber-300/80 leading-snug">
                   {diagnosticsEnabled
-                    ? <>Some benchmarks have incomplete history. Click <strong>Backfill</strong> on any affected row to download full history from ticker inception.</>
+                    ? "Some benchmarks need repair inside the monitored research window or are behind the cutoff. Use the row actions on affected benchmarks."
                     : "Automatic repairs run in the background. Enable diagnostics to inspect or intervene."}
+                </p>
+              </div>
+            )}
+            {!hasRepairableBenchmarks && diagnosticsEnabled && hasOptionalFullHistoryBenchmarks && (
+              <div className="flex items-start gap-1.5 rounded-md bg-muted/40 border border-border px-2.5 py-2 mb-3">
+                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 flex-shrink-0 mt-0.5" />
+                <p className="text-[11px] text-muted-foreground leading-snug">
+                  Research window coverage is already healthy. <strong className="text-foreground">Backfill full history</strong> is optional and downloads history from ticker inception.
                 </p>
               </div>
             )}
