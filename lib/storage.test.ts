@@ -27,30 +27,32 @@ describe("resolveReportsBucketName", () => {
     expect(resolveReportsBucketName("my-reports")).toBe("my-reports")
   })
 
-  it("throws with the bad value in the message for uppercase + spaces", () => {
-    expect(() => resolveReportsBucketName("INVALID BUCKET!")).toThrow('"INVALID BUCKET!"')
+  it("falls back to 'reports' for corrupted env values like 'Vercel CLI 50.20.0'", () => {
+    expect(resolveReportsBucketName("Vercel CLI 50.20.0")).toBe("reports")
   })
 
-  it("throws for uppercase-only bucket names", () => {
-    expect(() => resolveReportsBucketName("REPORTS")).toThrow(/Invalid SUPABASE_REPORTS_BUCKET/)
+  it("falls back to 'reports' for uppercase + special chars", () => {
+    expect(resolveReportsBucketName("INVALID BUCKET!")).toBe("reports")
   })
 
-  it("throws for bucket names shorter than 3 characters", () => {
-    expect(() => resolveReportsBucketName("ab")).toThrow(/Invalid SUPABASE_REPORTS_BUCKET/)
+  it("falls back to 'reports' for uppercase-only names", () => {
+    expect(resolveReportsBucketName("REPORTS")).toBe("reports")
   })
 
-  it("throws for bucket names with leading hyphens", () => {
-    expect(() => resolveReportsBucketName("-reports")).toThrow(/Invalid SUPABASE_REPORTS_BUCKET/)
+  it("falls back to 'reports' for names shorter than 3 characters", () => {
+    expect(resolveReportsBucketName("ab")).toBe("reports")
   })
 
-  it("throws for bucket names with trailing hyphens", () => {
-    expect(() => resolveReportsBucketName("reports-")).toThrow(/Invalid SUPABASE_REPORTS_BUCKET/)
+  it("falls back to 'reports' for names with leading hyphens", () => {
+    expect(resolveReportsBucketName("-reports")).toBe("reports")
   })
 
-  it("throws for bucket names with slashes (path-like strings)", () => {
-    expect(() => resolveReportsBucketName("reports/production")).toThrow(
-      /Invalid SUPABASE_REPORTS_BUCKET/
-    )
+  it("falls back to 'reports' for names with trailing hyphens", () => {
+    expect(resolveReportsBucketName("reports-")).toBe("reports")
+  })
+
+  it("falls back to 'reports' for path-like strings with slashes", () => {
+    expect(resolveReportsBucketName("reports/production")).toBe("reports")
   })
 })
 

@@ -14,25 +14,24 @@ const BUCKET_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$|^[a-z0-9]{3}$/
  *
  * - Trims whitespace.
  * - Falls back to "reports" when the result is empty, null, or undefined.
- *   This handles both unset env vars AND env vars set to blank (SUPABASE_REPORTS_BUCKET=)
- *   which would silently break the `??` operator.
- * - Throws a developer-friendly error (never reaches production users) if the
- *   resolved name fails the safe-pattern check.
+ * - Falls back to "reports" with a console warning when the env var is set to
+ *   an invalid value (e.g. a corrupted Vercel env entry). Report generation
+ *   still succeeds; the warning surfaces in server logs for diagnosis.
  */
 export function resolveReportsBucketName(envValue?: string): string {
   const trimmed = (envValue ?? "").trim()
-  const name = trimmed.length > 0 ? trimmed : "reports"
+  const candidate = trimmed.length > 0 ? trimmed : "reports"
 
-  if (!BUCKET_NAME_PATTERN.test(name)) {
-    throw new Error(
-      `Invalid SUPABASE_REPORTS_BUCKET value "${name}". ` +
-        `Bucket names must be 3–63 characters, lowercase letters, numbers, and hyphens only, ` +
-        `starting and ending with a letter or number. ` +
-        `Check the SUPABASE_REPORTS_BUCKET environment variable.`
+  if (!BUCKET_NAME_PATTERN.test(candidate)) {
+    console.warn(
+      `[storage] SUPABASE_REPORTS_BUCKET "${candidate}" is not a valid bucket name — ` +
+        `falling back to "reports". ` +
+        `Remove or correct the SUPABASE_REPORTS_BUCKET environment variable.`
     )
+    return "reports"
   }
 
-  return name
+  return candidate
 }
 
 /**
