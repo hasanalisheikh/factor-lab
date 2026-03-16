@@ -112,27 +112,18 @@ export async function ensureRunReport(runId: string): Promise<void> {
   const fileData = new Blob([html], { type: "text/html; charset=utf-8" })
   const admin = createAdminClient()
 
-  let { error: uploadError } = await admin.storage
+  // Ensure bucket exists; ignore "already exists" error.
+  const { error: bucketError } = await admin.storage.createBucket(REPORTS_BUCKET, { public: true })
+  if (bucketError && !bucketError.message.toLowerCase().includes("already exists")) {
+    throw new Error(`Failed to create reports bucket: ${bucketError.message}`)
+  }
+
+  const { error: uploadError } = await admin.storage
     .from(REPORTS_BUCKET)
     .upload(storagePath, fileData, {
       upsert: true,
       contentType: "text/html; charset=utf-8",
     })
-
-  if (uploadError && uploadError.message.toLowerCase().includes("bucket")) {
-    const { error: createBucketError } = await admin.storage.createBucket(
-      REPORTS_BUCKET,
-      { public: true }
-    )
-    if (createBucketError) {
-      throw new Error(`Failed to create reports bucket: ${createBucketError.message}`)
-    }
-    const retry = await admin.storage.from(REPORTS_BUCKET).upload(storagePath, fileData, {
-      upsert: true,
-      contentType: "text/html; charset=utf-8",
-    })
-    uploadError = retry.error
-  }
 
   if (uploadError) {
     throw new Error(`Failed to upload report: ${uploadError.message}`)
@@ -157,7 +148,11 @@ export async function ensureRunReport(runId: string): Promise<void> {
 }
 
 export async function generateRunReport(runId: string) {
-  await ensureRunReport(runId)
+  try {
+    await ensureRunReport(runId)
+  } catch (err) {
+    console.error("[generateRunReport] report generation failed:", err)
+  }
   revalidatePath(`/runs/${runId}`)
   redirect(`/runs/${runId}`)
 }

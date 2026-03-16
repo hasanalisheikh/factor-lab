@@ -1,7 +1,7 @@
 "use client"
 
 import { useState } from "react"
-import { Clock, Download, Loader2 } from "lucide-react"
+import { AlertCircle, Clock, Download, Loader2 } from "lucide-react"
 import { Card, CardContent } from "@/components/ui/card"
 import type { JobRow } from "@/lib/supabase/types"
 import type { RunStatus } from "@/lib/types"
@@ -9,6 +9,38 @@ import type { IngestProgress } from "@/lib/supabase/queries"
 import { computeEtaSeconds, formatEtaSeconds } from "@/lib/eta"
 
 const ERROR_TRUNCATE_CHARS = 200
+
+const STAGE_LABELS: Record<string, string> = {
+  ingest:          "Initializing",
+  load_data:       "Loading price data",
+  compute_signals: "Computing signals",
+  rebalance:       "Rebalancing portfolio",
+  metrics:         "Calculating performance",
+  persist:         "Saving results",
+  report:          "Finalizing",
+  features:        "Building ML features",
+  train:           "Training models",
+  download:        "Downloading data",
+  transform:       "Processing data",
+  upsert_prices:   "Storing prices",
+  finalize:        "Finalizing",
+}
+
+const STAGE_DESCRIPTIONS: Record<string, string> = {
+  ingest:          "Setting up the backtest environment…",
+  load_data:       "Fetching price history and applying warmup period…",
+  compute_signals: "Scoring each asset with the strategy…",
+  rebalance:       "Building portfolio weights and applying transaction costs…",
+  metrics:         "Computing Sharpe ratio, CAGR, drawdown, and more…",
+  persist:         "Writing results to the database…",
+  report:          "Wrapping up…",
+  features:        "Generating momentum, volatility, and factor features…",
+  train:           "Running walk-forward model training…",
+  download:        "Downloading price history…",
+  transform:       "Processing and normalizing price data…",
+  upsert_prices:   "Storing price data in the database…",
+  finalize:        "Wrapping up…",
+}
 
 function FailedErrorMessage({ message }: { message: string }) {
   const [expanded, setExpanded] = useState(false)
@@ -53,7 +85,7 @@ export function JobStatusPanel({ job, runStatus, ingestProgress }: JobStatusPane
   const isWaiting = runStatus === "waiting_for_data"
   const progress = job?.progress ?? 0
   const stage = job?.stage ?? "ingest"
-  const stageLabel = stage.charAt(0).toUpperCase() + stage.slice(1)
+  const stageLabel = STAGE_LABELS[stage] ?? stage
   const errorText = job?.error_message || null
 
   // ETA for the running backtest (uses job.started_at from DB).
@@ -85,6 +117,8 @@ export function JobStatusPanel({ job, runStatus, ingestProgress }: JobStatusPane
               <Download className="w-4 h-4 text-blue-500" />
             ) : isBlocked ? (
               <Clock className="w-4 h-4 text-amber-300" />
+            ) : isFailed ? (
+              <AlertCircle className="w-4 h-4 text-destructive" />
             ) : (
               <Clock className="w-4 h-4 text-muted-foreground" />
             )}
@@ -109,11 +143,11 @@ export function JobStatusPanel({ job, runStatus, ingestProgress }: JobStatusPane
                 : isWaiting
                 ? ingestSummary
                 : isRunning
-                ? `${progress}% complete`
+                ? (STAGE_DESCRIPTIONS[stage] ?? "Processing…")
                 : (isFailed || isBlocked) && errorText
                 ? <FailedErrorMessage message={errorText} />
                 : isBlocked
-                ? "This run was blocked before execution because the required data or settings were not safe to use."
+                ? "Required data could not be loaded. Visit the Data page to check coverage, then delete and re-create this run."
                 : "The worker failed before completion."}
             </p>
 

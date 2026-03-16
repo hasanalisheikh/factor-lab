@@ -957,8 +957,6 @@ def _build_ml_result(
     cost_bps=float(run.get("costs_bps") or 10.0),
     progress_cb=ml_progress,
   )
-  if on_progress:
-    on_progress("train", 75)
   model_params = (ml.metadata or {}).get("model_params", {})
   if not isinstance(model_params, dict):
     model_params = {}
@@ -1587,10 +1585,10 @@ def _process_job(io: SupabaseIO, job: Job) -> None:
     # Validate all required outputs are present before marking as completed.
     _validate_backtest_result(result, job.run_id)
 
-    io.update_job_progress(job.id, stage="persist", progress=90)
+    progress_cb("persist", 82)
     io.update_run_metadata(job.run_id, _build_run_metadata(run, result))
+    progress_cb("persist", 88)
 
-    io.update_job_progress(job.id, stage="report", progress=95)
     duration = int((_utcnow() - started).total_seconds())
     io.save_success(
       job=job,

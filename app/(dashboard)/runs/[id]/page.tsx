@@ -25,7 +25,7 @@ import {
 import { STRATEGY_LABELS, type StrategyId, type RunStatus } from "@/lib/types"
 import { JobStatusPanel } from "@/components/run-detail/job-status-panel"
 import { RunStatusPoller } from "@/components/run-detail/run-status-poller"
-import { generateRunReport, ensureRunReport } from "@/app/actions/reports"
+import { generateRunReport } from "@/app/actions/reports"
 import { getRunBenchmark } from "@/lib/benchmark"
 import { BenchmarkOverlapWarning } from "@/components/benchmark-overlap-warning"
 import { RunDeleteButton } from "@/components/run-delete-button"
@@ -127,16 +127,7 @@ export default async function RunDetailPage({ params }: { params: Promise<{ id: 
   const canGenerateReport = status === "completed" && equityCurve.length > 0 && metrics != null
   const generateReportAction = generateRunReport.bind(null, id)
 
-  // Auto-generate report on first visit to a completed run that has no report yet.
-  let resolvedReport = report
-  if (canGenerateReport && !resolvedReport) {
-    try {
-      await ensureRunReport(id)
-      resolvedReport = await getReportByRunId(id).catch(() => null)
-    } catch (err) {
-      console.error("[RunDetailPage] auto-report generation failed:", err)
-    }
-  }
+  const resolvedReport = report
 
   const costsBps = run.costs_bps ?? 10
   const benchmarkTicker = getRunBenchmark(run)
