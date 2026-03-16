@@ -11,8 +11,7 @@ import {
 } from "@/lib/supabase/queries"
 import { getRunBenchmark } from "@/lib/benchmark"
 import { buildReportHtml, parseRunMetadata } from "@/lib/report-builder"
-
-const REPORTS_BUCKET = process.env.SUPABASE_REPORTS_BUCKET ?? "reports"
+import { buildReportStoragePath, resolveReportsBucketName } from "@/lib/storage"
 
 function isMissingPositionsTableError(message?: string): boolean {
   if (!message) return false
@@ -106,29 +105,27 @@ export async function ensureRunReport(runId: string): Promise<void> {
     runMetadata: parseRunMetadata(runRow.run_metadata),
   })
 
-  const storagePath = `${runId}/tearsheet.html`
   const fileData = new Blob([html], { type: "text/html; charset=utf-8" })
   const admin = createAdminClient()
-
-  // Ensure bucket exists; ignore "already exists" error.
-  const { error: bucketError } = await admin.storage.createBucket(REPORTS_BUCKET, { public: true })
-  if (bucketError && !bucketError.message.toLowerCase().includes("already exists")) {
-    throw new Error(`Failed to create reports bucket: ${bucketError.message}`)
-  }
+  const bucketName = resolveReportsBucketName(process.env.SUPABASE_REPORTS_BUCKET)
+  const storagePath = buildReportStoragePath(runId)
+  console.log(`[ensureRunReport] bucket=${bucketName} path=${storagePath}`)
 
   const { error: uploadError } = await admin.storage
-    .from(REPORTS_BUCKET)
+    .from(bucketName)
     .upload(storagePath, fileData, {
       upsert: true,
       contentType: "text/html; charset=utf-8",
     })
 
   if (uploadError) {
-    throw new Error(`Failed to upload report: ${uploadError.message}`)
+    throw new Error(
+      `Failed to upload report to bucket "${bucketName}" at path "${storagePath}": ${uploadError.message}`
+    )
   }
 
   const { data: urlData } = admin.storage
-    .from(REPORTS_BUCKET)
+    .from(bucketName)
     .getPublicUrl(storagePath)
 
   const { error: reportError } = await admin.from("reports").upsert(

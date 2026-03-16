@@ -29,6 +29,7 @@ import {
 import { UNIVERSE_PRESETS, type UniverseId } from "@/lib/universe-config"
 import { TICKER_INCEPTION_DATES } from "@/lib/supabase/types"
 import type { StrategyId } from "@/lib/types"
+import { resolveReportsBucketName } from "@/lib/storage"
 
 export type { RunPreflightResult } from "@/lib/coverage-check"
 export type { UniverseBatchStatusSummary } from "@/lib/supabase/queries"
@@ -198,7 +199,6 @@ const RANKING_STRATEGIES = new Set<StrategyId>([
 ])
 const TREND_DEFENSIVE_PRIMARY = "TLT"
 const TREND_DEFENSIVE_FALLBACK = "BIL"
-const REPORTS_BUCKET = process.env.SUPABASE_REPORTS_BUCKET ?? "reports"
 const RUN_DELETE_BLOCKED_STATUSES = new Set(["queued", "running", "waiting_for_data"])
 
 function isMissingBenchmarkColumnError(message?: string): boolean {
@@ -1424,8 +1424,9 @@ export async function deleteRunAction(runId: string): Promise<DeleteRunActionRes
   }
 
   if (reportRow?.storage_path) {
+    const reportsBucket = resolveReportsBucketName(process.env.SUPABASE_REPORTS_BUCKET)
     const { error: storageError } = await admin.storage
-      .from(REPORTS_BUCKET)
+      .from(reportsBucket)
       .remove([reportRow.storage_path])
 
     if (storageError) {
