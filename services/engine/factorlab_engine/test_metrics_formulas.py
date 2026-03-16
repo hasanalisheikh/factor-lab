@@ -46,13 +46,12 @@ Convention reference (cross-check with TypeScript metrics.ts):
 """
 
 import math
-import numpy as np
+
 import pandas as pd
-import pytest
 
 from factorlab_engine.worker import (
-    _compute_metrics,
     _annualize_turnover_from_rebalances,
+    _compute_metrics,
 )
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
