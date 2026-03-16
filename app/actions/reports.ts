@@ -147,11 +147,18 @@ export async function ensureRunReport(runId: string): Promise<void> {
   }
 }
 
-export async function generateRunReport(runId: string) {
+export async function generateRunReport(
+  runId: string,
+  _prev: { error: string } | null,
+  _formData: FormData,
+): Promise<{ error: string } | null> {
   try {
     await ensureRunReport(runId)
   } catch (err) {
     console.error("[generateRunReport] report generation failed:", err)
+    return {
+      error: err instanceof Error ? err.message : "Report generation failed. Please try again.",
+    }
   }
   revalidatePath(`/runs/${runId}`)
   redirect(`/runs/${runId}`)

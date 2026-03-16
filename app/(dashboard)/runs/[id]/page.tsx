@@ -25,7 +25,7 @@ import {
 import { STRATEGY_LABELS, type StrategyId, type RunStatus } from "@/lib/types"
 import { JobStatusPanel } from "@/components/run-detail/job-status-panel"
 import { RunStatusPoller } from "@/components/run-detail/run-status-poller"
-import { generateRunReport } from "@/app/actions/reports"
+import { GenerateReportButton } from "@/components/run-detail/generate-report-button"
 import { getRunBenchmark } from "@/lib/benchmark"
 import { BenchmarkOverlapWarning } from "@/components/benchmark-overlap-warning"
 import { RunDeleteButton } from "@/components/run-delete-button"
@@ -125,7 +125,6 @@ export default async function RunDetailPage({ params }: { params: Promise<{ id: 
   const universePreset = getUniversePreset(run)
   const universeCount = Array.isArray(run.universe_symbols) ? run.universe_symbols.length : null
   const canGenerateReport = status === "completed" && equityCurve.length > 0 && metrics != null
-  const generateReportAction = generateRunReport.bind(null, id)
 
   const resolvedReport = report
 
@@ -211,17 +210,7 @@ export default async function RunDetailPage({ params }: { params: Promise<{ id: 
               </a>
             </Button>
           ) : canGenerateReport ? (
-            <form action={generateReportAction}>
-              <Button
-                type="submit"
-                variant="outline"
-                size="sm"
-                className="h-8 text-[12px] font-medium border-border text-muted-foreground hover:text-foreground shrink-0"
-              >
-                <Download className="w-3.5 h-3.5 mr-1.5" />
-                Generate Report
-              </Button>
-            </form>
+            <GenerateReportButton runId={id} />
           ) : (
             <Button
               variant="outline"
