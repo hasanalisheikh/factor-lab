@@ -30,6 +30,8 @@ import { getRunBenchmark } from "@/lib/benchmark"
 import { BenchmarkOverlapWarning } from "@/components/benchmark-overlap-warning"
 import { RunDeleteButton } from "@/components/run-delete-button"
 
+export const maxDuration = 60
+
 function getMetrics(value: RunMetricsRow[] | RunMetricsRow | null): RunMetricsRow | null {
   if (Array.isArray(value)) return value[0] ?? null
   return value ?? null

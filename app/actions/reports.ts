@@ -1,7 +1,5 @@
 "use server"
 
-import { revalidatePath } from "next/cache"
-import { redirect } from "next/navigation"
 import { createAdminClient } from "@/lib/supabase/admin"
 import { createClient } from "@/lib/supabase/server"
 import {
@@ -148,10 +146,10 @@ export async function ensureRunReport(runId: string): Promise<void> {
 }
 
 export async function generateRunReport(
-  runId: string,
-  _prev: { error: string } | null,
-  _formData: FormData,
-): Promise<{ error: string } | null> {
+  _prev: { error: string } | { success: true } | null,
+  formData: FormData,
+): Promise<{ error: string } | { success: true } | null> {
+  const runId = formData.get("runId") as string
   try {
     await ensureRunReport(runId)
   } catch (err) {
@@ -160,6 +158,5 @@ export async function generateRunReport(
       error: err instanceof Error ? err.message : "Report generation failed. Please try again.",
     }
   }
-  revalidatePath(`/runs/${runId}`)
-  redirect(`/runs/${runId}`)
+  return { success: true }
 }
