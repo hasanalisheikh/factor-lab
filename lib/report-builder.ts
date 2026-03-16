@@ -100,6 +100,20 @@ export function makePolylineShared(
     .join(" ")
 }
 
+/**
+ * Compute CAGR directly from the equity curve so it is always consistent
+ * with the displayed Start NAV, End NAV, and date range.
+ * Uses the full raw series (n = number of trading-day rows).
+ */
+export function computeCAGRFromEquityCurve(raw: EquityCurveRow[]): number {
+  if (raw.length < 2) return 0
+  const startNav = raw[0].portfolio
+  const endNav = raw[raw.length - 1].portfolio
+  if (!Number.isFinite(startNav) || !Number.isFinite(endNav) || startNav <= 0) return 0
+  const n = raw.length
+  return Math.pow(endNav / startNav, 252 / n) - 1
+}
+
 export function computeDrawdownSeries(equity: EquityCurveRow[]): number[] {
   let peak = -Infinity
   return equity.map((pt) => {
@@ -204,6 +218,14 @@ export function buildReportHtml(params: {
   const strategyLabel = STRATEGY_LABELS[strategyId] ?? strategyId
   const warmupPoints = getWarmupPointCount(equityCurve)
   const chartRawSeries = equityCurve
+  // CAGR derived from the equity curve — always consistent with displayed Start/End NAV
+  const chartCagr = computeCAGRFromEquityCurve(chartRawSeries)
+  // Effective window: use actual equity-curve dates, not the run-param request dates
+  const effectiveStart = chartRawSeries[0]?.date ?? startDate
+  const effectiveEnd = chartRawSeries[chartRawSeries.length - 1]?.date ?? endDate
+  const windowDisplay = effectiveEnd !== endDate
+    ? `${effectiveStart} to ${effectiveEnd} (requested: ${endDate})`
+    : `${effectiveStart} to ${effectiveEnd}`
   const plottedIndices = getDownsampleIndices(chartRawSeries.length, DEFAULT_EQUITY_CHART_MAX_POINTS)
   const chartSeries = pickByIndices(chartRawSeries, plottedIndices)
   const rawDrawdown = computeDrawdownSeries(chartRawSeries)
@@ -376,7 +398,7 @@ export function buildReportHtml(params: {
       ${runMetadata.modelVersion ? `<p><strong>Model version:</strong> ${escapeHtml(runMetadata.modelVersion)}</p>` : ""}
       ${runMetadata.featureSet ? `<p><strong>Feature set:</strong> ${escapeHtml(runMetadata.featureSet)}</p>` : ""}
       <p><strong>Benchmark:</strong> ${escapeHtml(benchmarkTicker)}</p>
-      <p><strong>Window:</strong> ${escapeHtml(startDate)} to ${escapeHtml(endDate)}</p>
+      <p><strong>Window:</strong> ${escapeHtml(windowDisplay)}</p>
       <p><strong>Universe:</strong> ${escapeHtml(universeLabel)}</p>
       <p><strong>Rebalance frequency:</strong> ${escapeHtml(rebalanceFreq)}</p>
       <p><strong>Top N:</strong> ${topN}</p>
@@ -394,7 +416,7 @@ export function buildReportHtml(params: {
 
     <h2>KPIs</h2>
     <div class="grid">
-      <div class="kpi"><div class="label">CAGR</div><div class="value">${fmtPercent(metrics.cagr)}</div></div>
+      <div class="kpi"><div class="label">CAGR</div><div class="value">${fmtPercent(chartCagr)}</div></div>
       <div class="kpi"><div class="label">Sharpe</div><div class="value">${fmtRatio(metrics.sharpe)}</div></div>
       <div class="kpi"><div class="label">Max Drawdown (peak-to-trough)</div><div class="value">${fmtPercent(Math.abs(metrics.max_drawdown))}</div></div>
       <div class="kpi"><div class="label">Volatility</div><div class="value">${fmtPercent(metrics.volatility)}</div></div>

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { buildReportHtml } from "@/lib/report-builder"
+import { buildReportHtml, computeCAGRFromEquityCurve, fmtPercent } from "@/lib/report-builder"
 import type { EquityCurveRow, RunMetricsRow } from "@/lib/supabase/types"
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────
@@ -308,22 +308,44 @@ describe("buildReportHtml - calmar ratio display", () => {
 
 describe("buildReportHtml - metric formatting precision", () => {
   /**
-   * CAGR is a fraction (0.12 = 12%); fmtPercent multiplies by 100 and appends "%".
-   * Convention: fmtPercent(v) = `${(v*100).toFixed(1)}%`
+   * CAGR is derived from the equity curve: (endNav/startNav)^(252/n) − 1.
+   * To get exactly 12%: endNav = startNav * 1.12 with n = 252 (one trading year).
    */
-  it("CAGR 0.12 is displayed as '12.0%'", () => {
+  it("CAGR 12.0% is displayed when equity curve implies 12% over one trading year", () => {
+    const startNav = 100_000
+    const endNav = 112_000 // 12% growth
+    const n = 252 // one trading year → exponent = 252/252 = 1 → exact 12%
+    const curve = Array.from({ length: n }, (_, i) => ({
+      id: `eq-${i}`,
+      run_id: "test-run-id",
+      date: `2023-01-${String((i % 28) + 1).padStart(2, "0")}`,
+      portfolio: startNav + ((endNav - startNav) * i) / (n - 1),
+      benchmark: 100_000 + i * 40,
+    }))
     const html = buildReportHtml({
       ...BASE_PARAMS,
       strategyId: "equal_weight",
+      equityCurve: curve,
       metrics: { ...METRICS, cagr: 0.12 },
     })
     expect(html).toContain(">12.0%<")
   })
 
-  it("Negative CAGR -0.05 is displayed as '-5.0%'", () => {
+  it("Negative CAGR -5.0% is displayed when equity curve implies -5% over one trading year", () => {
+    const startNav = 100_000
+    const endNav = 95_000 // −5% growth
+    const n = 252 // one trading year → exponent = 1 → exact −5%
+    const curve = Array.from({ length: n }, (_, i) => ({
+      id: `eq-${i}`,
+      run_id: "test-run-id",
+      date: `2023-01-${String((i % 28) + 1).padStart(2, "0")}`,
+      portfolio: startNav + ((endNav - startNav) * i) / (n - 1),
+      benchmark: 100_000 + i * 40,
+    }))
     const html = buildReportHtml({
       ...BASE_PARAMS,
       strategyId: "equal_weight",
+      equityCurve: curve,
       metrics: { ...METRICS, cagr: -0.05 },
     })
     expect(html).toContain(">-5.0%<")
@@ -464,5 +486,140 @@ describe("buildReportHtml - x-axis date range", () => {
     expect(lastDate).toMatch(/^2026-/)
     expect(html).toContain("Equity curve points:</strong> 1000 (from")
     expect(html).toContain(`<span>${lastDate}</span>`)
+  })
+})
+
+// ── Tearsheet truthfulness regressions ───────────────────────────────────────
+
+describe("computeCAGRFromEquityCurve - unit", () => {
+  it("returns 0 for a curve with fewer than 2 points", () => {
+    expect(computeCAGRFromEquityCurve([])).toBe(0)
+    expect(computeCAGRFromEquityCurve([EQUITY[0]])).toBe(0)
+  })
+
+  it("matches the formula (endNav/startNav)^(252/n) − 1", () => {
+    const startNav = 100_000
+    const endNav = 150_000
+    const n = 504 // 2 years of trading days
+    const curve = Array.from({ length: n }, (_, i) => ({
+      id: `eq-${i}`,
+      run_id: "r",
+      date: `2022-01-${String(i + 1).padStart(2, "0")}`,
+      portfolio: startNav + ((endNav - startNav) * i) / (n - 1),
+      benchmark: 100_000,
+    }))
+    const expected = Math.pow(endNav / startNav, 252 / n) - 1
+    expect(computeCAGRFromEquityCurve(curve)).toBeCloseTo(expected, 10)
+  })
+
+  it("returns 0 when startNav ≤ 0", () => {
+    const curve = [
+      { id: "a", run_id: "r", date: "2022-01-01", portfolio: 0, benchmark: 100_000 },
+      { id: "b", run_id: "r", date: "2022-01-02", portfolio: 110_000, benchmark: 100_000 },
+    ]
+    expect(computeCAGRFromEquityCurve(curve)).toBe(0)
+  })
+})
+
+describe("buildReportHtml - CAGR truthfulness", () => {
+  /**
+   * Regression: the tearsheet used to display metrics.cagr (a stored DB value),
+   * which may have been computed with a different base/n than the equity curve.
+   * Now it must compute CAGR from the equity curve directly.
+   *
+   * Setup: stored metrics.cagr = 6% (wrong), equity startNav=100_488,
+   * endNav=111_203 over 1000 trading days → implied CAGR ≈ 2.56%.
+   */
+  it("CAGR KPI is derived from equity curve, not from stored metrics.cagr", () => {
+    const startNav = 100_488
+    const endNav = 111_203
+    const n = 1000 // trading days
+    const curve = Array.from({ length: n }, (_, i) => ({
+      id: `eq-${i}`,
+      run_id: "r",
+      date: `2021-03-${String((i % 28) + 1).padStart(2, "0")}`,
+      portfolio: startNav + ((endNav - startNav) * i) / (n - 1),
+      benchmark: 100_000 + i * 40,
+    }))
+    const expectedCagr = Math.pow(endNav / startNav, 252 / n) - 1
+
+    const html = buildReportHtml({
+      ...BASE_PARAMS,
+      strategyId: "equal_weight",
+      equityCurve: curve,
+      metrics: { ...METRICS, cagr: 0.06 }, // deliberately wrong stored value
+      startDate: "2021-03-13",
+      endDate: "2026-03-13",
+    })
+
+    // Must NOT display the wrong stored 6%
+    expect(html).not.toContain(">6.0%<")
+    // Must display the equity-curve-derived CAGR
+    expect(html).toContain(`>${fmtPercent(expectedCagr)}<`)
+  })
+})
+
+describe("buildReportHtml - Window header vs chart range", () => {
+  /**
+   * Regression: when the equity curve ends before the requested run end date
+   * (e.g. benchmark data only available to 2025-03-06 when run end was 2026-03-13),
+   * the Window header must show the effective equity-curve end, not the requested end.
+   * The chart x-axis end label must also match that effective end.
+   */
+  it("Window header shows effective equity-curve end when curve ends before run endDate", () => {
+    const curve = makeTradingDayCurve("2021-03-01", "2025-03-06")
+    const effectiveEnd = curve[curve.length - 1].date // ≈ 2025-03-06
+    const requestedEnd = "2026-03-13"
+
+    const html = buildReportHtml({
+      ...BASE_PARAMS,
+      strategyId: "equal_weight",
+      equityCurve: curve,
+      startDate: "2021-03-01",
+      endDate: requestedEnd,
+    })
+
+    // Window must contain the effective end date
+    expect(html).toContain(`to ${effectiveEnd}`)
+    // Window must note the requested end date as a parenthetical
+    expect(html).toContain(`(requested: ${requestedEnd})`)
+    // The effective end must NOT appear as the bare run end in a "to 2026-03-13" pattern
+    expect(html).not.toContain(`to ${requestedEnd}</p>`)
+  })
+
+  it("chart x-axis end label, Window end, and equity curve last date all agree", () => {
+    const curve = makeTradingDayCurve("2021-03-01", "2025-03-06")
+    const effectiveEnd = curve[curve.length - 1].date
+
+    const html = buildReportHtml({
+      ...BASE_PARAMS,
+      strategyId: "equal_weight",
+      equityCurve: curve,
+      startDate: "2021-03-01",
+      endDate: "2026-03-13",
+    })
+
+    // Chart x-axis end label uses the equity-curve's last date
+    expect(html).toContain(`<span>${effectiveEnd}</span>`)
+    // Window header also uses the same effective end date
+    expect(html).toContain(`to ${effectiveEnd}`)
+  })
+
+  it("Window header shows plain date range when equity curve matches requested endDate", () => {
+    const curve = makeTradingDayCurve("2021-03-01", "2026-03-13")
+    const lastDate = curve[curve.length - 1].date
+
+    const html = buildReportHtml({
+      ...BASE_PARAMS,
+      strategyId: "equal_weight",
+      equityCurve: curve,
+      startDate: "2021-03-01",
+      endDate: "2026-03-13",
+    })
+
+    // No parenthetical "(requested: ...)" when effective and requested dates agree
+    expect(html).not.toContain("(requested:")
+    // Window contains the last date
+    expect(html).toContain(`to ${lastDate}`)
   })
 })
