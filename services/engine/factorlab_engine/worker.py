@@ -632,7 +632,7 @@ def _compute_metrics(daily_returns: pd.Series, turnover: float) -> dict[str, flo
   mean_daily = float(daily_returns.mean())
   vol_daily = float(daily_returns.std(ddof=0))
   volatility = vol_daily * np.sqrt(252.0)
-  sharpe = (mean_daily / vol_daily) * np.sqrt(252.0) if vol_daily > 0 else 0.0
+  sharpe = (mean_daily / vol_daily) * np.sqrt(252.0) if vol_daily > 1e-10 else 0.0
 
   equity = (1.0 + daily_returns).cumprod()
   peak = equity.cummax()
