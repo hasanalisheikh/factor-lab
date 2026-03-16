@@ -80,7 +80,7 @@ graph TB
   CR --> DB
 ```
 
-- **Frontend:** Next.js 16 App Router + TypeScript + Tailwind v4 + shadcn/ui
+- **Frontend:** Next.js 16 App Router + TypeScript + React 19 + Tailwind v4 + shadcn/ui
 - **Database:** Supabase Postgres with row-level security
 - **Reports:** Supabase Storage bucket (`reports`) — HTML tearsheets
 - **Compute:** Python worker polls `jobs`, writes `equity_curve`, `run_metrics`, `positions`, `model_predictions`
