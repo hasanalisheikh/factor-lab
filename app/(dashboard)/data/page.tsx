@@ -262,9 +262,11 @@ export default async function DataPage({
   ])
 
   const currentThrough = dataState.dataCutoffDate ?? health.dateEnd
-  const requiredResearch = await getRequiredTickerResearchSummary(currentThrough, tickerRanges)
-  const monitoredBenchmarkCoverage = await getMonitoredBenchmarkCoverage(currentThrough, tickerRanges)
-  const universeNotIngested = await getNotIngestedUniverseTickers(tickerRanges)
+  const [requiredResearch, monitoredBenchmarkCoverage, universeNotIngested] = await Promise.all([
+    getRequiredTickerResearchSummary(currentThrough, tickerRanges),
+    getMonitoredBenchmarkCoverage(currentThrough, tickerRanges),
+    getNotIngestedUniverseTickers(tickerRanges),
+  ])
 
   const advancedDiagnostics = mode === "full"
     ? summarizeInceptionAwareCoverage({

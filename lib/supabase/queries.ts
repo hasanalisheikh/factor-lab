@@ -1,4 +1,5 @@
 import "server-only"
+import { unstable_cache } from "next/cache"
 import { createClient } from "./server"
 import { createAdminClient } from "./admin"
 import {
@@ -2338,21 +2339,60 @@ export async function getBenchmarkOverlapStateForRun(
  * Fast: no GROUP BY over prices. Maintained by Python worker after each data_ingest job.
  * Falls back to getTickerDateRanges() if the table doesn't exist yet.
  */
-export async function getAllTickerStats(): Promise<TickerDateRange[]> {
-  try {
-    const supabase = await createClient()
-    type StatsRow = {
-      symbol: string
-      first_date: string
-      last_date: string
-      distinct_days: string | number
-      max_gap_days_window: string | number | null
-      updated_at: string | null
-    }
+type TickerStatsRow = {
+  symbol: string
+  first_date: string
+  last_date: string
+  distinct_days: string | number
+  max_gap_days_window: string | number | null
+  updated_at: string | null
+}
+
+/**
+ * Cross-request cache for ticker_stats using the admin (service-role) client
+ * which doesn't require user cookies. TTL: 2 minutes.
+ * ticker_stats is global (not user-scoped), so sharing the cache is safe.
+ */
+const _getCachedTickerStats = unstable_cache(
+  async (): Promise<TickerDateRange[]> => {
+    const supabase = createAdminClient()
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { data, error } = await (supabase as any)
       .from("ticker_stats")
-      .select("symbol, first_date, last_date, distinct_days, max_gap_days_window, updated_at") as { data: StatsRow[] | null; error: { message: string } | null }
+      .select("symbol, first_date, last_date, distinct_days, max_gap_days_window, updated_at") as {
+        data: TickerStatsRow[] | null
+        error: { message: string } | null
+      }
+    if (error || !data || data.length === 0) return []
+    return data.map((r) => ({
+      ticker: r.symbol,
+      firstDate: r.first_date,
+      lastDate: r.last_date,
+      actualDays: Number(r.distinct_days),
+      maxGapDays: r.max_gap_days_window != null ? Number(r.max_gap_days_window) : undefined,
+      updatedAt: r.updated_at ?? undefined,
+    }))
+  },
+  ["ticker-stats"],
+  { revalidate: 120, tags: ["ticker-stats"] }
+)
+
+export async function getAllTickerStats(): Promise<TickerDateRange[]> {
+  try {
+    // Try the cross-request cache first (admin client, no cookies).
+    // Falls back to the per-request client path if admin key is unavailable.
+    const cached = await _getCachedTickerStats()
+    if (cached.length > 0) return cached
+  } catch {
+    // Admin key missing or cache unavailable — fall through to live query.
+  }
+
+  try {
+    const supabase = await createClient()
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data, error } = await (supabase as any)
+      .from("ticker_stats")
+      .select("symbol, first_date, last_date, distinct_days, max_gap_days_window, updated_at") as { data: TickerStatsRow[] | null; error: { message: string } | null }
     if (error) {
       if (
         error.message.includes("does not exist") ||

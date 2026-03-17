@@ -356,7 +356,13 @@ export function RunForm({ defaults, dataCoverage, initialUniverseState, diagnost
     if (numericValue > topNMax) {
       setTopNValue(String(topNMax))
     }
-  }, [defaults?.default_top_n, topNMax, topNValue])
+  // NOTE: topNValue is intentionally NOT in the dependency array.
+  // Including it causes a tight re-render loop that fights the user while typing
+  // (e.g. can't type "10" when max is 8 — it gets clamped on every keystroke).
+  // The effect only needs to run when the universe changes (topNMax) or when
+  // defaults load. The HTML max attribute + server-side validation guard the rest.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [defaults?.default_top_n, topNMax])
 
   async function loadUniverseState(universeId: UniverseId, options?: { createBatch?: boolean }) {
     setIsUniverseLoading(true)

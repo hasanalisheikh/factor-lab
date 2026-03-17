@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { AlertCircle, Clock, Download, Loader2 } from "lucide-react"
 import { Card, CardContent } from "@/components/ui/card"
 import type { JobRow } from "@/lib/supabase/types"
@@ -69,7 +69,28 @@ interface JobStatusPanelProps {
   ingestProgress?: IngestProgress | null
 }
 
+function formatElapsed(seconds: number): string {
+  if (seconds < 60) return `${seconds}s`
+  const m = Math.floor(seconds / 60)
+  const s = seconds % 60
+  return s > 0 ? `${m}m ${s}s` : `${m}m`
+}
+
 export function JobStatusPanel({ job, runStatus, ingestProgress }: JobStatusPanelProps) {
+  const isQueued = runStatus === "queued"
+  const isRunning = runStatus === "running"
+
+  // Elapsed-time counter shown while the run is waiting for a worker to pick it up.
+  const [elapsed, setElapsed] = useState(0)
+  useEffect(() => {
+    if (!isQueued) return
+    const createdMs = job?.created_at ? new Date(job.created_at).getTime() : Date.now()
+    const tick = () => setElapsed(Math.floor((Date.now() - createdMs) / 1000))
+    tick()
+    const id = setInterval(tick, 1000)
+    return () => clearInterval(id)
+  }, [isQueued, job?.created_at])
+
   if (
     runStatus !== "queued" &&
     runStatus !== "running" &&
@@ -78,8 +99,7 @@ export function JobStatusPanel({ job, runStatus, ingestProgress }: JobStatusPane
     runStatus !== "waiting_for_data"
   ) return null
 
-  const isQueued = runStatus === "queued"
-  const isRunning = runStatus === "running"
+
   const isFailed = runStatus === "failed"
   const isBlocked = runStatus === "blocked"
   const isWaiting = runStatus === "waiting_for_data"
@@ -139,7 +159,7 @@ export function JobStatusPanel({ job, runStatus, ingestProgress }: JobStatusPane
             </p>
             <p className="text-[12px] text-muted-foreground mt-0.5">
               {isQueued
-                ? "Your run is being processed — it will start shortly."
+                ? `Waiting for worker — usually starts in seconds. (${formatElapsed(elapsed)} elapsed)`
                 : isWaiting
                 ? ingestSummary
                 : isRunning

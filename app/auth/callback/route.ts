@@ -100,6 +100,11 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  // Successful verification — redirect to the app
-  return NextResponse.redirect(new URL(next, origin))
+  // Successful verification — for email OTP (signup/email_change), land on the
+  // verified success page so the user gets a clear confirmation message.
+  // Code-exchange flows (password reset, magic link) continue to follow `next`.
+  const successDest = (tokenHash && verificationType && !isResetFlow)
+    ? "/auth/verified"
+    : next
+  return NextResponse.redirect(new URL(successDest, origin))
 }
