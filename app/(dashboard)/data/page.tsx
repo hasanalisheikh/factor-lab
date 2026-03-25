@@ -32,6 +32,7 @@ import {
   CheckCircle2,
   Clock3,
   Database,
+  History,
   Info,
   Search,
   ShieldCheck,
@@ -723,7 +724,7 @@ export default async function DataPage({
               title="Pre-Inception"
               tooltip="DB-wide pre-inception days excluded from missingness calculations."
               value={advancedDiagnostics?.totalPreInception.toLocaleString() ?? "—"}
-              icon={<Info className="text-muted-foreground h-5 w-5" />}
+              icon={<History className="text-muted-foreground h-5 w-5" />}
             />
           </div>
 
