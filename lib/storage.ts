@@ -7,7 +7,7 @@
  * Valid Supabase bucket name: lowercase letters, numbers, hyphens.
  * 3–63 characters, starting and ending with a letter or number.
  */
-const BUCKET_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$|^[a-z0-9]{3}$/
+const BUCKET_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$|^[a-z0-9]{3}$/;
 
 /**
  * Resolve the reports bucket name from the optional env var value.
@@ -19,19 +19,19 @@ const BUCKET_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$|^[a-z0-9]{3}$/
  *   still succeeds; the warning surfaces in server logs for diagnosis.
  */
 export function resolveReportsBucketName(envValue?: string): string {
-  const trimmed = (envValue ?? "").trim()
-  const candidate = trimmed.length > 0 ? trimmed : "reports"
+  const trimmed = (envValue ?? "").trim();
+  const candidate = trimmed.length > 0 ? trimmed : "reports";
 
   if (!BUCKET_NAME_PATTERN.test(candidate)) {
     console.warn(
       `[storage] SUPABASE_REPORTS_BUCKET "${candidate}" is not a valid bucket name — ` +
         `falling back to "reports". ` +
         `Remove or correct the SUPABASE_REPORTS_BUCKET environment variable.`
-    )
-    return "reports"
+    );
+    return "reports";
   }
 
-  return candidate
+  return candidate;
 }
 
 /**
@@ -39,5 +39,5 @@ export function resolveReportsBucketName(envValue?: string): string {
  * Pattern: <run-id>/tearsheet.html
  */
 export function buildReportStoragePath(runId: string): string {
-  return `${runId}/tearsheet.html`
+  return `${runId}/tearsheet.html`;
 }

@@ -1,0 +1,29 @@
+# Build output & caches
+.next/
+node_modules/
+.vercel/
+*.tsbuildinfo
+
+# Python virtual environments
+.venv/
+services/engine/.venv/
+services/engine/.ruff_cache/
+services/engine/.pytest_cache/
+services/engine/**/__pycache__/
+services/engine/**/*.egg-info/
+
+# Generated / lock files
+package-lock.json
+
+# Playwright artifacts
+playwright-audit/
+
+# SQL migrations (manually maintained)
+**/*.sql
+
+# Data files
+**/*.csv
+**/*.txt
+
+# Static assets
+public/

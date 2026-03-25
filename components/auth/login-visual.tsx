@@ -1,20 +1,20 @@
-import { Card } from "@/components/ui/card"
+import { Card } from "@/components/ui/card";
 
 export function LoginVisual() {
   return (
-    <div className="relative flex h-full w-full min-h-[220px] items-center justify-center overflow-hidden p-4 sm:p-5 lg:min-h-0 lg:p-5">
+    <div className="relative flex h-full min-h-[220px] w-full items-center justify-center overflow-hidden p-4 sm:p-5 lg:min-h-0 lg:p-5">
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_74%_18%,rgba(40,199,130,0.1),transparent_42%),radial-gradient(circle_at_20%_78%,rgba(40,199,130,0.05),transparent_45%)]" />
 
       <Card className="relative mx-auto w-full max-w-[86%] border-white/25 bg-black/25 p-3 shadow-[0_30px_70px_-35px_rgba(0,0,0,0.95)] backdrop-blur-sm sm:p-4 lg:p-5">
-        <div className="absolute -right-10 -top-10 size-28 rounded-full bg-primary/20 blur-2xl" />
-        <div className="absolute -bottom-8 -left-10 size-24 rounded-full bg-primary/15 blur-2xl" />
+        <div className="bg-primary/20 absolute -top-10 -right-10 size-28 rounded-full blur-2xl" />
+        <div className="bg-primary/15 absolute -bottom-8 -left-10 size-24 rounded-full blur-2xl" />
 
         <svg
           viewBox="0 0 700 440"
           preserveAspectRatio="xMidYMid meet"
           role="img"
           aria-label="Isometric quant dashboard illustration"
-          className="relative h-auto w-full max-w-full max-h-[46vh] lg:max-h-[52vh]"
+          className="relative h-auto max-h-[46vh] w-full max-w-full lg:max-h-[52vh]"
         >
           <defs>
             <linearGradient id="panelA" x1="0%" y1="0%" x2="100%" y2="100%">
@@ -39,8 +39,23 @@ export function LoginVisual() {
           <polygon points="396,237 396,266 462,287 462,254" fill="#172920" />
           <polygon points="462,254 462,287 536,265 536,236" fill="#2b4a3d" />
 
-          <rect x="150" y="82" width="264" height="136" rx="12" fill="url(#panelB)" stroke="#385245" />
-          <path d="M174 176 L214 147 L242 156 L275 124 L312 132 L344 106 L391 118" fill="none" stroke="#6de9b0" strokeWidth="6" strokeLinecap="round" strokeLinejoin="round" />
+          <rect
+            x="150"
+            y="82"
+            width="264"
+            height="136"
+            rx="12"
+            fill="url(#panelB)"
+            stroke="#385245"
+          />
+          <path
+            d="M174 176 L214 147 L242 156 L275 124 L312 132 L344 106 L391 118"
+            fill="none"
+            stroke="#6de9b0"
+            strokeWidth="6"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
           <circle cx="391" cy="118" r="6" fill="#6de9b0" />
           <rect x="170" y="103" width="86" height="15" rx="7" fill="#47b983" fillOpacity="0.35" />
           <rect x="170" y="126" width="120" height="12" rx="6" fill="#2f7d5d" fillOpacity="0.62" />
@@ -80,5 +95,5 @@ export function LoginVisual() {
         </p>
       </Card>
     </div>
-  )
+  );
 }

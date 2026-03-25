@@ -1,44 +1,45 @@
-import { NextResponse, type NextRequest } from "next/server"
-import { createServerClient } from "@supabase/ssr"
-import { cookies } from "next/headers"
-import type { EmailOtpType } from "@supabase/supabase-js"
+import { NextResponse, type NextRequest } from "next/server";
+import { createServerClient } from "@supabase/ssr";
+import { cookies } from "next/headers";
+import type { EmailOtpType } from "@supabase/supabase-js";
 
 export async function GET(request: NextRequest) {
-  const { searchParams, origin } = new URL(request.url)
-  const code = searchParams.get("code")
-  const tokenHash = searchParams.get("token_hash") ?? searchParams.get("token")
-  const verificationType = searchParams.get("type")
-  const error = searchParams.get("error")
-  const errorDescription = searchParams.get("error_description")
+  const { searchParams, origin } = new URL(request.url);
+  const code = searchParams.get("code");
+  const tokenHash = searchParams.get("token_hash") ?? searchParams.get("token");
+  const verificationType = searchParams.get("type");
+  const error = searchParams.get("error");
+  const errorDescription = searchParams.get("error_description");
   // `next` lets the caller specify a post-auth redirect (defaults to /dashboard)
-  const next = searchParams.get("next") ?? "/dashboard"
+  const next = searchParams.get("next") ?? "/dashboard";
 
-  const isResetFlow = next.startsWith("/reset-password")
+  const isResetFlow = next.startsWith("/reset-password");
 
   function errorRedirect(message?: string) {
-    const loginUrl = new URL("/login", origin)
-    loginUrl.searchParams.set("tab", isResetFlow ? "forgot" : "verify")
+    const loginUrl = new URL("/login", origin);
+    loginUrl.searchParams.set("tab", isResetFlow ? "forgot" : "verify");
     loginUrl.searchParams.set(
       "error",
-      message ?? (isResetFlow
-        ? "Reset link expired. Please request a new one."
-        : "Verification link expired. Please request a new one.")
-    )
-    return NextResponse.redirect(loginUrl)
+      message ??
+        (isResetFlow
+          ? "Reset link expired. Please request a new one."
+          : "Verification link expired. Please request a new one.")
+    );
+    return NextResponse.redirect(loginUrl);
   }
 
   function hashForwardResponse() {
-    const loginUrl = new URL("/login", origin)
-    loginUrl.searchParams.set("tab", isResetFlow ? "forgot" : "verify")
+    const loginUrl = new URL("/login", origin);
+    loginUrl.searchParams.set("tab", isResetFlow ? "forgot" : "verify");
     loginUrl.searchParams.set(
       "error",
       isResetFlow
         ? "Reset link expired. Please request a new one."
         : "Verification link expired. Please request a new one."
-    )
+    );
 
-    const destination = new URL(isResetFlow ? "/reset-password" : "/login", origin).toString()
-    const fallback = loginUrl.toString()
+    const destination = new URL(isResetFlow ? "/reset-password" : "/login", origin).toString();
+    const fallback = loginUrl.toString();
     const html = `<!doctype html>
 <html lang="en">
   <head>
@@ -53,23 +54,23 @@ export async function GET(request: NextRequest) {
       window.location.replace(hasAuthTokens ? ${JSON.stringify(destination)} + hash : ${JSON.stringify(fallback)});
     </script>
   </body>
-</html>`
+</html>`;
 
     return new NextResponse(html, {
       headers: { "Content-Type": "text/html; charset=utf-8" },
-    })
+    });
   }
 
   // Surface Supabase auth errors (e.g. expired link)
   if (error) {
-    return errorRedirect(errorDescription ?? undefined)
+    return errorRedirect(errorDescription ?? undefined);
   }
 
   if (!code && !(tokenHash && verificationType)) {
-    return hashForwardResponse()
+    return hashForwardResponse();
   }
 
-  const cookieStore = await cookies()
+  const cookieStore = await cookies();
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
@@ -77,34 +78,30 @@ export async function GET(request: NextRequest) {
       cookies: {
         getAll: () => cookieStore.getAll(),
         setAll: (cookiesToSet) => {
-          cookiesToSet.forEach(({ name, value, options }) =>
-            cookieStore.set(name, value, options)
-          )
+          cookiesToSet.forEach(({ name, value, options }) => cookieStore.set(name, value, options));
         },
       },
     }
-  )
+  );
 
   if (tokenHash && verificationType) {
     const { error: verifyError } = await supabase.auth.verifyOtp({
       token_hash: tokenHash,
       type: verificationType as EmailOtpType,
-    })
+    });
     if (verifyError) {
-      return errorRedirect(verifyError.message)
+      return errorRedirect(verifyError.message);
     }
   } else if (code) {
-    const { error: exchangeError } = await supabase.auth.exchangeCodeForSession(code)
+    const { error: exchangeError } = await supabase.auth.exchangeCodeForSession(code);
     if (exchangeError) {
-      return errorRedirect()
+      return errorRedirect();
     }
   }
 
   // Successful verification — for email OTP (signup/email_change), land on the
   // verified success page so the user gets a clear confirmation message.
   // Code-exchange flows (password reset, magic link) continue to follow `next`.
-  const successDest = (tokenHash && verificationType && !isResetFlow)
-    ? "/auth/verified"
-    : next
-  return NextResponse.redirect(new URL(successDest, origin))
+  const successDest = tokenHash && verificationType && !isResetFlow ? "/auth/verified" : next;
+  return NextResponse.redirect(new URL(successDest, origin));
 }

@@ -1,8 +1,8 @@
-"use client"
+"use client";
 
-import { useActionState, useEffect, useState } from "react"
-import Link from "next/link"
-import { AlertCircle, CheckCircle2, Mail } from "lucide-react"
+import { useActionState, useEffect, useState } from "react";
+import Link from "next/link";
+import { AlertCircle, CheckCircle2, Mail } from "lucide-react";
 import {
   signInAction,
   signUpAction,
@@ -12,15 +12,15 @@ import {
   type AuthState,
   type ResendState,
   type ForgotPasswordState,
-} from "@/app/actions/auth"
-import { Logo } from "@/components/logo"
-import { Alert, AlertDescription } from "@/components/ui/alert"
-import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import { Spinner } from "@/components/ui/spinner"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { createClient } from "@/lib/supabase/client"
+} from "@/app/actions/auth";
+import { Logo } from "@/components/logo";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Spinner } from "@/components/ui/spinner";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { createClient } from "@/lib/supabase/client";
 
 export function LoginForm({
   authError,
@@ -30,200 +30,236 @@ export function LoginForm({
   forgotError,
   sessionUser,
 }: {
-  authError?: string
-  initialTab?: "signin" | "signup" | "verify" | "forgot"
-  initialEmail?: string
-  verifyError?: string
-  forgotError?: string
+  authError?: string;
+  initialTab?: "signin" | "signup" | "verify" | "forgot";
+  initialEmail?: string;
+  verifyError?: string;
+  forgotError?: string;
   sessionUser?: {
-    email: string | null
-    isGuest: boolean
-  } | null
+    email: string | null;
+    isGuest: boolean;
+  } | null;
 }) {
   const [signInState, signInAction_, isSignInPending] = useActionState<AuthState, FormData>(
     signInAction,
     null
-  )
+  );
   const [signUpState, signUpAction_, isSignUpPending] = useActionState<AuthState, FormData>(
     signUpAction,
     null
-  )
+  );
   const [upgradeState, upgradeAction_, isUpgradePending] = useActionState<AuthState, FormData>(
     upgradeGuestAction,
     null
-  )
+  );
   const [resendState, resendAction_, isResendPending] = useActionState<ResendState, FormData>(
     resendVerificationAction,
     null
-  )
+  );
 
-  const [forgotState, forgotAction_, isForgotPending] = useActionState<ForgotPasswordState, FormData>(
-    forgotPasswordAction,
-    null
-  )
-  const [forgotEmail, setForgotEmail] = useState("")
+  const [forgotState, forgotAction_, isForgotPending] = useActionState<
+    ForgotPasswordState,
+    FormData
+  >(forgotPasswordAction, null);
+  const [forgotEmail, setForgotEmail] = useState("");
 
-  const [isGuestPending, setIsGuestPending] = useState(false)
-  const [guestError, setGuestError] = useState<string | null>(null)
+  const [isGuestPending, setIsGuestPending] = useState(false);
+  const [guestError, setGuestError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<"signin" | "signup" | "verify" | "forgot">(
     initialTab ?? "signin"
-  )
+  );
 
-  const [signInEmail, setSignInEmail] = useState("")
-  const [signInPassword, setSignInPassword] = useState("")
-  const [signUpEmail, setSignUpEmail] = useState("")
-  const [signUpPassword, setSignUpPassword] = useState("")
-  const [confirmPassword, setConfirmPassword] = useState("")
-  const [passwordMismatchError, setPasswordMismatchError] = useState<string | null>(null)
-  const [verifyEmail, setVerifyEmail] = useState(initialEmail ?? "")
-  const [resendCooldown, setResendCooldown] = useState(0)
+  // Optimistic from server prop, validated client-side on mount.
+  // Guards against stale Next.js router-cache hits (server prop may be up to
+  // ~30 s old) and long page-dwell after session expiry.
+  const [resolvedIsGuest, setResolvedIsGuest] = useState<boolean>(sessionUser?.isGuest === true);
+
+  useEffect(() => {
+    let cancelled = false;
+    const supabase = createClient();
+    supabase.auth
+      .getUser()
+      .then(({ data, error }) => {
+        if (cancelled) return;
+        const isValidGuest = !error && data.user?.user_metadata?.is_guest === true;
+        if (!isValidGuest) {
+          setResolvedIsGuest(false);
+          // If we were placed into upgrade mode by stale server props, reset to
+          // the normal Sign In tab so the user isn't trapped.
+          setActiveTab((prev) => (prev === "signup" ? "signin" : prev));
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setResolvedIsGuest(false);
+          setActiveTab((prev) => (prev === "signup" ? "signin" : prev));
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const [signInEmail, setSignInEmail] = useState("");
+  const [signInPassword, setSignInPassword] = useState("");
+  const [signUpEmail, setSignUpEmail] = useState("");
+  const [signUpPassword, setSignUpPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [passwordMismatchError, setPasswordMismatchError] = useState<string | null>(null);
+  const [verifyEmail, setVerifyEmail] = useState(initialEmail ?? "");
+  const [resendCooldown, setResendCooldown] = useState(0);
 
   // Start 60s cooldown after successful resend
   useEffect(() => {
     if ("success" in (resendState ?? {})) {
-      setResendCooldown(60)
+      setResendCooldown(60);
     }
-  }, [resendState])
+  }, [resendState]);
 
   useEffect(() => {
-    if (resendCooldown <= 0) return
-    const id = setInterval(() => setResendCooldown((n) => Math.max(0, n - 1)), 1000)
-    return () => clearInterval(id)
-  }, [resendCooldown])
+    if (resendCooldown <= 0) return;
+    const id = setInterval(() => setResendCooldown((n) => Math.max(0, n - 1)), 1000);
+    return () => clearInterval(id);
+  }, [resendCooldown]);
 
   useEffect(() => {
     if (typeof window === "undefined" || !window.location.hash.includes("access_token=")) {
-      return
+      return;
     }
 
-    let cancelled = false
-    const supabase = createClient()
+    let cancelled = false;
+    const supabase = createClient();
     async function hydrateSession() {
       try {
-        const params = new URLSearchParams(window.location.hash.replace(/^#/, ""))
-        const accessToken = params.get("access_token")
-        const refreshToken = params.get("refresh_token")
+        const params = new URLSearchParams(window.location.hash.replace(/^#/, ""));
+        const accessToken = params.get("access_token");
+        const refreshToken = params.get("refresh_token");
 
         if (accessToken && refreshToken) {
           const { data } = await supabase.auth.setSession({
             access_token: accessToken,
             refresh_token: refreshToken,
-          })
+          });
           if (!cancelled && data.session) {
-            window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}`)
-            window.location.href = "/dashboard"
+            window.history.replaceState(
+              null,
+              "",
+              `${window.location.pathname}${window.location.search}`
+            );
+            window.location.href = "/dashboard";
           }
-          return
+          return;
         }
 
-        const { data } = await supabase.auth.getSession()
+        const { data } = await supabase.auth.getSession();
         if (!cancelled && data.session) {
-          window.location.href = "/dashboard"
+          window.location.href = "/dashboard";
         }
       } catch {
         // The normal login UI remains available if session hydration fails.
       }
     }
 
-    void hydrateSession()
+    void hydrateSession();
 
     return () => {
-      cancelled = true
-    }
-  }, [])
+      cancelled = true;
+    };
+  }, []);
 
-  const isGuestSession = sessionUser?.isGuest === true
-  const createAccountAction = isGuestSession ? upgradeAction_ : signUpAction_
-  const createAccountState = isGuestSession ? upgradeState : signUpState
-  const isCreateAccountPending = isGuestSession ? isUpgradePending : isSignUpPending
-  const isAnyPending =
-    isSignInPending || isSignUpPending || isUpgradePending || isGuestPending
+  const isGuestSession = resolvedIsGuest;
+  const createAccountAction = isGuestSession ? upgradeAction_ : signUpAction_;
+  const createAccountState = isGuestSession ? upgradeState : signUpState;
+  const isCreateAccountPending = isGuestSession ? isUpgradePending : isSignUpPending;
+  const isAnyPending = isSignInPending || isSignUpPending || isUpgradePending || isGuestPending;
 
   const isExistingAccountError = (error: string) => {
-    const message = error.toLowerCase()
+    const message = error.toLowerCase();
     return (
       message.includes("already exists") ||
       message.includes("already registered") ||
       message.includes("sign in to that account instead")
-    )
-  }
+    );
+  };
 
   const formatFriendlyError = (error: string) => {
-    const message = error.toLowerCase()
+    const message = error.toLowerCase();
     if (message.includes("rate limit") || message.includes("too many") || message.includes("429")) {
-      return "Too many attempts right now. Please wait a bit and try again."
+      return "Too many attempts right now. Please wait a bit and try again.";
     }
-    return error
-  }
+    return error;
+  };
 
   function getCreateAccountErrorMessage(error: string) {
     if (!isExistingAccountError(error)) {
-      return formatFriendlyError(error)
+      return formatFriendlyError(error);
     }
 
     if (isGuestSession) {
-      return "An account with this email already exists. Sign in to that account instead. Your guest runs and settings are still safe in this guest session."
+      return "An account with this email already exists. Sign in to that account instead. Your guest runs and settings are still safe in this guest session.";
     }
 
-    return "An account with this email already exists. Sign in to that account instead."
+    return "An account with this email already exists. Sign in to that account instead.";
   }
 
   function switchToSignInTab() {
-    setSignInEmail(signUpEmail.trim())
-    setSignInPassword("")
-    switchTab("signin")
+    setSignInEmail(signUpEmail.trim());
+    setSignInPassword("");
+    switchTab("signin");
   }
 
   async function handleGuest() {
-    if (isAnyPending) return
-    setIsGuestPending(true)
-    setGuestError(null)
-    setPasswordMismatchError(null)
+    if (isAnyPending) return;
+    setIsGuestPending(true);
+    setGuestError(null);
+    setPasswordMismatchError(null);
     try {
-      const res = await fetch("/api/auth/guest", { method: "POST" })
+      const res = await fetch("/api/auth/guest", { method: "POST" });
       if (!res.ok) {
-        const data = await res.json().catch(() => ({}))
+        const data = await res.json().catch(() => ({}));
         const rawError =
-          (data as { error?: string }).error ?? "Failed to create guest account. Try again."
-        setGuestError(formatFriendlyError(rawError))
-        return
+          (data as { error?: string }).error ?? "Failed to create guest account. Try again.";
+        setGuestError(formatFriendlyError(rawError));
+        return;
       }
-      window.location.href = "/dashboard"
+      window.location.href = "/dashboard";
     } catch {
-      setGuestError("Network error. Please check your connection and try again.")
+      setGuestError("Network error. Please check your connection and try again.");
     } finally {
-      setIsGuestPending(false)
+      setIsGuestPending(false);
     }
   }
 
   function switchTab(tab: "signin" | "signup") {
-    setActiveTab(tab)
-    setGuestError(null)
-    setPasswordMismatchError(null)
+    setActiveTab(tab);
+    setGuestError(null);
+    setPasswordMismatchError(null);
   }
 
   function goToVerify(email: string) {
-    setVerifyEmail(email)
-    setActiveTab("verify")
+    setVerifyEmail(email);
+    setActiveTab("verify");
   }
 
-  const unverifiedEmail = signInState && "unverifiedEmail" in signInState ? signInState.unverifiedEmail : null
-  const signInError = signInState && "error" in signInState ? formatFriendlyError(signInState.error) : null
+  const unverifiedEmail =
+    signInState && "unverifiedEmail" in signInState ? signInState.unverifiedEmail : null;
+  const signInError =
+    signInState && "error" in signInState ? formatFriendlyError(signInState.error) : null;
   const createAccountRawError =
-    createAccountState && "error" in createAccountState ? createAccountState.error : null
+    createAccountState && "error" in createAccountState ? createAccountState.error : null;
   const showSignInInsteadButton =
-    createAccountRawError != null && isExistingAccountError(createAccountRawError)
+    createAccountRawError != null && isExistingAccountError(createAccountRawError);
   const signUpError =
-    createAccountRawError != null ? getCreateAccountErrorMessage(createAccountRawError) : null
+    createAccountRawError != null ? getCreateAccountErrorMessage(createAccountRawError) : null;
 
   const inputClassName =
-    "h-9 border-white/10 bg-white/5 text-white/90 placeholder:text-white/45 focus-visible:border-primary/70 focus-visible:ring-primary/40"
+    "h-9 border-white/10 bg-white/5 text-white/90 placeholder:text-white/45 focus-visible:border-primary/70 focus-visible:ring-primary/40";
   const primaryButtonClassName =
-    "h-9 w-full bg-primary text-primary-foreground shadow-[0_14px_28px_-14px_rgba(40,199,130,0.7)] hover:bg-primary/90"
+    "h-9 w-full bg-primary text-primary-foreground shadow-[0_14px_28px_-14px_rgba(40,199,130,0.7)] hover:bg-primary/90";
 
   return (
     <div className="flex h-full flex-col">
-      <div className="absolute left-5 top-5 z-10 flex items-center gap-2">
+      <div className="absolute top-5 left-5 z-10 flex items-center gap-2">
         <Logo size={26} wordmarkClassName="text-[24px]" />
       </div>
 
@@ -259,11 +295,11 @@ export function LoginForm({
             {"success" in (forgotState ?? {}) ? (
               <>
                 <div className="flex flex-col items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-4 py-5 text-center">
-                  <Mail className="size-8 text-primary/80" />
+                  <Mail className="text-primary/80 size-8" />
                   <p className="text-sm text-white/70">
                     If an account exists for{" "}
-                    <span className="font-medium text-white/90">{forgotEmail}</span>,
-                    you&apos;ll receive a password reset email shortly.
+                    <span className="font-medium text-white/90">{forgotEmail}</span>, you&apos;ll
+                    receive a password reset email shortly.
                   </p>
                 </div>
                 <Button
@@ -276,7 +312,9 @@ export function LoginForm({
               </>
             ) : (
               <>
-                {(forgotError || ("error" in (forgotState ?? {}) && (forgotState as { error: string } | null)?.error)) && (
+                {(forgotError ||
+                  ("error" in (forgotState ?? {}) &&
+                    (forgotState as { error: string } | null)?.error)) && (
                   <Alert variant="destructive" className="border-destructive/40 bg-destructive/10">
                     <AlertCircle className="size-4" />
                     <AlertDescription>
@@ -330,7 +368,7 @@ export function LoginForm({
         ) : activeTab === "verify" ? (
           <div className="space-y-3">
             <div className="flex flex-col items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-4 py-5 text-center">
-              <Mail className="size-8 text-primary/80" />
+              <Mail className="text-primary/80 size-8" />
               <p className="text-sm text-white/70">
                 A verification email was sent to{" "}
                 {initialEmail ? (
@@ -424,13 +462,13 @@ export function LoginForm({
             <TabsList className="grid h-9 w-full grid-cols-2 border border-white/10 bg-white/5 p-1">
               <TabsTrigger
                 value="signin"
-                className="text-sm text-white/60 data-[state=active]:border-transparent data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-none"
+                className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground text-sm text-white/60 data-[state=active]:border-transparent data-[state=active]:shadow-none"
               >
                 Sign In
               </TabsTrigger>
               <TabsTrigger
                 value="signup"
-                className="text-sm text-white/60 data-[state=active]:border-transparent data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-none"
+                className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground text-sm text-white/60 data-[state=active]:border-transparent data-[state=active]:shadow-none"
               >
                 Create Account
               </TabsTrigger>
@@ -440,8 +478,8 @@ export function LoginForm({
               <form
                 action={signInAction_}
                 onSubmit={() => {
-                  setGuestError(null)
-                  setPasswordMismatchError(null)
+                  setGuestError(null);
+                  setPasswordMismatchError(null);
                 }}
                 className="space-y-2.5"
               >
@@ -482,8 +520,8 @@ export function LoginForm({
                   <button
                     type="button"
                     onClick={() => {
-                      setForgotEmail(signInEmail)
-                      setActiveTab("forgot")
+                      setForgotEmail(signInEmail);
+                      setActiveTab("forgot");
                     }}
                     className="text-xs text-white/45 hover:text-emerald-400 hover:underline"
                   >
@@ -535,8 +573,8 @@ export function LoginForm({
                   <Link
                     href="#"
                     onClick={(event) => {
-                      event.preventDefault()
-                      switchTab("signup")
+                      event.preventDefault();
+                      switchTab("signup");
                     }}
                     className="font-medium text-emerald-400 hover:text-emerald-300 hover:underline"
                   >
@@ -550,13 +588,15 @@ export function LoginForm({
               <form
                 action={createAccountAction}
                 onSubmit={(event) => {
-                  setGuestError(null)
+                  setGuestError(null);
                   if (signUpPassword !== confirmPassword) {
-                    event.preventDefault()
-                    setPasswordMismatchError("Password mismatch. Please make sure both passwords match.")
-                    return
+                    event.preventDefault();
+                    setPasswordMismatchError(
+                      "Password mismatch. Please make sure both passwords match."
+                    );
+                    return;
                   }
-                  setPasswordMismatchError(null)
+                  setPasswordMismatchError(null);
                 }}
                 className="space-y-2.5"
               >
@@ -564,7 +604,8 @@ export function LoginForm({
                   <Alert className="border-primary/30 bg-primary/10 text-primary">
                     <CheckCircle2 className="size-4" />
                     <AlertDescription className="text-primary/90">
-                      You&apos;re upgrading your current guest session. Existing runs and settings stay on this account.
+                      You&apos;re upgrading your current guest session. Existing runs and settings
+                      stay on this account.
                     </AlertDescription>
                   </Alert>
                 )}
@@ -638,7 +679,7 @@ export function LoginForm({
                     type="button"
                     variant="outline"
                     onClick={switchToSignInTab}
-                    className="h-9 w-full border-white/15 bg-transparent text-white/75 hover:border-primary/40 hover:bg-primary/10 hover:text-primary"
+                    className="hover:border-primary/40 hover:bg-primary/10 hover:text-primary h-9 w-full border-white/15 bg-transparent text-white/75"
                   >
                     Sign in instead
                   </Button>
@@ -655,8 +696,10 @@ export function LoginForm({
                       <Spinner className="size-4" />
                       {isGuestSession ? "Upgrading account..." : "Creating account..."}
                     </>
+                  ) : isGuestSession ? (
+                    "Create account and keep my runs"
                   ) : (
-                    isGuestSession ? "Create account and keep my runs" : "Create account"
+                    "Create account"
                   )}
                 </Button>
 
@@ -665,8 +708,8 @@ export function LoginForm({
                   <Link
                     href="#"
                     onClick={(event) => {
-                      event.preventDefault()
-                      switchTab("signin")
+                      event.preventDefault();
+                      switchTab("signin");
                     }}
                     className="font-medium text-emerald-400 hover:text-emerald-300 hover:underline"
                   >
@@ -692,7 +735,7 @@ export function LoginForm({
               onClick={handleGuest}
               disabled={isAnyPending}
               aria-disabled={isAnyPending}
-              className="h-9 w-full border-white/15 bg-transparent text-white/70 hover:border-primary/40 hover:bg-primary/10 hover:text-primary"
+              className="hover:border-primary/40 hover:bg-primary/10 hover:text-primary h-9 w-full border-white/15 bg-transparent text-white/70"
             >
               {isGuestPending ? (
                 <>
@@ -713,5 +756,5 @@ export function LoginForm({
         Not financial advice.
       </p>
     </div>
-  )
+  );
 }

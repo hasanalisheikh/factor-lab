@@ -1,17 +1,17 @@
-"use client"
+"use client";
 
-import { Line, LineChart, ResponsiveContainer } from "recharts"
+import { Line, LineChart, ResponsiveContainer } from "recharts";
 
 export function Sparkline({
   data,
   height = 32,
 }: {
-  data: number[]
-  color?: string
-  height?: number
+  data: number[];
+  color?: string;
+  height?: number;
 }) {
-  const chartData = data.map((v, i) => ({ i, v }))
-  const isPositive = data[data.length - 1] >= data[0]
+  const chartData = data.map((v, i) => ({ i, v }));
+  const isPositive = data[data.length - 1] >= data[0];
 
   return (
     <ResponsiveContainer width="100%" height={height}>
@@ -25,5 +25,5 @@ export function Sparkline({
         />
       </LineChart>
     </ResponsiveContainer>
-  )
+  );
 }

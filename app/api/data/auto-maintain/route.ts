@@ -7,12 +7,12 @@
  * refresh scheduler instead.
  */
 
-import { type NextRequest } from "next/server"
-import { runScheduledRefresh } from "@/app/api/cron/_lib/refresh"
+import { type NextRequest } from "next/server";
+import { runScheduledRefresh } from "@/app/api/cron/_lib/refresh";
 
-export const runtime = "nodejs"
-export const maxDuration = 30
+export const runtime = "nodejs";
+export const maxDuration = 30;
 
 export async function GET(request: NextRequest) {
-  return runScheduledRefresh(request, "daily")
+  return runScheduledRefresh(request, "daily");
 }

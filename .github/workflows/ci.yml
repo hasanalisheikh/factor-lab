@@ -24,6 +24,9 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+      - name: Format check
+        run: npm run format:check
+
       - name: Lint
         run: npm run lint
 
@@ -55,6 +58,9 @@ jobs:
 
       - name: Lint (ruff)
         run: ruff check services/engine
+
+      - name: Format check (ruff)
+        run: ruff format --check services/engine
 
       - name: Engine tests
         run: pytest services/engine/tests -q

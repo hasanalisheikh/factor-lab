@@ -1,9 +1,9 @@
-"use client"
+"use client";
 
-import { useState, useEffect } from "react"
-import { useRouter } from "next/navigation"
-import { Search, ArrowRight, PlaySquare, Briefcase } from "lucide-react"
-import { Button } from "@/components/ui/button"
+import { useState, useEffect } from "react";
+import { useRouter } from "next/navigation";
+import { Search, ArrowRight, PlaySquare, Briefcase } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import {
   CommandDialog,
   CommandInput,
@@ -12,33 +12,33 @@ import {
   CommandGroup,
   CommandItem,
   CommandShortcut,
-} from "@/components/ui/command"
+} from "@/components/ui/command";
 
 export function TopbarSearch() {
-  const [open, setOpen] = useState(false)
-  const [query, setQuery] = useState("")
-  const router = useRouter()
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const router = useRouter();
 
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
       if ((e.metaKey || e.ctrlKey) && e.key === "k") {
-        e.preventDefault()
-        setOpen(true)
+        e.preventDefault();
+        setOpen(true);
       }
     }
-    window.addEventListener("keydown", handleKeyDown)
-    return () => window.removeEventListener("keydown", handleKeyDown)
-  }, [])
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, []);
 
   function navigate(path: string) {
-    setOpen(false)
-    setQuery("")
-    router.push(path)
+    setOpen(false);
+    setQuery("");
+    router.push(path);
   }
 
   function handleSearch() {
-    if (!query.trim()) return
-    navigate(`/runs?q=${encodeURIComponent(query.trim())}`)
+    if (!query.trim()) return;
+    navigate(`/runs?q=${encodeURIComponent(query.trim())}`);
   }
 
   return (
@@ -46,10 +46,10 @@ export function TopbarSearch() {
       {/* Desktop: visible search bar */}
       <button
         onClick={() => setOpen(true)}
-        className="hidden lg:flex items-center gap-2 h-8 px-3 rounded-md border border-border bg-secondary/40 text-[12px] text-muted-foreground w-[220px] hover:bg-secondary/60 transition-colors cursor-text"
+        className="border-border bg-secondary/40 text-muted-foreground hover:bg-secondary/60 hidden h-8 w-[220px] cursor-text items-center gap-2 rounded-md border px-3 text-[12px] transition-colors lg:flex"
         aria-label="Search (⌘K)"
       >
-        <Search className="w-3.5 h-3.5 shrink-0" />
+        <Search className="h-3.5 w-3.5 shrink-0" />
         <span className="flex-1 text-left">Search…</span>
       </button>
 
@@ -57,18 +57,18 @@ export function TopbarSearch() {
       <Button
         variant="ghost"
         size="icon"
-        className="lg:hidden text-muted-foreground hover:text-foreground h-8 w-8"
+        className="text-muted-foreground hover:text-foreground h-8 w-8 lg:hidden"
         aria-label="Search (⌘K)"
         onClick={() => setOpen(true)}
       >
-        <Search className="w-[15px] h-[15px]" />
+        <Search className="h-[15px] w-[15px]" />
       </Button>
 
       <CommandDialog
         open={open}
         onOpenChange={(v) => {
-          setOpen(v)
-          if (!v) setQuery("")
+          setOpen(v);
+          if (!v) setQuery("");
         }}
         title="Search"
         description="Search runs, jobs, and more"
@@ -81,8 +81,8 @@ export function TopbarSearch() {
           onValueChange={setQuery}
           onKeyDown={(e) => {
             if (e.key === "Enter") {
-              e.preventDefault()
-              handleSearch()
+              e.preventDefault();
+              handleSearch();
             }
           }}
         />
@@ -95,7 +95,9 @@ export function TopbarSearch() {
                   <Search className="text-muted-foreground" />
                   <span>
                     Search runs for{" "}
-                    <span className="font-medium text-foreground">&ldquo;{query.trim()}&rdquo;</span>
+                    <span className="text-foreground font-medium">
+                      &ldquo;{query.trim()}&rdquo;
+                    </span>
                   </span>
                   <CommandShortcut>↵</CommandShortcut>
                 </CommandItem>
@@ -124,16 +126,16 @@ export function TopbarSearch() {
           )}
         </CommandList>
         <div className="flex items-center justify-between border-t px-3 py-2">
-          <span className="text-[11px] text-muted-foreground">
-            <kbd className="bg-muted rounded px-1 py-0.5 text-[10px] font-mono mr-0.5">↵</kbd>
+          <span className="text-muted-foreground text-[11px]">
+            <kbd className="bg-muted mr-0.5 rounded px-1 py-0.5 font-mono text-[10px]">↵</kbd>
             search &nbsp;·&nbsp;
-            <kbd className="bg-muted rounded px-1 py-0.5 text-[10px] font-mono mr-0.5">↑↓</kbd>
+            <kbd className="bg-muted mr-0.5 rounded px-1 py-0.5 font-mono text-[10px]">↑↓</kbd>
             navigate &nbsp;·&nbsp;
-            <kbd className="bg-muted rounded px-1 py-0.5 text-[10px] font-mono mr-0.5">esc</kbd>
+            <kbd className="bg-muted mr-0.5 rounded px-1 py-0.5 font-mono text-[10px]">esc</kbd>
             close
           </span>
         </div>
       </CommandDialog>
     </>
-  )
+  );
 }

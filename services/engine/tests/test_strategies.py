@@ -8,6 +8,7 @@ trend_filter:
   - Allocates 100% TLT when benchmark is below 200D SMA (risk-off)
   - Holds non-defensive assets when benchmark is above 200D SMA (risk-on)
 """
+
 from __future__ import annotations
 
 from collections import defaultdict
@@ -22,6 +23,7 @@ from factorlab_engine.worker import _TREND_SMA_WINDOW, _low_vol, _trend_filter
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_known_vol_prices(n_days: int = 250) -> pd.DataFrame:
     """Three assets with very different volatilities: LOW < MED < HIGH.
 
@@ -32,9 +34,9 @@ def _make_known_vol_prices(n_days: int = 250) -> pd.DataFrame:
     dates = pd.bdate_range("2020-01-01", periods=n_days)
     return pd.DataFrame(
         {
-            "LOW":  100.0 * (1 + rng.normal(0, 0.0003, n_days)).cumprod(),
-            "MED":  100.0 * (1 + rng.normal(0, 0.01,   n_days)).cumprod(),
-            "HIGH": 100.0 * (1 + rng.normal(0, 0.05,   n_days)).cumprod(),
+            "LOW": 100.0 * (1 + rng.normal(0, 0.0003, n_days)).cumprod(),
+            "MED": 100.0 * (1 + rng.normal(0, 0.01, n_days)).cumprod(),
+            "HIGH": 100.0 * (1 + rng.normal(0, 0.05, n_days)).cumprod(),
         },
         index=dates,
     )
@@ -52,14 +54,16 @@ def _make_trend_prices(n_days: int = 650) -> tuple[pd.DataFrame, list[str], str,
     guaranteeing risk-on signal.
     """
     dates = pd.bdate_range("2017-01-01", periods=n_days)
-    bench = np.concatenate([
-        np.linspace(100.0, 250.0, 350),
-        np.linspace(250.0, 50.0,  n_days - 350),
-    ])
-    tlt = np.linspace(100.0, 130.0, n_days)   # steady upward → bond proxy
+    bench = np.concatenate(
+        [
+            np.linspace(100.0, 250.0, 350),
+            np.linspace(250.0, 50.0, n_days - 350),
+        ]
+    )
+    tlt = np.linspace(100.0, 130.0, n_days)  # steady upward → bond proxy
     rng = np.random.default_rng(42)
-    t0  = 100.0 * (1 + rng.normal(0.0003, 0.01, n_days)).cumprod()
-    t1  = 100.0 * (1 + rng.normal(0.0003, 0.01, n_days)).cumprod()
+    t0 = 100.0 * (1 + rng.normal(0.0003, 0.01, n_days)).cumprod()
+    t1 = 100.0 * (1 + rng.normal(0.0003, 0.01, n_days)).cumprod()
     prices = pd.DataFrame(
         {"T0": t0, "T1": t1, "SPY": bench, "TLT": tlt},
         index=dates,
@@ -71,6 +75,7 @@ def _make_trend_prices(n_days: int = 650) -> tuple[pd.DataFrame, list[str], str,
 # _low_vol tests
 # ---------------------------------------------------------------------------
 
+
 def test_low_vol_selects_lowest_vol_asset():
     """After the 60-day warmup, every rebalance should pick only 'LOW'."""
     prices = _make_known_vol_prices()
@@ -80,9 +85,7 @@ def test_low_vol_selects_lowest_vol_asset():
     late = [p for p in positions if p["date"] >= "2020-04-01"]
     assert len(late) > 0, "No positions found after warmup"
     for pos in late:
-        assert pos["symbol"] == "LOW", (
-            f"Expected 'LOW' but got '{pos['symbol']}' on {pos['date']}"
-        )
+        assert pos["symbol"] == "LOW", f"Expected 'LOW' but got '{pos['symbol']}' on {pos['date']}"
 
 
 def test_low_vol_selects_two_lowest_vol_assets():
@@ -97,9 +100,7 @@ def test_low_vol_selects_two_lowest_vol_assets():
         symbols_per_date[pos["date"]].add(pos["symbol"])
 
     for dt, symbols in symbols_per_date.items():
-        assert symbols == {"LOW", "MED"}, (
-            f"Expected {{LOW, MED}} on {dt}, got {symbols}"
-        )
+        assert symbols == {"LOW", "MED"}, f"Expected {{LOW, MED}} on {dt}, got {symbols}"
 
 
 def test_low_vol_weights_sum_to_one():
@@ -112,9 +113,7 @@ def test_low_vol_weights_sum_to_one():
         totals[pos["date"]] += pos["weight"]
 
     for dt, total in totals.items():
-        assert abs(total - 1.0) < 1e-9, (
-            f"Weights sum to {total:.6f} on {dt}, expected 1.0"
-        )
+        assert abs(total - 1.0) < 1e-9, f"Weights sum to {total:.6f} on {dt}, expected 1.0"
 
 
 def test_low_vol_top_n_clamped_to_universe():
@@ -146,6 +145,7 @@ def test_low_vol_insufficient_history_raises():
 # ---------------------------------------------------------------------------
 # _trend_filter tests
 # ---------------------------------------------------------------------------
+
 
 def test_trend_filter_risk_off_when_below_sma():
     """Late in the decline the benchmark is well below SMA-200: expect 100% TLT."""
@@ -185,23 +185,19 @@ def test_trend_filter_risk_on_when_above_sma():
 
     # Window safely inside the uptrend (days 220–300), after 200-day warmup
     early_start = prices.index[220].strftime("%Y-%m-%d")
-    early_end   = prices.index[300].strftime("%Y-%m-%d")
+    early_end = prices.index[300].strftime("%Y-%m-%d")
     early = [p for p in positions if early_start <= p["date"] <= early_end]
     assert len(early) > 0, "No risk-on positions found in the early window"
 
     for pos in early:
-        assert pos["symbol"] != "TLT", (
-            f"Should be risk-on (not TLT) on {pos['date']}"
-        )
+        assert pos["symbol"] != "TLT", f"Should be risk-on (not TLT) on {pos['date']}"
 
     # Weights must sum to 1 per date
     totals: dict[str, float] = defaultdict(float)
     for pos in early:
         totals[pos["date"]] += pos["weight"]
     for dt, total in totals.items():
-        assert abs(total - 1.0) < 1e-9, (
-            f"Weights sum to {total:.6f} on {dt}, expected 1.0"
-        )
+        assert abs(total - 1.0) < 1e-9, f"Weights sum to {total:.6f} on {dt}, expected 1.0"
 
 
 def test_trend_filter_weights_sum_to_one_throughout():
@@ -220,18 +216,16 @@ def test_trend_filter_weights_sum_to_one_throughout():
         totals[pos["date"]] += pos["weight"]
 
     for dt, total in totals.items():
-        assert abs(total - 1.0) < 1e-9, (
-            f"Weights sum to {total:.6f} on {dt}, expected 1.0"
-        )
+        assert abs(total - 1.0) < 1e-9, f"Weights sum to {total:.6f} on {dt}, expected 1.0"
 
 
 def test_trend_filter_insufficient_benchmark_history_raises():
     """Fewer than 200 benchmark data points must raise ValueError."""
-    n = _TREND_SMA_WINDOW - 1   # 199 rows
+    n = _TREND_SMA_WINDOW - 1  # 199 rows
     rng = np.random.default_rng(0)
     prices = pd.DataFrame(
         {
-            "T0":  100.0 * (1 + rng.normal(0, 0.01, n)).cumprod(),
+            "T0": 100.0 * (1 + rng.normal(0, 0.01, n)).cumprod(),
             "SPY": np.linspace(100.0, 120.0, n),
             "TLT": np.linspace(100.0, 110.0, n),
         },

@@ -1,60 +1,51 @@
-"use server"
+"use server";
 
-import { createAdminClient } from "@/lib/supabase/admin"
-import { createClient } from "@/lib/supabase/server"
+import { createAdminClient } from "@/lib/supabase/admin";
+import { createClient } from "@/lib/supabase/server";
 import {
   fetchAllEquityCurve,
   getBenchmarkOverlapStateForRun,
   type EquityCurveRow,
   type RunMetricsRow,
   type RunRow,
-} from "@/lib/supabase/queries"
-import { getRunBenchmark } from "@/lib/benchmark"
-import { buildReportHtml, parseRunMetadata } from "@/lib/report-builder"
-import { buildReportStoragePath, resolveReportsBucketName } from "@/lib/storage"
+} from "@/lib/supabase/queries";
+import { getRunBenchmark } from "@/lib/benchmark";
+import { buildReportHtml, parseRunMetadata } from "@/lib/report-builder";
+import { buildReportStoragePath, resolveReportsBucketName } from "@/lib/storage";
 
 function isMissingPositionsTableError(message?: string): boolean {
-  if (!message) return false
-  const m = message.toLowerCase()
-  return m.includes("public.positions") && m.includes("could not find the table")
+  if (!message) return false;
+  const m = message.toLowerCase();
+  return m.includes("public.positions") && m.includes("could not find the table");
 }
 
 export async function ensureRunReport(runId: string): Promise<void> {
   // Verify the caller owns this run
-  const serverClient = await createClient()
-  const { data: { user } } = await serverClient.auth.getUser()
+  const serverClient = await createClient();
+  const {
+    data: { user },
+  } = await serverClient.auth.getUser();
   if (!user) {
-    throw new Error("Authentication required.")
+    throw new Error("Authentication required.");
   }
 
-  const [
-    { data: run, error: runError },
-    { data: metrics, error: metricsError },
-    equity,
-  ] = await Promise.all([
-    serverClient
-      .from("runs")
-      .select("*")
-      .eq("id", runId)
-      .maybeSingle(),
-    serverClient
-      .from("run_metrics")
-      .select("*")
-      .eq("run_id", runId)
-      .maybeSingle(),
-    fetchAllEquityCurve(runId),
-  ])
+  const [{ data: run, error: runError }, { data: metrics, error: metricsError }, equity] =
+    await Promise.all([
+      serverClient.from("runs").select("*").eq("id", runId).maybeSingle(),
+      serverClient.from("run_metrics").select("*").eq("run_id", runId).maybeSingle(),
+      fetchAllEquityCurve(runId),
+    ]);
 
   if (runError || !run) {
-    throw new Error(`Failed to load run: ${runError?.message ?? "not found"}`)
+    throw new Error(`Failed to load run: ${runError?.message ?? "not found"}`);
   }
   if (metricsError || !metrics) {
-    throw new Error(`Failed to load run metrics: ${metricsError?.message ?? "not found"}`)
+    throw new Error(`Failed to load run metrics: ${metricsError?.message ?? "not found"}`);
   }
-  const runRow = run as RunRow
-  const benchmarkTicker = getRunBenchmark(runRow)
-  const overlapState = await getBenchmarkOverlapStateForRun(runRow)
-  let benchmarkOverlapDetected = overlapState.confirmed
+  const runRow = run as RunRow;
+  const benchmarkTicker = getRunBenchmark(runRow);
+  const overlapState = await getBenchmarkOverlapStateForRun(runRow);
+  let benchmarkOverlapDetected = overlapState.confirmed;
   if (!benchmarkOverlapDetected) {
     const { data: overlapRows, error: overlapError } = await serverClient
       .from("positions")
@@ -62,21 +53,21 @@ export async function ensureRunReport(runId: string): Promise<void> {
       .eq("run_id", runId)
       .eq("symbol", benchmarkTicker)
       .gt("weight", 0)
-      .limit(1)
+      .limit(1);
     if (!overlapError || isMissingPositionsTableError(overlapError.message)) {
       if ((overlapRows?.length ?? 0) > 0) {
-        benchmarkOverlapDetected = true
+        benchmarkOverlapDetected = true;
       }
     } else {
-      console.error("ensureRunReport overlap query error:", overlapError.message)
+      console.error("ensureRunReport overlap query error:", overlapError.message);
     }
   }
   if (runRow.status !== "completed") {
-    throw new Error("Report generation is only available for completed runs")
+    throw new Error("Report generation is only available for completed runs");
   }
 
   if (!equity || equity.length === 0) {
-    throw new Error("Missing equity curve data")
+    throw new Error("Missing equity curve data");
   }
 
   // Safely extract run_params fields (best-effort; older runs may lack them)
@@ -85,7 +76,7 @@ export async function ensureRunReport(runId: string): Promise<void> {
     runRow.run_params !== null &&
     !Array.isArray(runRow.run_params)
       ? (runRow.run_params as Record<string, unknown>)
-      : {}
+      : {};
 
   const html = buildReportHtml({
     runName: runRow.name,
@@ -103,30 +94,28 @@ export async function ensureRunReport(runId: string): Promise<void> {
     topN: runRow.top_n ?? 0,
     runParams: runParamsObj,
     runMetadata: parseRunMetadata(runRow.run_metadata),
-  })
+  });
 
-  const fileData = new Blob([html], { type: "text/html; charset=utf-8" })
-  const admin = createAdminClient()
-  const bucketName = resolveReportsBucketName(process.env.SUPABASE_REPORTS_BUCKET)
-  const storagePath = buildReportStoragePath(runId)
-  console.log(`[ensureRunReport] bucket=${bucketName} path=${storagePath}`)
+  const fileData = new Blob([html], { type: "text/html; charset=utf-8" });
+  const admin = createAdminClient();
+  const bucketName = resolveReportsBucketName(process.env.SUPABASE_REPORTS_BUCKET);
+  const storagePath = buildReportStoragePath(runId);
+  console.log(`[ensureRunReport] bucket=${bucketName} path=${storagePath}`);
 
   const { error: uploadError } = await admin.storage
     .from(bucketName)
     .upload(storagePath, fileData, {
       upsert: true,
       contentType: "text/html; charset=utf-8",
-    })
+    });
 
   if (uploadError) {
     throw new Error(
       `Failed to upload report to bucket "${bucketName}" at path "${storagePath}": ${uploadError.message}`
-    )
+    );
   }
 
-  const { data: urlData } = admin.storage
-    .from(bucketName)
-    .getPublicUrl(storagePath)
+  const { data: urlData } = admin.storage.from(bucketName).getPublicUrl(storagePath);
 
   const { error: reportError } = await admin.from("reports").upsert(
     {
@@ -135,25 +124,25 @@ export async function ensureRunReport(runId: string): Promise<void> {
       url: urlData.publicUrl,
     },
     { onConflict: "run_id" }
-  )
+  );
 
   if (reportError) {
-    throw new Error(`Failed to persist report row: ${reportError.message}`)
+    throw new Error(`Failed to persist report row: ${reportError.message}`);
   }
 }
 
 export async function generateRunReport(
   _prev: { error: string } | { success: true } | null,
-  formData: FormData,
+  formData: FormData
 ): Promise<{ error: string } | { success: true } | null> {
-  const runId = formData.get("runId") as string
+  const runId = formData.get("runId") as string;
   try {
-    await ensureRunReport(runId)
+    await ensureRunReport(runId);
   } catch (err) {
-    console.error("[generateRunReport] report generation failed:", err)
+    console.error("[generateRunReport] report generation failed:", err);
     return {
       error: err instanceof Error ? err.message : "Report generation failed. Please try again.",
-    }
+    };
   }
-  return { success: true }
+  return { success: true };
 }

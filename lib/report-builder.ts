@@ -1,30 +1,30 @@
-import type { EquityCurveRow, RunMetricsRow } from "@/lib/supabase/types"
+import type { EquityCurveRow, RunMetricsRow } from "@/lib/supabase/types";
 import {
   DEFAULT_EQUITY_CHART_MAX_POINTS,
   getChartDateLabels,
   getDownsampleIndices,
   pickByIndices,
-} from "@/lib/equity-curve"
+} from "@/lib/equity-curve";
 
 // ── Formatters ─────────────────────────────────────────────────────────────
 
 export function fmtPercent(value: number, digits = 1): string {
-  return `${(value * 100).toFixed(digits)}%`
+  return `${(value * 100).toFixed(digits)}%`;
 }
 
 export function fmtRatio(value: number, digits = 2): string {
-  return value.toFixed(digits)
+  return value.toFixed(digits);
 }
 
 export function fmtMoney(value: number): string {
-  return `$${Math.round(value).toLocaleString("en-US")}`
+  return `$${Math.round(value).toLocaleString("en-US")}`;
 }
 
 /** Compact money for SVG axis labels: $100K, $1.2M, etc. */
 export function fmtMoneyCompact(value: number): string {
-  if (Math.abs(value) >= 1_000_000) return `$${(value / 1_000_000).toFixed(1)}M`
-  if (Math.abs(value) >= 1_000) return `$${Math.round(value / 1_000)}K`
-  return `$${Math.round(value)}`
+  if (Math.abs(value) >= 1_000_000) return `$${(value / 1_000_000).toFixed(1)}M`;
+  if (Math.abs(value) >= 1_000) return `$${Math.round(value / 1_000)}K`;
+  return `$${Math.round(value)}`;
 }
 
 /**
@@ -32,11 +32,11 @@ export function fmtMoneyCompact(value: number): string {
  * Avoids misleading "0.00%" for small but non-zero values.
  */
 export function fmtCostDrag(value: number): string {
-  if (value === 0) return "0.00%"
-  const pct = value * 100
-  if (pct < 0.005) return "<0.01%"
-  if (pct < 0.01) return `${pct.toFixed(3)}%`
-  return `${pct.toFixed(2)}%`
+  if (value === 0) return "0.00%";
+  const pct = value * 100;
+  if (pct < 0.005) return "<0.01%";
+  if (pct < 0.01) return `${pct.toFixed(3)}%`;
+  return `${pct.toFixed(2)}%`;
 }
 
 export function escapeHtml(value: string): string {
@@ -45,7 +45,7 @@ export function escapeHtml(value: string): string {
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#39;")
+    .replaceAll("'", "&#39;");
 }
 
 // ── SVG helpers ────────────────────────────────────────────────────────────
@@ -59,20 +59,20 @@ export function makePolyline(
   width: number,
   height: number,
   pad = 16,
-  padLeft = pad,
+  padLeft = pad
 ): string {
-  if (points.length === 0) return ""
-  const min = Math.min(...points)
-  const max = Math.max(...points)
-  const ySpan = max - min || 1
-  const xSpan = Math.max(points.length - 1, 1)
+  if (points.length === 0) return "";
+  const min = Math.min(...points);
+  const max = Math.max(...points);
+  const ySpan = max - min || 1;
+  const xSpan = Math.max(points.length - 1, 1);
   return points
     .map((v, i) => {
-      const x = padLeft + (i / xSpan) * (width - padLeft - pad)
-      const y = height - pad - ((v - min) / ySpan) * (height - pad * 2)
-      return `${x.toFixed(2)},${y.toFixed(2)}`
+      const x = padLeft + (i / xSpan) * (width - padLeft - pad);
+      const y = height - pad - ((v - min) / ySpan) * (height - pad * 2);
+      return `${x.toFixed(2)},${y.toFixed(2)}`;
     })
-    .join(" ")
+    .join(" ");
 }
 
 /**
@@ -86,18 +86,18 @@ export function makePolylineShared(
   width: number,
   height: number,
   pad = 16,
-  padLeft = pad,
+  padLeft = pad
 ): string {
-  if (points.length === 0) return ""
-  const ySpan = max - min || 1
-  const xSpan = Math.max(points.length - 1, 1)
+  if (points.length === 0) return "";
+  const ySpan = max - min || 1;
+  const xSpan = Math.max(points.length - 1, 1);
   return points
     .map((v, i) => {
-      const x = padLeft + (i / xSpan) * (width - padLeft - pad)
-      const y = height - pad - ((v - min) / ySpan) * (height - pad * 2)
-      return `${x.toFixed(2)},${y.toFixed(2)}`
+      const x = padLeft + (i / xSpan) * (width - padLeft - pad);
+      const y = height - pad - ((v - min) / ySpan) * (height - pad * 2);
+      return `${x.toFixed(2)},${y.toFixed(2)}`;
     })
-    .join(" ")
+    .join(" ");
 }
 
 /**
@@ -106,28 +106,28 @@ export function makePolylineShared(
  * Uses the full raw series (n = number of trading-day rows).
  */
 export function computeCAGRFromEquityCurve(raw: EquityCurveRow[]): number {
-  if (raw.length < 2) return 0
-  const startNav = raw[0].portfolio
-  const endNav = raw[raw.length - 1].portfolio
-  if (!Number.isFinite(startNav) || !Number.isFinite(endNav) || startNav <= 0) return 0
-  const n = raw.length
-  return Math.pow(endNav / startNav, 252 / n) - 1
+  if (raw.length < 2) return 0;
+  const startNav = raw[0].portfolio;
+  const endNav = raw[raw.length - 1].portfolio;
+  if (!Number.isFinite(startNav) || !Number.isFinite(endNav) || startNav <= 0) return 0;
+  const n = raw.length;
+  return Math.pow(endNav / startNav, 252 / n) - 1;
 }
 
 export function computeDrawdownSeries(equity: EquityCurveRow[]): number[] {
-  let peak = -Infinity
+  let peak = -Infinity;
   return equity.map((pt) => {
-    if (pt.portfolio > peak) peak = pt.portfolio
-    return peak > 0 ? (pt.portfolio - peak) / peak : 0
-  })
+    if (pt.portfolio > peak) peak = pt.portfolio;
+    return peak > 0 ? (pt.portfolio - peak) / peak : 0;
+  });
 }
 
 export function getWarmupPointCount(equity: EquityCurveRow[]): number {
-  if (equity.length < 3) return 0
+  if (equity.length < 3) return 0;
 
-  const startNav = equity[0].portfolio
-  const firstActiveIdx = equity.findIndex((pt) => Math.abs(pt.portfolio - startNav) > 1e-9)
-  return firstActiveIdx > 0 ? firstActiveIdx : 0
+  const startNav = equity[0].portfolio;
+  const firstActiveIdx = equity.findIndex((pt) => Math.abs(pt.portfolio - startNav) > 1e-9);
+  return firstActiveIdx > 0 ? firstActiveIdx : 0;
 }
 
 // ── Metadata ───────────────────────────────────────────────────────────────
@@ -139,24 +139,24 @@ const STRATEGY_LABELS: Record<string, string> = {
   ml_lightgbm: "ML LightGBM",
   low_vol: "Low Volatility",
   trend_filter: "Trend Filter",
-}
+};
 
-const ML_STRATEGIES = new Set(["ml_ridge", "ml_lightgbm"])
+const ML_STRATEGIES = new Set(["ml_ridge", "ml_lightgbm"]);
 
 const PERIODS_PER_YEAR: Record<string, number> = {
   Daily: 252,
   Weekly: 52,
   Monthly: 12,
   Quarterly: 4,
-}
+};
 
 export type RunMetadataView = {
-  modelImpl: string | null
-  modelVersion: string | null
-  featureSet: string | null
-  positionsDigest: string | null
-  equityDigest: string | null
-}
+  modelImpl: string | null;
+  modelVersion: string | null;
+  featureSet: string | null;
+  positionsDigest: string | null;
+  equityDigest: string | null;
+};
 
 export function parseRunMetadata(value: unknown): RunMetadataView {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -166,36 +166,36 @@ export function parseRunMetadata(value: unknown): RunMetadataView {
       featureSet: null,
       positionsDigest: null,
       equityDigest: null,
-    }
+    };
   }
-  const v = value as Record<string, unknown>
+  const v = value as Record<string, unknown>;
   return {
     modelImpl: typeof v.model_impl === "string" ? v.model_impl : null,
     modelVersion: typeof v.model_version === "string" ? v.model_version : null,
     featureSet: typeof v.feature_set === "string" ? v.feature_set : null,
     positionsDigest: typeof v.positions_digest === "string" ? v.positions_digest : null,
     equityDigest: typeof v.equity_digest === "string" ? v.equity_digest : null,
-  }
+  };
 }
 
 // ── HTML builder ───────────────────────────────────────────────────────────
 
 export function buildReportHtml(params: {
-  runName: string
-  strategyId: string
-  startDate: string
-  endDate: string
-  generatedAt: string
-  benchmarkTicker: string
-  benchmarkOverlapDetected: boolean
-  metrics: RunMetricsRow
-  equityCurve: EquityCurveRow[]
-  universe: string
-  universeSymbols: string[] | null
-  costsBps: number
-  topN: number
-  runParams: Record<string, unknown>
-  runMetadata: RunMetadataView
+  runName: string;
+  strategyId: string;
+  startDate: string;
+  endDate: string;
+  generatedAt: string;
+  benchmarkTicker: string;
+  benchmarkOverlapDetected: boolean;
+  metrics: RunMetricsRow;
+  equityCurve: EquityCurveRow[];
+  universe: string;
+  universeSymbols: string[] | null;
+  costsBps: number;
+  topN: number;
+  runParams: Record<string, unknown>;
+  runMetadata: RunMetadataView;
 }): string {
   const {
     runName,
@@ -213,117 +213,148 @@ export function buildReportHtml(params: {
     topN,
     runParams,
     runMetadata,
-  } = params
+  } = params;
 
-  const strategyLabel = STRATEGY_LABELS[strategyId] ?? strategyId
-  const warmupPoints = getWarmupPointCount(equityCurve)
-  const chartRawSeries = equityCurve
+  const strategyLabel = STRATEGY_LABELS[strategyId] ?? strategyId;
+  const warmupPoints = getWarmupPointCount(equityCurve);
+  const chartRawSeries = equityCurve;
   // CAGR derived from the equity curve — always consistent with displayed Start/End NAV
-  const chartCagr = computeCAGRFromEquityCurve(chartRawSeries)
+  const chartCagr = computeCAGRFromEquityCurve(chartRawSeries);
   // Effective window: use actual equity-curve dates, not the run-param request dates
-  const effectiveStart = chartRawSeries[0]?.date ?? startDate
-  const effectiveEnd = chartRawSeries[chartRawSeries.length - 1]?.date ?? endDate
-  const windowDisplay = effectiveEnd !== endDate
-    ? `${effectiveStart} to ${effectiveEnd} (requested: ${endDate})`
-    : `${effectiveStart} to ${effectiveEnd}`
-  const plottedIndices = getDownsampleIndices(chartRawSeries.length, DEFAULT_EQUITY_CHART_MAX_POINTS)
-  const chartSeries = pickByIndices(chartRawSeries, plottedIndices)
-  const rawDrawdown = computeDrawdownSeries(chartRawSeries)
-  const drawdown = pickByIndices(rawDrawdown, plottedIndices)
-  const portfolioSeries = chartSeries.map((pt) => pt.portfolio)
-  const benchmarkSeries = chartSeries.map((pt) => pt.benchmark)
+  const effectiveStart = chartRawSeries[0]?.date ?? startDate;
+  const effectiveEnd = chartRawSeries[chartRawSeries.length - 1]?.date ?? endDate;
+  const windowDisplay =
+    effectiveEnd !== endDate
+      ? `${effectiveStart} to ${effectiveEnd} (requested: ${endDate})`
+      : `${effectiveStart} to ${effectiveEnd}`;
+  const plottedIndices = getDownsampleIndices(
+    chartRawSeries.length,
+    DEFAULT_EQUITY_CHART_MAX_POINTS
+  );
+  const chartSeries = pickByIndices(chartRawSeries, plottedIndices);
+  const rawDrawdown = computeDrawdownSeries(chartRawSeries);
+  const drawdown = pickByIndices(rawDrawdown, plottedIndices);
+  const portfolioSeries = chartSeries.map((pt) => pt.portfolio);
+  const benchmarkSeries = chartSeries.map((pt) => pt.benchmark);
 
   // ── Rebalance frequency + cost periods ────────────────────────────────────
   const rebalanceFreq = ML_STRATEGIES.has(strategyId)
     ? "Daily"
     : typeof runParams.rebalance_frequency === "string" && runParams.rebalance_frequency
-    ? runParams.rebalance_frequency
-    : "Monthly"
-  const periods = PERIODS_PER_YEAR[rebalanceFreq] ?? 12
+      ? runParams.rebalance_frequency
+      : "Monthly";
+  const periods = PERIODS_PER_YEAR[rebalanceFreq] ?? 12;
 
   // ── Chart dimensions ───────────────────────────────────────────────────────
-  const eqWidth = 1040
-  const eqHeight = 340
-  const ddWidth = 1040
-  const ddHeight = 260
-  const pad = 16
+  const eqWidth = 1040;
+  const eqHeight = 340;
+  const ddWidth = 1040;
+  const ddHeight = 260;
+  const pad = 16;
 
   // Equity chart: shared scale so both lines are directly comparable on one y-axis.
-  const eqPadLeft = 66
-  const rawPortfolioSeries = chartRawSeries.map((pt) => pt.portfolio)
-  const rawBenchmarkSeries = chartRawSeries.map((pt) => pt.benchmark)
-  const allEquityPoints = [...rawPortfolioSeries, ...rawBenchmarkSeries]
-  const eqMin = allEquityPoints.length > 0 ? Math.min(...allEquityPoints) : 0
-  const eqMax = allEquityPoints.length > 0 ? Math.max(...allEquityPoints) : 1
-  const portfolioLine = makePolylineShared(portfolioSeries, eqMin, eqMax, eqWidth, eqHeight, pad, eqPadLeft)
-  const benchmarkLine = makePolylineShared(benchmarkSeries, eqMin, eqMax, eqWidth, eqHeight, pad, eqPadLeft)
+  const eqPadLeft = 66;
+  const rawPortfolioSeries = chartRawSeries.map((pt) => pt.portfolio);
+  const rawBenchmarkSeries = chartRawSeries.map((pt) => pt.benchmark);
+  const allEquityPoints = [...rawPortfolioSeries, ...rawBenchmarkSeries];
+  const eqMin = allEquityPoints.length > 0 ? Math.min(...allEquityPoints) : 0;
+  const eqMax = allEquityPoints.length > 0 ? Math.max(...allEquityPoints) : 1;
+  const portfolioLine = makePolylineShared(
+    portfolioSeries,
+    eqMin,
+    eqMax,
+    eqWidth,
+    eqHeight,
+    pad,
+    eqPadLeft
+  );
+  const benchmarkLine = makePolylineShared(
+    benchmarkSeries,
+    eqMin,
+    eqMax,
+    eqWidth,
+    eqHeight,
+    pad,
+    eqPadLeft
+  );
 
   // Drawdown chart: wider left margin for y-axis labels.
-  const ddPadLeft = 46
-  const drawdownMax = Math.min(...rawDrawdown, 0) // <= 0
-  const drawdownLine = makePolylineShared(drawdown, drawdownMax, 0, ddWidth, ddHeight, pad, ddPadLeft)
+  const ddPadLeft = 46;
+  const drawdownMax = Math.min(...rawDrawdown, 0); // <= 0
+  const drawdownLine = makePolylineShared(
+    drawdown,
+    drawdownMax,
+    0,
+    ddWidth,
+    ddHeight,
+    pad,
+    ddPadLeft
+  );
 
-  const first = chartSeries[0]
-  const last = chartSeries[chartSeries.length - 1]
+  const first = chartSeries[0];
+  const last = chartSeries[chartSeries.length - 1];
 
   // ── X-axis date context ────────────────────────────────────────────────────
-  const { start: xDateStart, mid: xDateMid, end: xDateEnd } = getChartDateLabels(chartSeries)
+  const { start: xDateStart, mid: xDateMid, end: xDateEnd } = getChartDateLabels(chartSeries);
 
-  const eqXAxis = `<div style="display:flex;justify-content:space-between;font-size:10px;color:#475569;padding:2px 16px 0 ${eqPadLeft}px;font-family:inherit;">`
-    + `<span>${escapeHtml(xDateStart)}</span>`
-    + `<span>${escapeHtml(xDateMid)}</span>`
-    + `<span>${escapeHtml(xDateEnd)}</span>`
-    + `</div>`
+  const eqXAxis =
+    `<div style="display:flex;justify-content:space-between;font-size:10px;color:#475569;padding:2px 16px 0 ${eqPadLeft}px;font-family:inherit;">` +
+    `<span>${escapeHtml(xDateStart)}</span>` +
+    `<span>${escapeHtml(xDateMid)}</span>` +
+    `<span>${escapeHtml(xDateEnd)}</span>` +
+    `</div>`;
 
-  const ddXAxis = `<div style="display:flex;justify-content:space-between;font-size:10px;color:#475569;padding:2px 16px 0 ${ddPadLeft}px;font-family:inherit;">`
-    + `<span>${escapeHtml(xDateStart)}</span>`
-    + `<span>${escapeHtml(xDateMid)}</span>`
-    + `<span>${escapeHtml(xDateEnd)}</span>`
-    + `</div>`
+  const ddXAxis =
+    `<div style="display:flex;justify-content:space-between;font-size:10px;color:#475569;padding:2px 16px 0 ${ddPadLeft}px;font-family:inherit;">` +
+    `<span>${escapeHtml(xDateStart)}</span>` +
+    `<span>${escapeHtml(xDateMid)}</span>` +
+    `<span>${escapeHtml(xDateEnd)}</span>` +
+    `</div>`;
 
   // ── Equity chart y-axis SVG labels (shared scale) ─────────────────────────
   // top of data area y=pad -> eqMax; bottom y=height-pad -> eqMin
-  const eqYMid = (eqMin + eqMax) / 2
+  const eqYMid = (eqMin + eqMax) / 2;
   const eqYAxisLabels = [
     `<text x="${eqPadLeft - 4}" y="${pad + 4}" text-anchor="end" font-size="9" fill="#94a3b8">${escapeHtml(fmtMoneyCompact(eqMax))}</text>`,
     `<text x="${eqPadLeft - 4}" y="${(eqHeight / 2).toFixed(0)}" text-anchor="end" dominant-baseline="middle" font-size="9" fill="#94a3b8">${escapeHtml(fmtMoneyCompact(eqYMid))}</text>`,
     `<text x="${eqPadLeft - 4}" y="${eqHeight - pad - 4}" text-anchor="end" dominant-baseline="auto" font-size="9" fill="#94a3b8">${escapeHtml(fmtMoneyCompact(eqMin))}</text>`,
-  ].join("\n        ")
+  ].join("\n        ");
 
   // ── Drawdown chart y-axis SVG labels ──────────────────────────────────────
   // top y=pad -> 0%; bottom y=height-pad -> drawdownMax (most negative -> shown as positive magnitude)
-  const ddWorstMag = Math.abs(drawdownMax)
-  const ddMidMag = ddWorstMag / 2
+  const ddWorstMag = Math.abs(drawdownMax);
+  const ddMidMag = ddWorstMag / 2;
   const ddYAxisLabels = [
     `<text x="${ddPadLeft - 4}" y="${pad + 4}" text-anchor="end" font-size="9" fill="#94a3b8">0%</text>`,
     `<text x="${ddPadLeft - 4}" y="${(ddHeight / 2).toFixed(0)}" text-anchor="end" dominant-baseline="middle" font-size="9" fill="#94a3b8">${escapeHtml(fmtPercent(ddMidMag))}</text>`,
     `<text x="${ddPadLeft - 4}" y="${ddHeight - pad - 4}" text-anchor="end" dominant-baseline="auto" font-size="9" fill="#94a3b8">${escapeHtml(fmtPercent(ddWorstMag))}</text>`,
-  ].join("\n        ")
+  ].join("\n        ");
 
   // ── Cost drag calculations ─────────────────────────────────────────────────
   // turnover is a fraction (e.g. 0.08 = 8% one-way per rebalance)
   // cost_rate = costs_bps / 10_000 (e.g. 10 bps -> 0.001)
-  const turnoverFrac = metrics.turnover
-  const costRate = costsBps / 10_000
-  const perRebalanceCostDrag = turnoverFrac * costRate
-  const annualizedCostDrag = perRebalanceCostDrag * periods
+  const turnoverFrac = metrics.turnover;
+  const costRate = costsBps / 10_000;
+  const perRebalanceCostDrag = turnoverFrac * costRate;
+  const annualizedCostDrag = perRebalanceCostDrag * periods;
 
   // ── Run-params extraction (best-effort; older runs may lack these fields) ──
-  const initialCapital = typeof runParams.initial_capital === "number" ? runParams.initial_capital : null
-  const applyCosts = typeof runParams.apply_costs === "boolean" ? runParams.apply_costs : null
-  const slippageBps = typeof runParams.slippage_bps === "number" ? runParams.slippage_bps : null
+  const initialCapital =
+    typeof runParams.initial_capital === "number" ? runParams.initial_capital : null;
+  const applyCosts = typeof runParams.apply_costs === "boolean" ? runParams.apply_costs : null;
+  const slippageBps = typeof runParams.slippage_bps === "number" ? runParams.slippage_bps : null;
   // Intended cost rate before the apply_costs flag was applied
-  const intendedCostsBps = typeof runParams.costs_bps === "number" ? runParams.costs_bps : costsBps
+  const intendedCostsBps = typeof runParams.costs_bps === "number" ? runParams.costs_bps : costsBps;
 
-  const costsDisplay = applyCosts === false
-    ? `${intendedCostsBps} bps configured, costs disabled (effective: 0 bps)`
-    : `${costsBps} bps${applyCosts === true ? " (applied)" : ""}`
+  const costsDisplay =
+    applyCosts === false
+      ? `${intendedCostsBps} bps configured, costs disabled (effective: 0 bps)`
+      : `${costsBps} bps${applyCosts === true ? " (applied)" : ""}`;
 
   // ── Universe metadata ──────────────────────────────────────────────────────
-  const universeCount = universeSymbols?.length ?? null
-  const universeLabel = universeCount !== null
-    ? `${universe} (${universeCount} symbols at execution)`
-    : universe
+  const universeCount = universeSymbols?.length ?? null;
+  const universeLabel =
+    universeCount !== null ? `${universe} (${universeCount} symbols at execution)` : universe;
 
   return `<!doctype html>
 <html lang="en">
@@ -473,7 +504,9 @@ export function buildReportHtml(params: {
       </ul>
     </div>
 
-    ${strategyId === "trend_filter" ? `
+    ${
+      strategyId === "trend_filter"
+        ? `
     <h2>Strategy Methodology</h2>
     <div class="panel">
       <ul>
@@ -483,7 +516,9 @@ export function buildReportHtml(params: {
         <li>Regime transitions generate near-full-portfolio turnover; sustained regimes produce normal momentum-level turnover.</li>
       </ul>
     </div>
-    ` : ""}
+    `
+        : ""
+    }
 
     <h2>Limitations</h2>
     <div class="panel">
@@ -497,5 +532,5 @@ export function buildReportHtml(params: {
     </div>
   </div>
 </body>
-</html>`
+</html>`;
 }

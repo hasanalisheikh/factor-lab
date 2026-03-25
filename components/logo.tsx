@@ -1,9 +1,9 @@
-import type { CSSProperties } from "react"
-import { cn } from "@/lib/utils"
+import type { CSSProperties } from "react";
+import { cn } from "@/lib/utils";
 
 interface LogoMarkProps {
-  size?: number
-  className?: string
+  size?: number;
+  className?: string;
 }
 
 /** Inline SVG icon mark: shield outline with an upward equity-curve arrow inside. */
@@ -47,32 +47,27 @@ export function LogoMark({ size = 24, className }: LogoMarkProps) {
         className="text-primary"
       />
     </svg>
-  )
+  );
 }
 
 interface LogoProps {
   /** "default" = icon + wordmark, "mark" = icon only */
-  variant?: "default" | "mark"
+  variant?: "default" | "mark";
   /** Icon pixel size */
-  size?: number
-  className?: string
-  wordmarkClassName?: string
+  size?: number;
+  className?: string;
+  wordmarkClassName?: string;
 }
 
 /** Full FactorLab logo with icon mark + split-color wordmark. */
-export function Logo({
-  variant = "default",
-  size = 24,
-  className,
-  wordmarkClassName,
-}: LogoProps) {
+export function Logo({ variant = "default", size = 24, className, wordmarkClassName }: LogoProps) {
   const markStyle = {
     width: `${size}px`,
     height: `${size}px`,
-  } satisfies CSSProperties
+  } satisfies CSSProperties;
 
   if (variant === "mark") {
-    return <LogoMark size={size} className={className} />
+    return <LogoMark size={size} className={className} />;
   }
 
   return (
@@ -86,7 +81,7 @@ export function Logo({
       </span>
       <span
         className={cn(
-          "text-[20px] font-semibold tracking-tight leading-none whitespace-nowrap",
+          "text-[20px] leading-none font-semibold tracking-tight whitespace-nowrap",
           wordmarkClassName
         )}
       >
@@ -94,5 +89,5 @@ export function Logo({
         <span className="text-primary">Lab</span>
       </span>
     </span>
-  )
+  );
 }

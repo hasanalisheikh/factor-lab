@@ -1,0 +1,12 @@
+{
+  "recommendations": [
+    // Formatting
+    "esbenp.prettier-vscode",
+    // Linting
+    "dbaeumer.vscode-eslint",
+    // Python (lint + format via Ruff)
+    "charliermarsh.ruff",
+    // Tailwind CSS intellisense
+    "bradlc.vscode-tailwindcss"
+  ]
+}

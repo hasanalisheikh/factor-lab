@@ -1,5 +1,6 @@
-import coreWebVitals from "eslint-config-next/core-web-vitals"
-import nextTypescript from "eslint-config-next/typescript"
+import coreWebVitals from "eslint-config-next/core-web-vitals";
+import nextTypescript from "eslint-config-next/typescript";
+import eslintConfigPrettier from "eslint-config-prettier";
 
 const config = [
   ...coreWebVitals,
@@ -23,6 +24,8 @@ const config = [
       ],
     },
   },
-]
+  // Must be last: disables ESLint rules that conflict with Prettier
+  eslintConfigPrettier,
+];
 
-export default config
+export default config;

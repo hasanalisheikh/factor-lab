@@ -1,7 +1,7 @@
-"use client"
+"use client";
 
-import { useState, useMemo } from "react"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { useState, useMemo } from "react";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Table,
   TableBody,
@@ -9,20 +9,20 @@ import {
   TableHead,
   TableHeader,
   TableRow,
-} from "@/components/ui/table"
+} from "@/components/ui/table";
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "@/components/ui/select"
-import { cn } from "@/lib/utils"
-import type { ModelPredictionRow, PositionRow } from "@/lib/supabase/types"
+} from "@/components/ui/select";
+import { cn } from "@/lib/utils";
+import type { ModelPredictionRow, PositionRow } from "@/lib/supabase/types";
 
 function formatPct(v: number | null | undefined): string {
-  if (v == null || Number.isNaN(v)) return "--"
-  return `${(Number(v) * 100).toFixed(2)}%`
+  if (v == null || Number.isNaN(v)) return "--";
+  return `${(Number(v) * 100).toFixed(2)}%`;
 }
 
 function formatDate(dateStr: string): string {
@@ -31,35 +31,32 @@ function formatDate(dateStr: string): string {
     month: "short",
     day: "numeric",
     timeZone: "UTC",
-  })
+  });
 }
 
 // ── ML path: derive holdings from model_predictions ──────────────────────────
 
 interface MlHolding {
-  ticker: string
-  weight: number
-  rank: number
-  predictedReturn: number | null
-  realizedReturn: number | null
+  ticker: string;
+  weight: number;
+  rank: number;
+  predictedReturn: number | null;
+  realizedReturn: number | null;
 }
 
 function getPredictionDisplayDate(row: ModelPredictionRow): string {
-  return row.target_date || row.as_of_date
+  return row.target_date || row.as_of_date;
 }
 
 function getMlDates(predictions: ModelPredictionRow[]): string[] {
-  const seen = new Set<string>()
+  const seen = new Set<string>();
   for (const r of predictions) {
-    seen.add(getPredictionDisplayDate(r))
+    seen.add(getPredictionDisplayDate(r));
   }
-  return Array.from(seen).sort((a, b) => b.localeCompare(a)) // newest first
+  return Array.from(seen).sort((a, b) => b.localeCompare(a)); // newest first
 }
 
-function getMlHoldingsForDate(
-  predictions: ModelPredictionRow[],
-  date: string
-): MlHolding[] {
+function getMlHoldingsForDate(predictions: ModelPredictionRow[], date: string): MlHolding[] {
   return predictions
     .filter((r) => getPredictionDisplayDate(r) === date && r.selected)
     .sort((a, b) => a.rank - b.rank)
@@ -69,83 +66,81 @@ function getMlHoldingsForDate(
       rank: r.rank,
       predictedReturn: r.predicted_return != null ? Number(r.predicted_return) : null,
       realizedReturn: r.realized_return != null ? Number(r.realized_return) : null,
-    }))
+    }));
 }
 
 // ── Baseline path: derive holdings from positions table ───────────────────────
 
 interface BaselineHolding {
-  symbol: string
-  weight: number
+  symbol: string;
+  weight: number;
 }
 
 function getPositionDates(positions: PositionRow[]): string[] {
-  const seen = new Set<string>()
+  const seen = new Set<string>();
   for (const r of positions) {
-    seen.add(r.date)
+    seen.add(r.date);
   }
-  return Array.from(seen).sort((a, b) => b.localeCompare(a)) // newest first
+  return Array.from(seen).sort((a, b) => b.localeCompare(a)); // newest first
 }
 
 function getPositionsForDate(positions: PositionRow[], date: string): BaselineHolding[] {
   return positions
     .filter((r) => r.date === date)
     .sort((a, b) => a.symbol.localeCompare(b.symbol))
-    .map((r) => ({ symbol: r.symbol, weight: Number(r.weight) }))
+    .map((r) => ({ symbol: r.symbol, weight: Number(r.weight) }));
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
 interface HoldingsTabProps {
-  predictions?: ModelPredictionRow[]
-  positions?: PositionRow[]
+  predictions?: ModelPredictionRow[];
+  positions?: PositionRow[];
 }
 
 export function HoldingsTab({ predictions = [], positions = [] }: HoldingsTabProps) {
-  const isMl = predictions.length > 0
-  const isBaseline = !isMl && positions.length > 0
+  const isMl = predictions.length > 0;
+  const isBaseline = !isMl && positions.length > 0;
 
-  const mlDates = useMemo(() => getMlDates(predictions), [predictions])
-  const positionDates = useMemo(() => getPositionDates(positions), [positions])
-  const dates = isMl ? mlDates : positionDates
+  const mlDates = useMemo(() => getMlDates(predictions), [predictions]);
+  const positionDates = useMemo(() => getPositionDates(positions), [positions]);
+  const dates = isMl ? mlDates : positionDates;
 
-  const [selectedDate, setSelectedDate] = useState<string>(() => dates[0] ?? "")
+  const [selectedDate, setSelectedDate] = useState<string>(() => dates[0] ?? "");
 
-  const activeDate = selectedDate || dates[0] || ""
+  const activeDate = selectedDate || dates[0] || "";
 
   const mlHoldings = useMemo(
     () => (isMl ? getMlHoldingsForDate(predictions, activeDate) : []),
     [predictions, activeDate, isMl]
-  )
+  );
   const baselineHoldings = useMemo(
     () => (isBaseline ? getPositionsForDate(positions, activeDate) : []),
     [positions, activeDate, isBaseline]
-  )
+  );
 
-  const isEmpty = !isMl && !isBaseline
-  const holdingCount = isMl ? mlHoldings.length : baselineHoldings.length
+  const isEmpty = !isMl && !isBaseline;
+  const holdingCount = isMl ? mlHoldings.length : baselineHoldings.length;
 
   return (
     <Card className="bg-card border-border">
-      <CardHeader className="pb-2 px-4 pt-4">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-          <CardTitle className="text-[13px] font-medium text-card-foreground">
-            Holdings
-          </CardTitle>
+      <CardHeader className="px-4 pt-4 pb-2">
+        <div className="flex flex-col justify-between gap-2 sm:flex-row sm:items-center">
+          <CardTitle className="text-card-foreground text-[13px] font-medium">Holdings</CardTitle>
           <div className="flex items-center gap-3">
             {holdingCount > 0 && (
-              <span className="text-[11px] text-muted-foreground font-mono">
+              <span className="text-muted-foreground font-mono text-[11px]">
                 {holdingCount} position{holdingCount !== 1 ? "s" : ""}
               </span>
             )}
             {dates.length > 0 && (
               <Select value={activeDate} onValueChange={setSelectedDate}>
-                <SelectTrigger className="h-7 text-[11px] font-mono w-[148px] bg-secondary/50 border-border">
+                <SelectTrigger className="bg-secondary/50 border-border h-7 w-[148px] font-mono text-[11px]">
                   <SelectValue placeholder="Select date" />
                 </SelectTrigger>
                 <SelectContent>
                   {dates.map((d) => (
-                    <SelectItem key={d} value={d} className="text-[11px] font-mono">
+                    <SelectItem key={d} value={d} className="font-mono text-[11px]">
                       {formatDate(d)}
                     </SelectItem>
                   ))}
@@ -157,7 +152,7 @@ export function HoldingsTab({ predictions = [], positions = [] }: HoldingsTabPro
       </CardHeader>
       <CardContent className="px-0 pb-1">
         {isEmpty ? (
-          <div className="px-4 py-8 text-center text-[12px] text-muted-foreground">
+          <div className="text-muted-foreground px-4 py-8 text-center text-[12px]">
             Holdings data not available for this run. Re-run the strategy to populate holdings.
           </div>
         ) : isMl ? (
@@ -166,49 +161,46 @@ export function HoldingsTab({ predictions = [], positions = [] }: HoldingsTabPro
             <Table>
               <TableHeader>
                 <TableRow className="border-border hover:bg-transparent">
-                  <TableHead className="text-[11px] text-muted-foreground font-medium pl-4 w-12">
+                  <TableHead className="text-muted-foreground w-12 pl-4 text-[11px] font-medium">
                     Rank
                   </TableHead>
-                  <TableHead className="text-[11px] text-muted-foreground font-medium">
+                  <TableHead className="text-muted-foreground text-[11px] font-medium">
                     Ticker
                   </TableHead>
-                  <TableHead className="text-[11px] text-muted-foreground font-medium text-right">
+                  <TableHead className="text-muted-foreground text-right text-[11px] font-medium">
                     Weight
                   </TableHead>
-                  <TableHead className="text-[11px] text-muted-foreground font-medium text-right hidden sm:table-cell">
+                  <TableHead className="text-muted-foreground hidden text-right text-[11px] font-medium sm:table-cell">
                     Predicted Ret
                   </TableHead>
-                  <TableHead className="text-[11px] text-muted-foreground font-medium text-right pr-4">
+                  <TableHead className="text-muted-foreground pr-4 text-right text-[11px] font-medium">
                     Realized Ret
                   </TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {mlHoldings.map((h) => (
-                  <TableRow
-                    key={h.ticker}
-                    className="border-border/40 hover:bg-accent/30"
-                  >
-                    <TableCell className="pl-4 py-2.5 text-[12px] font-mono text-muted-foreground">
+                  <TableRow key={h.ticker} className="border-border/40 hover:bg-accent/30">
+                    <TableCell className="text-muted-foreground py-2.5 pl-4 font-mono text-[12px]">
                       #{h.rank}
                     </TableCell>
-                    <TableCell className="py-2.5 text-[13px] font-mono font-medium text-card-foreground">
+                    <TableCell className="text-card-foreground py-2.5 font-mono text-[13px] font-medium">
                       {h.ticker}
                     </TableCell>
-                    <TableCell className="py-2.5 text-[13px] font-mono text-right text-card-foreground">
+                    <TableCell className="text-card-foreground py-2.5 text-right font-mono text-[13px]">
                       {formatPct(h.weight)}
                     </TableCell>
-                    <TableCell className="py-2.5 text-[13px] font-mono text-right text-card-foreground hidden sm:table-cell">
+                    <TableCell className="text-card-foreground hidden py-2.5 text-right font-mono text-[13px] sm:table-cell">
                       {formatPct(h.predictedReturn)}
                     </TableCell>
                     <TableCell
                       className={cn(
-                        "py-2.5 text-[13px] font-mono text-right pr-4",
+                        "py-2.5 pr-4 text-right font-mono text-[13px]",
                         h.realizedReturn == null
                           ? "text-muted-foreground"
                           : h.realizedReturn >= 0
-                          ? "text-success"
-                          : "text-destructive"
+                            ? "text-success"
+                            : "text-destructive"
                       )}
                     >
                       {h.realizedReturn == null ? "--" : formatPct(h.realizedReturn)}
@@ -224,10 +216,10 @@ export function HoldingsTab({ predictions = [], positions = [] }: HoldingsTabPro
             <Table>
               <TableHeader>
                 <TableRow className="border-border hover:bg-transparent">
-                  <TableHead className="text-[11px] text-muted-foreground font-medium pl-4">
+                  <TableHead className="text-muted-foreground pl-4 text-[11px] font-medium">
                     Symbol
                   </TableHead>
-                  <TableHead className="text-[11px] text-muted-foreground font-medium text-right pr-4">
+                  <TableHead className="text-muted-foreground pr-4 text-right text-[11px] font-medium">
                     Weight
                   </TableHead>
                 </TableRow>
@@ -235,10 +227,10 @@ export function HoldingsTab({ predictions = [], positions = [] }: HoldingsTabPro
               <TableBody>
                 {baselineHoldings.map((h) => (
                   <TableRow key={h.symbol} className="border-border/40 hover:bg-accent/30">
-                    <TableCell className="pl-4 py-2.5 text-[13px] font-mono font-medium text-card-foreground">
+                    <TableCell className="text-card-foreground py-2.5 pl-4 font-mono text-[13px] font-medium">
                       {h.symbol}
                     </TableCell>
-                    <TableCell className="py-2.5 text-[13px] font-mono text-right pr-4 text-card-foreground">
+                    <TableCell className="text-card-foreground py-2.5 pr-4 text-right font-mono text-[13px]">
                       {formatPct(h.weight)}
                     </TableCell>
                   </TableRow>
@@ -249,5 +241,5 @@ export function HoldingsTab({ predictions = [], positions = [] }: HoldingsTabPro
         )}
       </CardContent>
     </Card>
-  )
+  );
 }

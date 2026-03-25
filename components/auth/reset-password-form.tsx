@@ -1,81 +1,81 @@
-"use client"
+"use client";
 
-import { useActionState, useEffect, useState } from "react"
-import { AlertCircle } from "lucide-react"
-import { resetPasswordAction, type ResetPasswordState } from "@/app/actions/auth"
-import { Logo } from "@/components/logo"
-import { Alert, AlertDescription } from "@/components/ui/alert"
-import { Button } from "@/components/ui/button"
-import { Card } from "@/components/ui/card"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import { Spinner } from "@/components/ui/spinner"
-import { createClient } from "@/lib/supabase/client"
+import { useActionState, useEffect, useState } from "react";
+import { AlertCircle } from "lucide-react";
+import { resetPasswordAction, type ResetPasswordState } from "@/app/actions/auth";
+import { Logo } from "@/components/logo";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Spinner } from "@/components/ui/spinner";
+import { createClient } from "@/lib/supabase/client";
 
 export function ResetPasswordForm() {
   const [state, action_, isPending] = useActionState<ResetPasswordState, FormData>(
     resetPasswordAction,
     null
-  )
+  );
 
-  const [isHydratingSession, setIsHydratingSession] = useState(true)
-  const [password, setPassword] = useState("")
-  const [confirmPassword, setConfirmPassword] = useState("")
-  const [mismatchError, setMismatchError] = useState<string | null>(null)
+  const [isHydratingSession, setIsHydratingSession] = useState(true);
+  const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [mismatchError, setMismatchError] = useState<string | null>(null);
 
   useEffect(() => {
-    let cancelled = false
-    const supabase = createClient()
+    let cancelled = false;
+    const supabase = createClient();
 
     async function hydrateSession() {
       try {
-        const params = new URLSearchParams(window.location.hash.replace(/^#/, ""))
-        const accessToken = params.get("access_token")
-        const refreshToken = params.get("refresh_token")
+        const params = new URLSearchParams(window.location.hash.replace(/^#/, ""));
+        const accessToken = params.get("access_token");
+        const refreshToken = params.get("refresh_token");
 
         if (accessToken && refreshToken) {
           await supabase.auth.setSession({
             access_token: accessToken,
             refresh_token: refreshToken,
-          })
-          window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}`)
-          return
+          });
+          window.history.replaceState(
+            null,
+            "",
+            `${window.location.pathname}${window.location.search}`
+          );
+          return;
         }
 
-        await supabase.auth.getSession()
+        await supabase.auth.getSession();
       } catch {
         // The form will surface a server-side error if the reset session is invalid.
       } finally {
         if (!cancelled) {
-          setIsHydratingSession(false)
+          setIsHydratingSession(false);
         }
       }
     }
 
-    void hydrateSession()
+    void hydrateSession();
 
     return () => {
-      cancelled = true
-    }
-  }, [])
+      cancelled = true;
+    };
+  }, []);
 
   const inputClassName =
-    "h-9 border-white/10 bg-white/5 text-white/90 placeholder:text-white/45 focus-visible:border-primary/70 focus-visible:ring-primary/40"
+    "h-9 border-white/10 bg-white/5 text-white/90 placeholder:text-white/45 focus-visible:border-primary/70 focus-visible:ring-primary/40";
   const primaryButtonClassName =
-    "h-9 w-full bg-primary text-primary-foreground shadow-[0_14px_28px_-14px_rgba(40,199,130,0.7)] hover:bg-primary/90"
+    "h-9 w-full bg-primary text-primary-foreground shadow-[0_14px_28px_-14px_rgba(40,199,130,0.7)] hover:bg-primary/90";
 
   return (
-    <Card className="border-white/10 bg-card/95 p-6 shadow-[0_28px_75px_-36px_rgba(0,0,0,0.95)]">
+    <Card className="bg-card/95 border-white/10 p-6 shadow-[0_28px_75px_-36px_rgba(0,0,0,0.95)]">
       <div className="space-y-4">
         <div className="space-y-1.5">
           <Logo size={26} wordmarkClassName="text-[24px]" />
           <div className="space-y-0.5">
-            <h1 className="text-xl font-semibold tracking-tight text-white/90">
-              Set new password
-            </h1>
-            <p className="text-sm text-white/60">
-              Choose a strong password for your account.
-            </p>
+            <h1 className="text-xl font-semibold tracking-tight text-white/90">Set new password</h1>
+            <p className="text-sm text-white/60">Choose a strong password for your account.</p>
           </div>
         </div>
 
@@ -83,11 +83,11 @@ export function ResetPasswordForm() {
           action={action_}
           onSubmit={(event) => {
             if (password !== confirmPassword) {
-              event.preventDefault()
-              setMismatchError("Passwords do not match.")
-              return
+              event.preventDefault();
+              setMismatchError("Passwords do not match.");
+              return;
             }
-            setMismatchError(null)
+            setMismatchError(null);
           }}
           className="space-y-2.5"
         >
@@ -166,5 +166,5 @@ export function ResetPasswordForm() {
         </p>
       </div>
     </Card>
-  )
+  );
 }

@@ -1,7 +1,7 @@
-import "server-only"
-import { unstable_cache } from "next/cache"
-import { createClient } from "./server"
-import { createAdminClient } from "./admin"
+import "server-only";
+import { unstable_cache } from "next/cache";
+import { createClient } from "./server";
+import { createAdminClient } from "./admin";
 import {
   DATA_STATE_SINGLETON_ID,
   getLastCompleteTradingDayUtc,
@@ -9,14 +9,14 @@ import {
   getRequiredTickers,
   isDailyUpdatesEnabled,
   type DataUpdateMode,
-} from "@/lib/data-cutoff"
+} from "@/lib/data-cutoff";
 import {
   BENCHMARK_OPTIONS,
   getRunBenchmark,
   inferPossibleOverlapFromUniverse,
   isBenchmarkHeldAtLatestRebalance,
   type BenchmarkOverlapState,
-} from "@/lib/benchmark"
+} from "@/lib/benchmark";
 import type {
   RunRow,
   RunMetricsRow,
@@ -37,22 +37,22 @@ import type {
   TickerMissingnessV2,
   BenchmarkCoverage,
   DataIngestJobStatus,
-} from "./types"
-import { COVERAGE_WINDOW_START, TICKER_INCEPTION_DATES } from "./types"
+} from "./types";
+import { COVERAGE_WINDOW_START, TICKER_INCEPTION_DATES } from "./types";
 import {
   getDataIngestTriggerLabel,
   isActiveDataIngestStatus,
   isMissingDataIngestExtendedColumnError,
   normalizeDataIngestStatus,
-} from "@/lib/data-ingest-jobs"
+} from "@/lib/data-ingest-jobs";
 import {
   UNIVERSE_PRESETS,
   computeUniverseValidFrom,
   summarizeUniverseConstraints,
   type UniverseId,
-} from "@/lib/universe-config"
-import { computeBenchmarkCoverage, type CoverageStatsSnapshot } from "@/lib/coverage-check"
-import type { RunStatus } from "@/lib/types"
+} from "@/lib/universe-config";
+import { computeBenchmarkCoverage, type CoverageStatsSnapshot } from "@/lib/coverage-check";
+import type { RunStatus } from "@/lib/types";
 
 // Re-export for server-side consumers that import types from this module
 export type {
@@ -73,208 +73,220 @@ export type {
   TickerMissingness,
   BenchmarkCoverage,
   DataIngestJobStatus,
-}
-export { COVERAGE_WINDOW_START }
+};
+export { COVERAGE_WINDOW_START };
 
 export type DataHealthSummary = {
-  tickersCount: number
-  dateStart: string | null
-  dateEnd: string | null
-  businessDaysInWindow: number
-  expectedTickerDays: number
-  actualTickerDays: number
-  missingTickerDays: number
-  completenessPercent: number | null
-  lastUpdatedAt: string | null
-}
+  tickersCount: number;
+  dateStart: string | null;
+  dateEnd: string | null;
+  businessDaysInWindow: number;
+  expectedTickerDays: number;
+  actualTickerDays: number;
+  missingTickerDays: number;
+  completenessPercent: number | null;
+  lastUpdatedAt: string | null;
+};
 
 export type DataStateSummary = {
-  dataCutoffDate: string | null
-  lastUpdateAt: string | null
-  updateMode: DataUpdateMode | null
-  updatedBy: string | null
-  nextMonthlyRefresh: string
-  dailyUpdatesEnabled: boolean
+  dataCutoffDate: string | null;
+  lastUpdateAt: string | null;
+  updateMode: DataUpdateMode | null;
+  updatedBy: string | null;
+  nextMonthlyRefresh: string;
+  dailyUpdatesEnabled: boolean;
   /** Set by the daily cron on no-op runs (weekend, holiday, already current). */
-  lastNoopCheckAt: string | null
-}
+  lastNoopCheckAt: string | null;
+};
 
 export type ScheduledRefreshActivity = {
-  monthlyActiveJobs: number
-  dailyActiveJobs: number
-}
+  monthlyActiveJobs: number;
+  dailyActiveJobs: number;
+};
 
-export type UniverseBatchStatus = "pending" | "running" | "succeeded" | "blocked"
+export type UniverseBatchStatus = "pending" | "running" | "succeeded" | "blocked";
 
 export type UniverseBatchStatusSummary = {
-  batchId: string
-  status: UniverseBatchStatus
-  totalJobs: number
-  completedJobs: number
-  avgProgress: number
-  symbols: Array<{ symbol: string; status: string; progress: number }>
-}
+  batchId: string;
+  status: UniverseBatchStatus;
+  totalJobs: number;
+  completedJobs: number;
+  avgProgress: number;
+  symbols: Array<{ symbol: string; status: string; progress: number }>;
+};
 
-export function classifyUniverseBatchStatus(rows: Array<{
-  status: string
-  progress: number | null
-  next_retry_at: string | null
-}>): Pick<UniverseBatchStatusSummary, "status" | "completedJobs" | "avgProgress"> {
-  const totalJobs = rows.length
-  const completedJobs = rows.filter((row) => normalizeDataIngestStatus(row.status) === "succeeded").length
-  const avgProgress = totalJobs === 0
-    ? 0
-    : Math.round(
-      rows.reduce((sum, row) => sum + getEffectiveIngestProgress(row.status, row.progress), 0) / totalJobs
-    )
+export function classifyUniverseBatchStatus(
+  rows: Array<{
+    status: string;
+    progress: number | null;
+    next_retry_at: string | null;
+  }>
+): Pick<UniverseBatchStatusSummary, "status" | "completedJobs" | "avgProgress"> {
+  const totalJobs = rows.length;
+  const completedJobs = rows.filter(
+    (row) => normalizeDataIngestStatus(row.status) === "succeeded"
+  ).length;
+  const avgProgress =
+    totalJobs === 0
+      ? 0
+      : Math.round(
+          rows.reduce((sum, row) => sum + getEffectiveIngestProgress(row.status, row.progress), 0) /
+            totalJobs
+        );
 
-  const hasRunning = rows.some((row) => normalizeDataIngestStatus(row.status) === "running")
-  const hasActive = rows.some((row) => isActiveDataIngestStatus(row.status, row.next_retry_at))
+  const hasRunning = rows.some((row) => normalizeDataIngestStatus(row.status) === "running");
+  const hasActive = rows.some((row) => isActiveDataIngestStatus(row.status, row.next_retry_at));
   const hasTerminalFailure = rows.some((row) => {
-    const normalized = normalizeDataIngestStatus(row.status)
-    return normalized === "blocked" || (normalized === "failed" && !row.next_retry_at)
-  })
+    const normalized = normalizeDataIngestStatus(row.status);
+    return normalized === "blocked" || (normalized === "failed" && !row.next_retry_at);
+  });
 
   return {
-    status: hasActive ? (hasRunning ? "running" : "pending") : hasTerminalFailure ? "blocked" : "succeeded",
+    status: hasActive
+      ? hasRunning
+        ? "running"
+        : "pending"
+      : hasTerminalFailure
+        ? "blocked"
+        : "succeeded",
     completedJobs,
     avgProgress,
-  }
+  };
 }
 
 export type UniverseConstraintsSnapshot = {
-  universe: UniverseId
-  universeEarliestStart: string | null
-  universeValidFrom: string | null
-  missingTickers: string[]
-  ingestedCount: number
-  totalCount: number
-  ready: boolean
-  dataCutoffDate: string | null
-}
+  universe: UniverseId;
+  universeEarliestStart: string | null;
+  universeValidFrom: string | null;
+  missingTickers: string[];
+  ingestedCount: number;
+  totalCount: number;
+  ready: boolean;
+  dataCutoffDate: string | null;
+};
 
 export type DataIngestJobHistoryEntry = {
-  id: string
-  symbol: string
-  status: string
-  stage: string | null
-  requestMode: string | null
-  requestedBy: string | null
-  triggerLabel: string
-  createdAt: string | null
-  startedAt: string | null
-  finishedAt: string | null
-  nextRetryAt: string | null
-  attemptCount: number | null
-  rowsInserted: number
-  targetCutoffDate: string | null
-  error: string | null
-}
+  id: string;
+  symbol: string;
+  status: string;
+  stage: string | null;
+  requestMode: string | null;
+  requestedBy: string | null;
+  triggerLabel: string;
+  createdAt: string | null;
+  startedAt: string | null;
+  finishedAt: string | null;
+  nextRetryAt: string | null;
+  attemptCount: number | null;
+  rowsInserted: number;
+  targetCutoffDate: string | null;
+  error: string | null;
+};
 
 export type RequiredTickerResearchRow = {
-  ticker: string
-  researchStart: string
-  researchEnd: string
-  expectedDays: number
-  actualDays: number
-  trueMissingDays: number
-  coveragePercent: number
-  maxGapDays: number
-  firstObservedDate: string | null
-  lastObservedDate: string | null
-  isBenchmark: boolean
-  isIngested: boolean
-}
+  ticker: string;
+  researchStart: string;
+  researchEnd: string;
+  expectedDays: number;
+  actualDays: number;
+  trueMissingDays: number;
+  coveragePercent: number;
+  maxGapDays: number;
+  firstObservedDate: string | null;
+  lastObservedDate: string | null;
+  isBenchmark: boolean;
+  isIngested: boolean;
+};
 
 export type RequiredTickerResearchSummary = {
-  rows: RequiredTickerResearchRow[]
-  requiredTickers: string[]
-  notIngestedTickers: string[]
-  ingestedTickers: number
-  completeness: number | null
-  totalExpected: number
-  totalActual: number
-  totalTrueMissing: number
-  trueMissingRate: number
-  marketCalendarDays: number
-}
-
+  rows: RequiredTickerResearchRow[];
+  requiredTickers: string[];
+  notIngestedTickers: string[];
+  ingestedTickers: number;
+  completeness: number | null;
+  totalExpected: number;
+  totalActual: number;
+  totalTrueMissing: number;
+  trueMissingRate: number;
+  marketCalendarDays: number;
+};
 
 export type IngestionLogEntry = {
-  id: string
-  ingested_at: string
-  status: string
-  tickers_updated: number
-  rows_upserted: number
-  note: string | null
-  source: string
-}
+  id: string;
+  ingested_at: string;
+  status: string;
+  tickers_updated: number;
+  rows_upserted: number;
+  note: string | null;
+  source: string;
+};
 
 type RunBenchmarkContext = Pick<
   RunRow,
   "id" | "benchmark" | "benchmark_ticker" | "strategy_id" | "universe_symbols"
->
+>;
 
 type GetRunsOptions = {
-  limit?: number
-  search?: string
-  status?: string
-  strategy?: string
-  universe?: string
-}
+  limit?: number;
+  search?: string;
+  status?: string;
+  strategy?: string;
+  universe?: string;
+};
 
 function getErrorMessage(error: unknown): string | undefined {
-  if (typeof error === "string") return error
+  if (typeof error === "string") return error;
   if (error && typeof error === "object" && "message" in error) {
-    const { message } = error as { message?: unknown }
-    return typeof message === "string" ? message : undefined
+    const { message } = error as { message?: unknown };
+    return typeof message === "string" ? message : undefined;
   }
-  return undefined
+  return undefined;
 }
 
 function isAbortLikeError(error: unknown): boolean {
-  const message = getErrorMessage(error)?.toLowerCase()
+  const message = getErrorMessage(error)?.toLowerCase();
   if (message && (message.includes("aborterror") || message.includes("operation was aborted"))) {
-    return true
+    return true;
   }
 
   if (error && typeof error === "object" && "name" in error) {
-    const { name } = error as { name?: unknown }
-    return name === "AbortError" || name === "TimeoutError"
+    const { name } = error as { name?: unknown };
+    return name === "AbortError" || name === "TimeoutError";
   }
 
-  return false
+  return false;
 }
 
 function logQueryError(scope: string, error: unknown): void {
-  if (isAbortLikeError(error)) return
-  console.error(`${scope} error:`, getErrorMessage(error) ?? error)
+  if (isAbortLikeError(error)) return;
+  console.error(`${scope} error:`, getErrorMessage(error) ?? error);
 }
 
 function logQueryException(scope: string, error: unknown): void {
-  if (isAbortLikeError(error)) return
-  console.error(`${scope} exception:`, error)
+  if (isAbortLikeError(error)) return;
+  console.error(`${scope} exception:`, error);
 }
 
 function isMissingBenchmarkColumnError(message?: string): boolean {
-  if (!message) return false
-  const m = message.toLowerCase()
-  return m.includes("benchmark") && m.includes("does not exist")
+  if (!message) return false;
+  const m = message.toLowerCase();
+  return m.includes("benchmark") && m.includes("does not exist");
 }
 
 function isMissingPositionsTableError(message?: string): boolean {
-  if (!message) return false
-  const m = message.toLowerCase()
-  return m.includes("public.positions") && m.includes("could not find the table")
+  if (!message) return false;
+  const m = message.toLowerCase();
+  return m.includes("public.positions") && m.includes("could not find the table");
 }
 
 export async function getRuns(options: GetRunsOptions = {}): Promise<RunWithMetrics[]> {
-  const { limit = 100, search, status, strategy, universe } = options
+  const { limit = 100, search, status, strategy, universe } = options;
   try {
-    const supabase = await createClient()
+    const supabase = await createClient();
     let queryWithBenchmark = supabase
       .from("runs")
-      .select(`
+      .select(
+        `
         id,
         name,
         strategy_id,
@@ -286,30 +298,32 @@ export async function getRuns(options: GetRunsOptions = {}): Promise<RunWithMetr
         end_date,
         created_at,
         run_metrics(run_id, cagr, sharpe, max_drawdown, turnover)
-      `)
-      .order("created_at", { ascending: false })
+      `
+      )
+      .order("created_at", { ascending: false });
 
     if (search) {
-      queryWithBenchmark = queryWithBenchmark.ilike("name", `%${search}%`)
+      queryWithBenchmark = queryWithBenchmark.ilike("name", `%${search}%`);
     }
     if (status) {
-      queryWithBenchmark = queryWithBenchmark.eq("status", status)
+      queryWithBenchmark = queryWithBenchmark.eq("status", status);
     }
     if (strategy) {
-      queryWithBenchmark = queryWithBenchmark.eq("strategy_id", strategy)
+      queryWithBenchmark = queryWithBenchmark.eq("strategy_id", strategy);
     }
     if (universe) {
-      queryWithBenchmark = queryWithBenchmark.eq("universe", universe)
+      queryWithBenchmark = queryWithBenchmark.eq("universe", universe);
     }
     if (limit > 0) {
-      queryWithBenchmark = queryWithBenchmark.limit(limit)
+      queryWithBenchmark = queryWithBenchmark.limit(limit);
     }
 
-    let { data, error } = await queryWithBenchmark
+    let { data, error } = await queryWithBenchmark;
     if (error && isMissingBenchmarkColumnError(error.message)) {
       let queryLegacy = supabase
         .from("runs")
-        .select(`
+        .select(
+          `
           id,
           name,
           strategy_id,
@@ -320,97 +334,98 @@ export async function getRuns(options: GetRunsOptions = {}): Promise<RunWithMetr
           end_date,
           created_at,
           run_metrics(run_id, cagr, sharpe, max_drawdown, turnover)
-        `)
-        .order("created_at", { ascending: false })
+        `
+        )
+        .order("created_at", { ascending: false });
 
       if (search) {
-        queryLegacy = queryLegacy.ilike("name", `%${search}%`)
+        queryLegacy = queryLegacy.ilike("name", `%${search}%`);
       }
       if (status) {
-        queryLegacy = queryLegacy.eq("status", status)
+        queryLegacy = queryLegacy.eq("status", status);
       }
       if (strategy) {
-        queryLegacy = queryLegacy.eq("strategy_id", strategy)
+        queryLegacy = queryLegacy.eq("strategy_id", strategy);
       }
       if (universe) {
-        queryLegacy = queryLegacy.eq("universe", universe)
+        queryLegacy = queryLegacy.eq("universe", universe);
       }
       if (limit > 0) {
-        queryLegacy = queryLegacy.limit(limit)
+        queryLegacy = queryLegacy.limit(limit);
       }
-      const fallback = await queryLegacy
-      data = fallback.data
-      error = fallback.error
+      const fallback = await queryLegacy;
+      data = fallback.data;
+      error = fallback.error;
     }
 
     if (error) {
-      logQueryError("getRuns", error)
-      return []
+      logQueryError("getRuns", error);
+      return [];
     }
 
-    return (data ?? []) as RunWithMetrics[]
+    return (data ?? []) as RunWithMetrics[];
   } catch (err) {
-    logQueryException("getRuns", err)
-    return []
+    logQueryException("getRuns", err);
+    return [];
   }
 }
 
 export async function getRunsCount(options: Omit<GetRunsOptions, "limit"> = {}): Promise<number> {
-  const { search, status, strategy, universe } = options
+  const { search, status, strategy, universe } = options;
   try {
-    const supabase = await createClient()
-    let query = supabase.from("runs").select("*", { count: "exact", head: true })
+    const supabase = await createClient();
+    let query = supabase.from("runs").select("*", { count: "exact", head: true });
 
     if (search) {
-      query = query.ilike("name", `%${search}%`)
+      query = query.ilike("name", `%${search}%`);
     }
     if (status) {
-      query = query.eq("status", status)
+      query = query.eq("status", status);
     }
     if (strategy) {
-      query = query.eq("strategy_id", strategy)
+      query = query.eq("strategy_id", strategy);
     }
     if (universe) {
-      query = query.eq("universe", universe)
+      query = query.eq("universe", universe);
     }
 
-    const { count, error } = await query
+    const { count, error } = await query;
 
     if (error) {
-      logQueryError("getRunsCount", error)
-      return 0
+      logQueryError("getRunsCount", error);
+      return 0;
     }
-    return count ?? 0
+    return count ?? 0;
   } catch (err) {
-    logQueryException("getRunsCount", err)
-    return 0
+    logQueryException("getRunsCount", err);
+    return 0;
   }
 }
 
 export async function getRunById(id: string): Promise<RunWithMetrics | null> {
   try {
-    const supabase = await createClient()
+    const supabase = await createClient();
     const { data, error } = await supabase
       .from("runs")
       .select("*, run_metrics(*)")
       .eq("id", id)
-      .maybeSingle()
+      .maybeSingle();
 
-    if (error || !data) return null
+    if (error || !data) return null;
 
-    return data as RunWithMetrics
+    return data as RunWithMetrics;
   } catch (err) {
-    console.error("getRunById exception:", err)
-    return null
+    console.error("getRunById exception:", err);
+    return null;
   }
 }
 
-const EQUITY_CURVE_PAGE_SIZE = 5000
+const EQUITY_CURVE_PAGE_SIZE = 5000;
 
 export async function fetchAllEquityCurve(runId: string): Promise<EquityCurveRow[]> {
-  const supabase = await createClient()
-  const all: EquityCurveRow[] = []
-  let offset = 0
+  const supabase = await createClient();
+  const all: EquityCurveRow[] = [];
+  let offset = 0;
 
   while (true) {
     const { data, error } = await supabase
@@ -418,186 +433,193 @@ export async function fetchAllEquityCurve(runId: string): Promise<EquityCurveRow
       .select("*")
       .eq("run_id", runId)
       .order("date", { ascending: true })
-      .range(offset, offset + EQUITY_CURVE_PAGE_SIZE - 1)
+      .range(offset, offset + EQUITY_CURVE_PAGE_SIZE - 1);
 
     if (error) {
-      throw new Error(`Failed to load equity curve: ${error.message}`)
+      throw new Error(`Failed to load equity curve: ${error.message}`);
     }
 
-    const page = (data ?? []) as EquityCurveRow[]
-    if (page.length === 0) break
+    const page = (data ?? []) as EquityCurveRow[];
+    if (page.length === 0) break;
 
-    all.push(...page)
-    if (page.length < EQUITY_CURVE_PAGE_SIZE) break
-    offset += EQUITY_CURVE_PAGE_SIZE
+    all.push(...page);
+    if (page.length < EQUITY_CURVE_PAGE_SIZE) break;
+    offset += EQUITY_CURVE_PAGE_SIZE;
   }
 
-  return all
+  return all;
 }
 
 export async function getEquityCurve(runId: string): Promise<EquityCurveRow[]> {
   try {
-    return await fetchAllEquityCurve(runId)
+    return await fetchAllEquityCurve(runId);
   } catch (err) {
-    console.error("getEquityCurve exception:", err)
-    return []
+    console.error("getEquityCurve exception:", err);
+    return [];
   }
 }
 
 export async function getJobs(): Promise<JobRow[]> {
   try {
-    const supabase = await createClient()
+    const supabase = await createClient();
     const { data, error } = await supabase
       .from("jobs")
       .select("*")
-      .order("created_at", { ascending: false })
+      .order("created_at", { ascending: false });
 
     if (error) {
-      console.error("getJobs error:", error.message)
-      return []
+      console.error("getJobs error:", error.message);
+      return [];
     }
 
-    return (data ?? []) as JobRow[]
+    return (data ?? []) as JobRow[];
   } catch (err) {
-    console.error("getJobs exception:", err)
-    return []
+    console.error("getJobs exception:", err);
+    return [];
   }
 }
 
 export async function getReportByRunId(runId: string): Promise<ReportRow | null> {
   try {
-    const supabase = await createClient()
+    const supabase = await createClient();
     const { data, error } = await supabase
       .from("reports")
       .select("*")
       .eq("run_id", runId)
       .order("created_at", { ascending: false })
       .limit(1)
-      .maybeSingle()
+      .maybeSingle();
 
-    if (error || !data) return null
+    if (error || !data) return null;
 
-    return data as ReportRow
+    return data as ReportRow;
   } catch (err) {
-    console.error("getReportByRunId exception:", err)
-    return null
+    console.error("getReportByRunId exception:", err);
+    return null;
   }
 }
 
 export async function getReportUrlsByRunIds(runIds: string[]): Promise<Record<string, string>> {
   if (runIds.length === 0) {
-    return {}
+    return {};
   }
 
   try {
-    const supabase = await createClient()
+    const supabase = await createClient();
     const { data, error } = await supabase
       .from("reports")
       .select("run_id, url, created_at")
       .in("run_id", runIds)
-      .order("created_at", { ascending: false })
+      .order("created_at", { ascending: false });
 
     if (error || !data) {
-      return {}
+      return {};
     }
 
-    const reportUrls: Record<string, string> = {}
+    const reportUrls: Record<string, string> = {};
     for (const row of data as Array<Pick<ReportRow, "run_id" | "url">>) {
-      if (!row.run_id || !row.url || row.run_id in reportUrls) continue
-      reportUrls[row.run_id] = row.url
+      if (!row.run_id || !row.url || row.run_id in reportUrls) continue;
+      reportUrls[row.run_id] = row.url;
     }
 
-    return reportUrls
+    return reportUrls;
   } catch (err) {
-    console.error("getReportUrlsByRunIds exception:", err)
-    return {}
+    console.error("getReportUrlsByRunIds exception:", err);
+    return {};
   }
 }
 
 export async function getJobByRunId(runId: string): Promise<JobRow | null> {
   try {
-    const supabase = await createClient()
+    const supabase = await createClient();
     const { data, error } = await supabase
       .from("jobs")
       .select("*")
       .eq("run_id", runId)
       .order("created_at", { ascending: false })
       .limit(1)
-      .maybeSingle()
+      .maybeSingle();
 
-    if (error || !data) return null
+    if (error || !data) return null;
 
-    return data as JobRow
+    return data as JobRow;
   } catch (err) {
-    console.error("getJobByRunId exception:", err)
-    return null
+    console.error("getJobByRunId exception:", err);
+    return null;
   }
 }
 
 export async function getMostRecentCompletedRun(): Promise<RunWithMetrics | null> {
   try {
-    const supabase = await createClient()
+    const supabase = await createClient();
     const { data, error } = await supabase
       .from("runs")
       .select("*, run_metrics(*)")
       .eq("status", "completed")
       .order("created_at", { ascending: false })
       .limit(1)
-      .maybeSingle()
+      .maybeSingle();
 
-    if (error || !data) return null
+    if (error || !data) return null;
 
-    return data as RunWithMetrics
+    return data as RunWithMetrics;
   } catch (err) {
-    console.error("getMostRecentCompletedRun exception:", err)
-    return null
+    console.error("getMostRecentCompletedRun exception:", err);
+    return null;
   }
 }
 
 export async function getModelMetadataByRunId(runId: string): Promise<ModelMetadataRow | null> {
   try {
-    const supabase = await createClient()
+    const supabase = await createClient();
     const { data, error } = await supabase
       .from("model_metadata")
       .select("*")
       .eq("run_id", runId)
-      .maybeSingle()
+      .maybeSingle();
 
-    if (error || !data) return null
-    return data as ModelMetadataRow
+    if (error || !data) return null;
+    return data as ModelMetadataRow;
   } catch (err) {
-    console.error("getModelMetadataByRunId exception:", err)
-    return null
+    console.error("getModelMetadataByRunId exception:", err);
+    return null;
   }
 }
 
 export async function getModelPredictionsByRunId(runId: string): Promise<ModelPredictionRow[]> {
   try {
-    const supabase = await createClient()
+    const supabase = await createClient();
     const { data, error } = await supabase
       .from("model_predictions")
       .select("*")
       .eq("run_id", runId)
       .order("as_of_date", { ascending: false })
       .order("rank", { ascending: true })
-      .limit(500)
+      .limit(500);
 
     if (error) {
-      console.error("getModelPredictionsByRunId error:", error.message)
-      return []
+      console.error("getModelPredictionsByRunId error:", error.message);
+      return [];
     }
-    return (data ?? []) as ModelPredictionRow[]
+    return (data ?? []) as ModelPredictionRow[];
   } catch (err) {
-    console.error("getModelPredictionsByRunId exception:", err)
-    return []
+    console.error("getModelPredictionsByRunId exception:", err);
+    return [];
   }
 }
 
 export async function getStrategyComparisonRuns(): Promise<RunWithMetrics[]> {
-  const empty: RunWithMetrics[] = []
+  const empty: RunWithMetrics[] = [];
   try {
-    const supabase = await createClient()
-    const strategies = ["equal_weight", "momentum_12_1", "low_vol", "trend_filter", "ml_ridge", "ml_lightgbm"]
+    const supabase = await createClient();
+    const strategies = [
+      "equal_weight",
+      "momentum_12_1",
+      "low_vol",
+      "trend_filter",
+      "ml_ridge",
+      "ml_lightgbm",
+    ];
 
     // Single query: fetch recent completed runs across all strategies, then pick latest per strategy in JS.
     // limit(30) gives ~5 per strategy on average which is more than enough.
@@ -607,99 +629,100 @@ export async function getStrategyComparisonRuns(): Promise<RunWithMetrics[]> {
       .in("strategy_id", strategies)
       .eq("status", "completed")
       .order("created_at", { ascending: false })
-      .limit(30)
+      .limit(30);
 
-    if (error || !data) return empty
+    if (error || !data) return empty;
 
-    const seen = new Set<string>()
-    const results: RunWithMetrics[] = []
+    const seen = new Set<string>();
+    const results: RunWithMetrics[] = [];
     for (const row of data as RunWithMetrics[]) {
       if (!seen.has(row.strategy_id)) {
-        seen.add(row.strategy_id)
-        results.push(row)
+        seen.add(row.strategy_id);
+        results.push(row);
       }
     }
-    return results
+    return results;
   } catch (err) {
-    console.error("getStrategyComparisonRuns exception:", err)
-    return empty
+    console.error("getStrategyComparisonRuns exception:", err);
+    return empty;
   }
 }
 
 export async function getCompareRunBundles(limit = 30): Promise<CompareRunBundle[]> {
   try {
-    const supabase = await createClient()
+    const supabase = await createClient();
     const { data: runsData, error: runsError } = await supabase
       .from("runs")
       .select("*, run_metrics(*)")
       .eq("status", "completed")
       .order("created_at", { ascending: false })
-      .limit(limit)
+      .limit(limit);
 
     if (runsError || !runsData || runsData.length === 0) {
       if (runsError) {
-        console.error("getCompareRunBundles runs error:", runsError.message)
+        console.error("getCompareRunBundles runs error:", runsError.message);
       }
-      return []
+      return [];
     }
 
-    const runs = runsData as RunWithMetrics[]
-    const runIds = runs.map((r) => r.id)
+    const runs = runsData as RunWithMetrics[];
+    const runIds = runs.map((r) => r.id);
     const { data: equityRows, error: eqError } = await supabase
       .from("equity_curve")
       .select("*")
       .in("run_id", runIds)
-      .order("date", { ascending: true })
+      .order("date", { ascending: true });
 
     if (eqError) {
-      console.error("getCompareRunBundles equity error:", eqError.message)
-      return []
+      console.error("getCompareRunBundles equity error:", eqError.message);
+      return [];
     }
 
-    const grouped = new Map<string, EquityCurveRow[]>()
+    const grouped = new Map<string, EquityCurveRow[]>();
     for (const row of (equityRows ?? []) as EquityCurveRow[]) {
-      const arr = grouped.get(row.run_id) ?? []
-      arr.push(row)
-      grouped.set(row.run_id, arr)
+      const arr = grouped.get(row.run_id) ?? [];
+      arr.push(row);
+      grouped.set(row.run_id, arr);
     }
 
-    const bundles: CompareRunBundle[] = []
+    const bundles: CompareRunBundle[] = [];
     for (const run of runs) {
-      const metrics = Array.isArray(run.run_metrics)
-        ? run.run_metrics[0]
-        : run.run_metrics
-      const equity = grouped.get(run.id) ?? []
-      if (!metrics || equity.length === 0) continue
+      const metrics = Array.isArray(run.run_metrics) ? run.run_metrics[0] : run.run_metrics;
+      const equity = grouped.get(run.id) ?? [];
+      if (!metrics || equity.length === 0) continue;
       bundles.push({
         run: run as RunRow,
         metrics,
         equity,
-      })
+      });
     }
-    return bundles
+    return bundles;
   } catch (err) {
-    console.error("getCompareRunBundles exception:", err)
-    return []
+    console.error("getCompareRunBundles exception:", err);
+    return [];
   }
 }
 
 export type DataCoverage = {
-  minDate: string | null
-  maxDate: string | null
-  lastUpdatedAt?: string | null
-}
+  minDate: string | null;
+  maxDate: string | null;
+  lastUpdatedAt?: string | null;
+};
 
 export async function getDataState(): Promise<DataStateSummary> {
   try {
-    const supabase = await createClient()
-    const { data, error } = await supabase
+    const supabase = await createClient();
+    const { data, error } = (await supabase
       .from("data_state")
       .select("data_cutoff_date, last_update_at, update_mode, updated_by, last_noop_check_at")
       .eq("id", DATA_STATE_SINGLETON_ID)
-      .maybeSingle() as {
-        data: Pick<DataStateRow, "data_cutoff_date" | "last_update_at" | "update_mode" | "updated_by" | "last_noop_check_at"> | null
-        error: { message: string } | null
-      }
+      .maybeSingle()) as {
+      data: Pick<
+        DataStateRow,
+        "data_cutoff_date" | "last_update_at" | "update_mode" | "updated_by" | "last_noop_check_at"
+      > | null;
+      error: { message: string } | null;
+    };
 
     if (!error && data) {
       return {
@@ -710,20 +733,20 @@ export async function getDataState(): Promise<DataStateSummary> {
         nextMonthlyRefresh: getNextMonthStartUtc(),
         dailyUpdatesEnabled: isDailyUpdatesEnabled(),
         lastNoopCheckAt: data.last_noop_check_at ?? null,
-      }
+      };
     }
 
-    const safeCutoff = getLastCompleteTradingDayUtc()
+    const safeCutoff = getLastCompleteTradingDayUtc();
     const { data: maxRow } = await supabase
       .from("prices")
       .select("date")
       .order("date", { ascending: false })
       .limit(1)
-      .maybeSingle()
+      .maybeSingle();
 
-    const fallbackMaxDate = (maxRow as { date?: string } | null)?.date ?? null
+    const fallbackMaxDate = (maxRow as { date?: string } | null)?.date ?? null;
     const fallbackCutoff =
-      fallbackMaxDate && fallbackMaxDate < safeCutoff ? fallbackMaxDate : safeCutoff
+      fallbackMaxDate && fallbackMaxDate < safeCutoff ? fallbackMaxDate : safeCutoff;
 
     return {
       dataCutoffDate: fallbackCutoff,
@@ -733,7 +756,7 @@ export async function getDataState(): Promise<DataStateSummary> {
       nextMonthlyRefresh: getNextMonthStartUtc(),
       dailyUpdatesEnabled: isDailyUpdatesEnabled(),
       lastNoopCheckAt: null,
-    }
+    };
   } catch {
     return {
       dataCutoffDate: getLastCompleteTradingDayUtc(),
@@ -743,13 +766,13 @@ export async function getDataState(): Promise<DataStateSummary> {
       nextMonthlyRefresh: getNextMonthStartUtc(),
       dailyUpdatesEnabled: isDailyUpdatesEnabled(),
       lastNoopCheckAt: null,
-    }
+    };
   }
 }
 
 export async function getDataCoverage(): Promise<DataCoverage> {
   try {
-    const supabase = await createClient()
+    const supabase = await createClient();
     const [dataState, firstStatsRes] = await Promise.all([
       getDataState(),
       supabase
@@ -757,12 +780,12 @@ export async function getDataCoverage(): Promise<DataCoverage> {
         .select("first_date")
         .order("first_date", { ascending: true })
         .limit(1) as unknown as Promise<{
-          data: Array<{ first_date: string }> | null
-          error: { message: string } | null
-        }>,
-    ])
+        data: Array<{ first_date: string }> | null;
+        error: { message: string } | null;
+      }>,
+    ]);
 
-    let minDate = firstStatsRes.data?.[0]?.first_date ?? null
+    let minDate = firstStatsRes.data?.[0]?.first_date ?? null;
     if (!minDate && dataState.dataCutoffDate) {
       const { data: minRow } = await supabase
         .from("prices")
@@ -770,57 +793,57 @@ export async function getDataCoverage(): Promise<DataCoverage> {
         .lte("date", dataState.dataCutoffDate)
         .order("date", { ascending: true })
         .limit(1)
-        .maybeSingle()
-      minDate = (minRow as { date?: string } | null)?.date ?? null
+        .maybeSingle();
+      minDate = (minRow as { date?: string } | null)?.date ?? null;
     }
 
     return {
       minDate,
       maxDate: dataState.dataCutoffDate,
       lastUpdatedAt: dataState.lastUpdateAt,
-    }
+    };
   } catch {
-    return { minDate: null, maxDate: null, lastUpdatedAt: null }
+    return { minDate: null, maxDate: null, lastUpdatedAt: null };
   }
 }
 
 export async function getActiveScheduledRefreshActivity(): Promise<ScheduledRefreshActivity> {
   try {
-    const supabase = await createClient()
+    const supabase = await createClient();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { data, error } = await (supabase as any)
       .from("data_ingest_jobs")
       .select("request_mode, status, next_retry_at, batch_id")
       .in("request_mode", ["monthly", "daily"])
       .not("batch_id", "is", null)
-      .in("status", ["queued", "running"])
+      .in("status", ["queued", "running"]);
 
     if (error) {
       return {
         monthlyActiveJobs: 0,
         dailyActiveJobs: 0,
-      }
+      };
     }
 
-    let monthlyActiveJobs = 0
-    let dailyActiveJobs = 0
+    let monthlyActiveJobs = 0;
+    let dailyActiveJobs = 0;
 
     for (const row of (data ?? []) as Array<{
-      request_mode?: string | null
-      status?: string | null
-      next_retry_at?: string | null
+      request_mode?: string | null;
+      status?: string | null;
+      next_retry_at?: string | null;
     }>) {
-      if (!isActiveDataIngestStatus(row.status, row.next_retry_at ?? null)) continue
-      if (row.request_mode === "monthly") monthlyActiveJobs += 1
-      if (row.request_mode === "daily") dailyActiveJobs += 1
+      if (!isActiveDataIngestStatus(row.status, row.next_retry_at ?? null)) continue;
+      if (row.request_mode === "monthly") monthlyActiveJobs += 1;
+      if (row.request_mode === "daily") dailyActiveJobs += 1;
     }
 
-    return { monthlyActiveJobs, dailyActiveJobs }
+    return { monthlyActiveJobs, dailyActiveJobs };
   } catch {
     return {
       monthlyActiveJobs: 0,
       dailyActiveJobs: 0,
-    }
+    };
   }
 }
 
@@ -828,28 +851,32 @@ export async function getRecentDataIngestJobHistory(
   limit = 15
 ): Promise<DataIngestJobHistoryEntry[]> {
   try {
-    const supabase = await createClient()
+    const supabase = await createClient();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let { data, error } = await (supabase as any)
       .from("data_ingest_jobs")
-      .select("id, symbol, status, stage, request_mode, requested_by, created_at, started_at, finished_at, next_retry_at, attempt_count, rows_inserted, target_cutoff_date, error")
+      .select(
+        "id, symbol, status, stage, request_mode, requested_by, created_at, started_at, finished_at, next_retry_at, attempt_count, rows_inserted, target_cutoff_date, error"
+      )
       .order("created_at", { ascending: false })
-      .limit(limit)
+      .limit(limit);
 
     if (error && isMissingDataIngestExtendedColumnError(error.message)) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const legacyFallback = await (supabase as any)
         .from("data_ingest_jobs")
-        .select("id, symbol, status, stage, created_at, started_at, finished_at, next_retry_at, attempt_count, target_cutoff_date, error")
+        .select(
+          "id, symbol, status, stage, created_at, started_at, finished_at, next_retry_at, attempt_count, target_cutoff_date, error"
+        )
         .order("created_at", { ascending: false })
-        .limit(limit)
-      data = legacyFallback.data
-      error = legacyFallback.error
+        .limit(limit);
+      data = legacyFallback.data;
+      error = legacyFallback.error;
     }
 
     if (error) {
-      console.warn("getRecentDataIngestJobHistory:", error.message)
-      return []
+      console.warn("getRecentDataIngestJobHistory:", error.message);
+      return [];
     }
 
     return ((data ?? []) as Array<Record<string, unknown>>).map((row) => ({
@@ -861,20 +888,22 @@ export async function getRecentDataIngestJobHistory(
       requestedBy: typeof row.requested_by === "string" ? row.requested_by : null,
       triggerLabel: getDataIngestTriggerLabel(
         typeof row.request_mode === "string" ? row.request_mode : null,
-        typeof row.requested_by === "string" ? row.requested_by : null,
+        typeof row.requested_by === "string" ? row.requested_by : null
       ),
       createdAt: typeof row.created_at === "string" ? row.created_at : null,
       startedAt: typeof row.started_at === "string" ? row.started_at : null,
       finishedAt: typeof row.finished_at === "string" ? row.finished_at : null,
       nextRetryAt: typeof row.next_retry_at === "string" ? row.next_retry_at : null,
-      attemptCount: typeof row.attempt_count === "number" ? row.attempt_count : Number(row.attempt_count ?? 0),
-      rowsInserted: typeof row.rows_inserted === "number" ? row.rows_inserted : Number(row.rows_inserted ?? 0),
+      attemptCount:
+        typeof row.attempt_count === "number" ? row.attempt_count : Number(row.attempt_count ?? 0),
+      rowsInserted:
+        typeof row.rows_inserted === "number" ? row.rows_inserted : Number(row.rows_inserted ?? 0),
       targetCutoffDate: typeof row.target_cutoff_date === "string" ? row.target_cutoff_date : null,
       error: typeof row.error === "string" ? row.error : null,
-    }))
+    }));
   } catch (err) {
-    console.error("getRecentDataIngestJobHistory exception:", err)
-    return []
+    console.error("getRecentDataIngestJobHistory exception:", err);
+    return [];
   }
 }
 
@@ -893,65 +922,65 @@ export async function getRequiredTickerResearchSummary(
     totalTrueMissing: 0,
     trueMissingRate: 0,
     marketCalendarDays: 0,
-  }
+  };
 
-  const researchEnd = dataCutoffDate ?? getLastCompleteTradingDayUtc()
-  const requiredTickers = getRequiredTickers()
-  const ranges = prefetchedRanges ?? await getAllTickerStats()
-  const researchStarts = buildRequiredTickerResearchStarts(ranges)
-  const minResearchStart = [...researchStarts.values()].sort()[0] ?? COVERAGE_WINDOW_START
+  const researchEnd = dataCutoffDate ?? getLastCompleteTradingDayUtc();
+  const requiredTickers = getRequiredTickers();
+  const ranges = prefetchedRanges ?? (await getAllTickerStats());
+  const researchStarts = buildRequiredTickerResearchStarts(ranges);
+  const minResearchStart = [...researchStarts.values()].sort()[0] ?? COVERAGE_WINDOW_START;
 
   try {
-    const supabase = await createClient()
+    const supabase = await createClient();
     const { data, error } = await supabase
       .from("prices")
       .select("ticker, date")
       .in("ticker", requiredTickers)
       .gte("date", minResearchStart)
       .lte("date", researchEnd)
-      .order("date", { ascending: true })
+      .order("date", { ascending: true });
 
     if (error) {
-      console.error("getRequiredTickerResearchSummary error:", error.message)
-      return empty
+      console.error("getRequiredTickerResearchSummary error:", error.message);
+      return empty;
     }
 
-    const observedByTicker = new Map<string, string[]>()
-    const marketCalendarSet = new Set<string>()
+    const observedByTicker = new Map<string, string[]>();
+    const marketCalendarSet = new Set<string>();
 
     for (const ticker of requiredTickers) {
-      observedByTicker.set(ticker, [])
+      observedByTicker.set(ticker, []);
     }
 
     for (const row of data ?? []) {
-      const ticker = String(row.ticker ?? "").toUpperCase()
-      const date = String(row.date ?? "")
-      const researchStart = researchStarts.get(ticker) ?? COVERAGE_WINDOW_START
+      const ticker = String(row.ticker ?? "").toUpperCase();
+      const date = String(row.date ?? "");
+      const researchStart = researchStarts.get(ticker) ?? COVERAGE_WINDOW_START;
 
-      if (date < researchStart || date > researchEnd) continue
+      if (date < researchStart || date > researchEnd) continue;
 
-      marketCalendarSet.add(date)
-      const bucket = observedByTicker.get(ticker)
+      marketCalendarSet.add(date);
+      const bucket = observedByTicker.get(ticker);
       if (bucket) {
-        bucket.push(date)
+        bucket.push(date);
       } else {
-        observedByTicker.set(ticker, [date])
+        observedByTicker.set(ticker, [date]);
       }
     }
 
-    let marketCalendar = [...marketCalendarSet].sort()
+    let marketCalendar = [...marketCalendarSet].sort();
     if (marketCalendar.length === 0) {
-      const weekdayCalendar: string[] = []
-      const cursor = new Date(`${minResearchStart}T00:00:00Z`)
-      const end = new Date(`${researchEnd}T00:00:00Z`)
+      const weekdayCalendar: string[] = [];
+      const cursor = new Date(`${minResearchStart}T00:00:00Z`);
+      const end = new Date(`${researchEnd}T00:00:00Z`);
       while (cursor <= end) {
-        const day = cursor.getUTCDay()
+        const day = cursor.getUTCDay();
         if (day !== 0 && day !== 6) {
-          weekdayCalendar.push(cursor.toISOString().slice(0, 10))
+          weekdayCalendar.push(cursor.toISOString().slice(0, 10));
         }
-        cursor.setUTCDate(cursor.getUTCDate() + 1)
+        cursor.setUTCDate(cursor.getUTCDate() + 1);
       }
-      marketCalendar = weekdayCalendar
+      marketCalendar = weekdayCalendar;
     }
 
     const rows = requiredTickers.map((ticker) =>
@@ -962,15 +991,15 @@ export async function getRequiredTickerResearchSummary(
         marketCalendar,
         observedDates: observedByTicker.get(ticker) ?? [],
       })
-    )
+    );
 
-    const totalExpected = rows.reduce((sum, row) => sum + row.expectedDays, 0)
-    const totalActual = rows.reduce((sum, row) => sum + row.actualDays, 0)
-    const totalTrueMissing = rows.reduce((sum, row) => sum + row.trueMissingDays, 0)
+    const totalExpected = rows.reduce((sum, row) => sum + row.expectedDays, 0);
+    const totalActual = rows.reduce((sum, row) => sum + row.actualDays, 0);
+    const totalTrueMissing = rows.reduce((sum, row) => sum + row.trueMissingDays, 0);
     const notIngestedTickers = rows
       .filter((row) => !row.isIngested)
       .map((row) => row.ticker)
-      .sort()
+      .sort();
 
     return {
       rows,
@@ -983,10 +1012,10 @@ export async function getRequiredTickerResearchSummary(
       totalTrueMissing,
       trueMissingRate: totalExpected > 0 ? totalTrueMissing / totalExpected : 0,
       marketCalendarDays: marketCalendar.length,
-    }
+    };
   } catch (err) {
-    console.error("getRequiredTickerResearchSummary exception:", err)
-    return empty
+    console.error("getRequiredTickerResearchSummary exception:", err);
+    return empty;
   }
 }
 
@@ -994,58 +1023,58 @@ export async function getMonitoredBenchmarkCoverage(
   dataCutoffDate: string | null,
   prefetchedRanges?: TickerDateRange[]
 ): Promise<BenchmarkCoverage[] | null> {
-  const researchEnd = dataCutoffDate ?? getLastCompleteTradingDayUtc()
-  const ranges = prefetchedRanges ?? await getAllTickerStats()
-  const researchStarts = buildRequiredTickerResearchStarts(ranges)
-  const benchmarkStarts = new Map<string, string>()
+  const researchEnd = dataCutoffDate ?? getLastCompleteTradingDayUtc();
+  const ranges = prefetchedRanges ?? (await getAllTickerStats());
+  const researchStarts = buildRequiredTickerResearchStarts(ranges);
+  const benchmarkStarts = new Map<string, string>();
 
   for (const ticker of BENCHMARK_OPTIONS) {
-    benchmarkStarts.set(ticker, researchStarts.get(ticker) ?? COVERAGE_WINDOW_START)
+    benchmarkStarts.set(ticker, researchStarts.get(ticker) ?? COVERAGE_WINDOW_START);
   }
 
-  const minResearchStart = [...benchmarkStarts.values()].sort()[0] ?? COVERAGE_WINDOW_START
+  const minResearchStart = [...benchmarkStarts.values()].sort()[0] ?? COVERAGE_WINDOW_START;
   const rangeByTicker = new Map<string, TickerDateRange>(
     ranges.map((row) => [row.ticker.toUpperCase(), row])
-  )
+  );
 
   try {
-    const supabase = await createClient()
+    const supabase = await createClient();
     const { data, error } = await supabase
       .from("prices")
       .select("ticker, date")
       .in("ticker", [...BENCHMARK_OPTIONS])
       .gte("date", minResearchStart)
       .lte("date", researchEnd)
-      .order("date", { ascending: true })
+      .order("date", { ascending: true });
 
     if (error) {
-      console.error("getMonitoredBenchmarkCoverage error:", error.message)
-      return null
+      console.error("getMonitoredBenchmarkCoverage error:", error.message);
+      return null;
     }
 
-    const observedByTicker = new Map<string, string[]>()
+    const observedByTicker = new Map<string, string[]>();
     for (const ticker of BENCHMARK_OPTIONS) {
-      observedByTicker.set(ticker, [])
+      observedByTicker.set(ticker, []);
     }
 
     for (const row of data ?? []) {
-      const ticker = String(row.ticker ?? "").toUpperCase()
-      const date = String(row.date ?? "")
-      const bucket = observedByTicker.get(ticker)
-      if (!bucket || !date) continue
+      const ticker = String(row.ticker ?? "").toUpperCase();
+      const date = String(row.date ?? "");
+      const bucket = observedByTicker.get(ticker);
+      if (!bucket || !date) continue;
       if (bucket.at(-1) !== date) {
-        bucket.push(date)
+        bucket.push(date);
       }
     }
 
     return BENCHMARK_OPTIONS.map((ticker) => {
-      const range = rangeByTicker.get(ticker) ?? null
+      const range = rangeByTicker.get(ticker) ?? null;
       const stats: CoverageStatsSnapshot | undefined = range
         ? {
-          firstDate: range.firstDate,
-          lastDate: range.lastDate,
-        }
-        : undefined
+            firstDate: range.firstDate,
+            lastDate: range.lastDate,
+          }
+        : undefined;
       const benchmarkCoverage = computeBenchmarkCoverage({
         benchmarkTicker: ticker,
         windowStart: benchmarkStarts.get(ticker) ?? COVERAGE_WINDOW_START,
@@ -1053,12 +1082,12 @@ export async function getMonitoredBenchmarkCoverage(
         cutoffDate: researchEnd,
         stats,
         benchmarkDates: observedByTicker.get(ticker) ?? [],
-      })
-      const inceptionDate = TICKER_INCEPTION_DATES[ticker] ?? null
+      });
+      const inceptionDate = TICKER_INCEPTION_DATES[ticker] ?? null;
       const coveragePercent =
         benchmarkCoverage.expectedDays > 0
           ? Math.min((benchmarkCoverage.actualDays / benchmarkCoverage.expectedDays) * 100, 100)
-          : 0
+          : 0;
       const status: BenchmarkCoverage["status"] =
         benchmarkCoverage.status === "good"
           ? "ok"
@@ -1066,7 +1095,7 @@ export async function getMonitoredBenchmarkCoverage(
             ? "not_ingested"
             : benchmarkCoverage.status === "warning"
               ? "partial"
-              : "missing"
+              : "missing";
 
       return {
         ticker,
@@ -1084,87 +1113,93 @@ export async function getMonitoredBenchmarkCoverage(
             ? range.firstDate > inceptionDate
             : false,
         status,
-      }
-    })
+      };
+    });
   } catch (err) {
-    console.error("getMonitoredBenchmarkCoverage exception:", err)
-    return null
+    console.error("getMonitoredBenchmarkCoverage exception:", err);
+    return null;
   }
 }
 
 /** Count Mon–Fri business days between two inclusive YYYY-MM-DD date strings. */
 function countBusinessDays(startStr: string, endStr: string): number {
-  if (!startStr || !endStr || startStr > endStr) return 0
-  const start = new Date(`${startStr}T00:00:00Z`)
-  const end = new Date(`${endStr}T00:00:00Z`)
-  let count = 0
-  const cur = new Date(start)
+  if (!startStr || !endStr || startStr > endStr) return 0;
+  const start = new Date(`${startStr}T00:00:00Z`);
+  const end = new Date(`${endStr}T00:00:00Z`);
+  let count = 0;
+  const cur = new Date(start);
   while (cur <= end) {
-    const day = cur.getUTCDay()
-    if (day !== 0 && day !== 6) count++
-    cur.setUTCDate(cur.getUTCDate() + 1)
+    const day = cur.getUTCDay();
+    if (day !== 0 && day !== 6) count++;
+    cur.setUTCDate(cur.getUTCDate() + 1);
   }
-  return count
+  return count;
 }
 
 function maxIsoDateNullable(a: string | null, b: string | null): string | null {
-  if (!a) return b
-  if (!b) return a
-  return a >= b ? a : b
+  if (!a) return b;
+  if (!b) return a;
+  return a >= b ? a : b;
 }
 
-function buildRequiredTickerResearchStarts(
-  ranges: TickerDateRange[]
-): Map<string, string> {
-  const requiredTickers = getRequiredTickers()
-  const starts = new Map<string, string>()
+function buildRequiredTickerResearchStarts(ranges: TickerDateRange[]): Map<string, string> {
+  const requiredTickers = getRequiredTickers();
+  const starts = new Map<string, string>();
 
   for (const ticker of requiredTickers) {
-    starts.set(ticker, COVERAGE_WINDOW_START)
+    starts.set(ticker, COVERAGE_WINDOW_START);
   }
 
-  for (const [universeId, tickers] of Object.entries(UNIVERSE_PRESETS) as [UniverseId, readonly string[]][]) {
-    const validFrom = computeUniverseValidFrom(universeId, ranges)
-    const researchStart = maxIsoDateNullable(validFrom, COVERAGE_WINDOW_START) ?? COVERAGE_WINDOW_START
+  for (const [universeId, tickers] of Object.entries(UNIVERSE_PRESETS) as [
+    UniverseId,
+    readonly string[],
+  ][]) {
+    const validFrom = computeUniverseValidFrom(universeId, ranges);
+    const researchStart =
+      maxIsoDateNullable(validFrom, COVERAGE_WINDOW_START) ?? COVERAGE_WINDOW_START;
 
     for (const ticker of tickers) {
-      const existing = starts.get(ticker)
-      starts.set(ticker, existing && existing <= researchStart ? existing : researchStart)
+      const existing = starts.get(ticker);
+      starts.set(ticker, existing && existing <= researchStart ? existing : researchStart);
     }
   }
 
-  return starts
+  return starts;
 }
 
 function summarizeTickerAgainstCalendar(params: {
-  ticker: string
-  researchStart: string
-  researchEnd: string
-  marketCalendar: readonly string[]
-  observedDates: readonly string[]
+  ticker: string;
+  researchStart: string;
+  researchEnd: string;
+  marketCalendar: readonly string[];
+  observedDates: readonly string[];
 }): RequiredTickerResearchRow {
-  const { ticker, researchStart, researchEnd, marketCalendar, observedDates } = params
-  const relevantCalendar = marketCalendar.filter((date) => date >= researchStart && date <= researchEnd)
-  const observedSet = new Set(observedDates.filter((date) => date >= researchStart && date <= researchEnd))
+  const { ticker, researchStart, researchEnd, marketCalendar, observedDates } = params;
+  const relevantCalendar = marketCalendar.filter(
+    (date) => date >= researchStart && date <= researchEnd
+  );
+  const observedSet = new Set(
+    observedDates.filter((date) => date >= researchStart && date <= researchEnd)
+  );
 
-  let trueMissingDays = 0
-  let maxGapDays = 0
-  let currentGap = 0
+  let trueMissingDays = 0;
+  let maxGapDays = 0;
+  let currentGap = 0;
 
   for (const date of relevantCalendar) {
     if (observedSet.has(date)) {
-      if (currentGap > maxGapDays) maxGapDays = currentGap
-      currentGap = 0
-      continue
+      if (currentGap > maxGapDays) maxGapDays = currentGap;
+      currentGap = 0;
+      continue;
     }
-    trueMissingDays += 1
-    currentGap += 1
+    trueMissingDays += 1;
+    currentGap += 1;
   }
 
-  if (currentGap > maxGapDays) maxGapDays = currentGap
+  if (currentGap > maxGapDays) maxGapDays = currentGap;
 
-  const expectedDays = relevantCalendar.length
-  const actualDays = observedSet.size
+  const expectedDays = relevantCalendar.length;
+  const actualDays = observedSet.size;
 
   return {
     ticker,
@@ -1179,7 +1214,7 @@ function summarizeTickerAgainstCalendar(params: {
     lastObservedDate: observedDates[observedDates.length - 1] ?? null,
     isBenchmark: BENCHMARK_OPTIONS.includes(ticker as (typeof BENCHMARK_OPTIONS)[number]),
     isIngested: observedDates.length > 0,
-  }
+  };
 }
 
 export async function getDataHealthSummary(): Promise<DataHealthSummary> {
@@ -1193,70 +1228,70 @@ export async function getDataHealthSummary(): Promise<DataHealthSummary> {
     missingTickerDays: 0,
     completenessPercent: null,
     lastUpdatedAt: null,
-  }
+  };
 
   try {
-    const supabase = await createClient()
+    const supabase = await createClient();
     type StatsRow = {
-      symbol: string
-      first_date: string
-      distinct_days: string | number
-    }
+      symbol: string;
+      first_date: string;
+      distinct_days: string | number;
+    };
     const [dataState, statsRes] = await Promise.all([
       getDataState(),
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (supabase as any)
         .from("ticker_stats")
         .select("symbol, first_date, distinct_days") as Promise<{
-          data: StatsRow[] | null
-          error: { message: string } | null
-        }>,
-    ])
+        data: StatsRow[] | null;
+        error: { message: string } | null;
+      }>,
+    ]);
 
-    let tickersCount = 0
-    let dateStart: string | null = null
-    const dateEnd = dataState.dataCutoffDate
-    let actualTickerDays = 0
+    let tickersCount = 0;
+    let dateStart: string | null = null;
+    const dateEnd = dataState.dataCutoffDate;
+    let actualTickerDays = 0;
 
     if (!statsRes.error && statsRes.data) {
-      tickersCount = statsRes.data.length
+      tickersCount = statsRes.data.length;
       dateStart = statsRes.data.reduce<string | null>(
         (min, row) => (!min || row.first_date < min ? row.first_date : min),
         null
-      )
+      );
       actualTickerDays = statsRes.data.reduce(
         (sum, row) => sum + Number(row.distinct_days ?? 0),
         0
-      )
+      );
     } else if (dateEnd) {
       type AggRow = {
-        ticker_count: number
-        min_date: string | null
-        max_date: string | null
-        actual_rows: number
-      }
-      const { data: aggData } = await supabase.rpc("get_data_health_agg") as unknown as {
-        data: AggRow | null
-        error: { message: string } | null
-      }
-      tickersCount = aggData?.ticker_count ?? 0
-      dateStart = aggData?.min_date ?? null
-      actualTickerDays = aggData?.actual_rows ?? 0
+        ticker_count: number;
+        min_date: string | null;
+        max_date: string | null;
+        actual_rows: number;
+      };
+      const { data: aggData } = (await supabase.rpc("get_data_health_agg")) as unknown as {
+        data: AggRow | null;
+        error: { message: string } | null;
+      };
+      tickersCount = aggData?.ticker_count ?? 0;
+      dateStart = aggData?.min_date ?? null;
+      actualTickerDays = aggData?.actual_rows ?? 0;
     }
 
-    let businessDaysInWindow = 0
-    let expectedTickerDays = 0
-    let missingTickerDays = 0
-    let completenessPercent: number | null = null
+    let businessDaysInWindow = 0;
+    let expectedTickerDays = 0;
+    let missingTickerDays = 0;
+    let completenessPercent: number | null = null;
 
     if (tickersCount > 0 && dateStart && dateEnd) {
-      businessDaysInWindow = countBusinessDays(dateStart, dateEnd)
-      expectedTickerDays = businessDaysInWindow * tickersCount
-      missingTickerDays = Math.max(expectedTickerDays - actualTickerDays, 0)
+      businessDaysInWindow = countBusinessDays(dateStart, dateEnd);
+      expectedTickerDays = businessDaysInWindow * tickersCount;
+      missingTickerDays = Math.max(expectedTickerDays - actualTickerDays, 0);
       completenessPercent =
         expectedTickerDays > 0
           ? Math.min((actualTickerDays / expectedTickerDays) * 100, 100)
-          : null
+          : null;
     }
 
     return {
@@ -1269,10 +1304,10 @@ export async function getDataHealthSummary(): Promise<DataHealthSummary> {
       missingTickerDays,
       completenessPercent,
       lastUpdatedAt: dataState.lastUpdateAt,
-    }
+    };
   } catch (err) {
-    console.error("getDataHealthSummary exception:", err)
-    return empty
+    console.error("getDataHealthSummary exception:", err);
+    return empty;
   }
 }
 
@@ -1280,34 +1315,34 @@ export async function getTopMissingTickers(
   limit: number,
   businessDaysInWindow: number
 ): Promise<TickerMissingness[]> {
-  if (businessDaysInWindow === 0) return []
+  if (businessDaysInWindow === 0) return [];
 
   try {
-    const supabase = createAdminClient()
-    const { data, error } = await supabase.rpc("get_ticker_day_counts")
+    const supabase = createAdminClient();
+    const { data, error } = await supabase.rpc("get_ticker_day_counts");
 
     if (error) {
       // Silently skip if the RPC function doesn't exist yet (migration pending)
       if (!error.message.includes("Could not find the function")) {
-        console.error("getTopMissingTickers error:", error.message)
+        console.error("getTopMissingTickers error:", error.message);
       }
-      return []
+      return [];
     }
 
-    const rows = (data ?? []) as { ticker: string; actual_days: number }[]
+    const rows = (data ?? []) as { ticker: string; actual_days: number }[];
     return rows
       .map(({ ticker, actual_days }) => {
-        const actualDays = Number(actual_days)
-        const missingDays = Math.max(businessDaysInWindow - actualDays, 0)
-        const coveragePercent = Math.min((actualDays / businessDaysInWindow) * 100, 100)
-        return { ticker, actualDays, missingDays, coveragePercent }
+        const actualDays = Number(actual_days);
+        const missingDays = Math.max(businessDaysInWindow - actualDays, 0);
+        const coveragePercent = Math.min((actualDays / businessDaysInWindow) * 100, 100);
+        return { ticker, actualDays, missingDays, coveragePercent };
       })
       .filter((r) => r.missingDays > 0)
       .sort((a, b) => b.missingDays - a.missingDays)
-      .slice(0, limit)
+      .slice(0, limit);
   } catch (err) {
-    console.error("getTopMissingTickers exception:", err)
-    return []
+    console.error("getTopMissingTickers exception:", err);
+    return [];
   }
 }
 
@@ -1317,46 +1352,46 @@ export async function getBenchmarkCoverage(
   dateEnd: string | null,
   businessDaysInWindow: number
 ): Promise<BenchmarkCoverage | null> {
-  if (!dateStart || !dateEnd || businessDaysInWindow === 0) return null
+  if (!dateStart || !dateEnd || businessDaysInWindow === 0) return null;
 
   // Normalize: yfinance stores tickers as uppercase, user input may differ
-  const normalizedTicker = ticker.trim().toUpperCase()
+  const normalizedTicker = ticker.trim().toUpperCase();
 
   try {
-    const supabase = createAdminClient()
+    const supabase = createAdminClient();
     const { count, error } = await supabase
       .from("prices")
       .select("*", { count: "exact", head: true })
       .eq("ticker", normalizedTicker)
       .gte("date", dateStart)
-      .lte("date", dateEnd)
+      .lte("date", dateEnd);
 
     if (error) {
-      console.error("getBenchmarkCoverage error:", error.message)
-      return null
+      console.error("getBenchmarkCoverage error:", error.message);
+      return null;
     }
 
-    const actualDays = count ?? 0
+    const actualDays = count ?? 0;
 
     // When 0 rows found: run a diagnostic to detect symbol mismatches or missing ingestion
-    let debugSimilarTickers: string[] | undefined
-    let latestDate: string | null = null
-    let earliestDate: string | null = null
+    let debugSimilarTickers: string[] | undefined;
+    let latestDate: string | null = null;
+    let earliestDate: string | null = null;
     if (actualDays === 0) {
-      const prefix = normalizedTicker.slice(0, 3)
+      const prefix = normalizedTicker.slice(0, 3);
       const { data: similarRows } = await supabase
         .from("prices")
         .select("ticker")
         .ilike("ticker", `%${prefix}%`)
-        .limit(30)
-      const similar = [...new Set((similarRows ?? []).map((r) => r.ticker as string))].slice(0, 10)
+        .limit(30);
+      const similar = [...new Set((similarRows ?? []).map((r) => r.ticker as string))].slice(0, 10);
       console.warn(
         `[getBenchmarkCoverage] 0 rows for "${normalizedTicker}" in prices [${dateStart}–${dateEnd}]. ` +
           `Similar tickers found: ${similar.join(", ") || "(none)"}. ` +
           `If empty, "${normalizedTicker}" is not in the prices table — ingest it or check the benchmark setting.`
-      )
+      );
       if (process.env.NODE_ENV !== "production") {
-        debugSimilarTickers = similar
+        debugSimilarTickers = similar;
       }
     } else {
       // Fetch the earliest and latest dates for this ticker (may differ from global window)
@@ -1375,15 +1410,14 @@ export async function getBenchmarkCoverage(
           .order("date", { ascending: true })
           .limit(1)
           .maybeSingle(),
-      ])
-      latestDate = latestRow.data?.date ?? null
-      earliestDate = earliestRow.data?.date ?? null
+      ]);
+      latestDate = latestRow.data?.date ?? null;
+      earliestDate = earliestRow.data?.date ?? null;
     }
 
-    const expectedDays = businessDaysInWindow
-    const missingDays = Math.max(expectedDays - actualDays, 0)
-    const coveragePercent =
-      expectedDays > 0 ? Math.min((actualDays / expectedDays) * 100, 100) : 0
+    const expectedDays = businessDaysInWindow;
+    const missingDays = Math.max(expectedDays - actualDays, 0);
+    const coveragePercent = expectedDays > 0 ? Math.min((actualDays / expectedDays) * 100, 100) : 0;
 
     const status: BenchmarkCoverage["status"] =
       actualDays === 0
@@ -1392,10 +1426,9 @@ export async function getBenchmarkCoverage(
           ? "missing"
           : coveragePercent < 99
             ? "partial"
-            : "ok"
+            : "ok";
 
-    const needsHistoricalBackfill =
-      earliestDate !== null && earliestDate > COVERAGE_WINDOW_START
+    const needsHistoricalBackfill = earliestDate !== null && earliestDate > COVERAGE_WINDOW_START;
 
     return {
       ticker: normalizedTicker,
@@ -1408,38 +1441,41 @@ export async function getBenchmarkCoverage(
       needsHistoricalBackfill,
       status,
       debugSimilarTickers,
-    }
+    };
   } catch (err) {
-    console.error("getBenchmarkCoverage exception:", err)
-    return null
+    console.error("getBenchmarkCoverage exception:", err);
+    return null;
   }
 }
 
 export async function getLatestDataIngestJob(ticker: string): Promise<DataIngestJobStatus | null> {
-  const normalizedTicker = ticker.trim().toUpperCase()
+  const normalizedTicker = ticker.trim().toUpperCase();
   try {
-    const supabase = createAdminClient()
+    const supabase = createAdminClient();
     // Fetch the 20 most-recent data_ingest jobs and filter by ticker client-side
     // (JSONB @> filtering may not be available in all environments)
     const { data, error } = await supabase
       .from("jobs")
-      .select("id, status, stage, progress, error_message, created_at, started_at, updated_at, next_retry_at, attempt_count, payload, job_type")
+      .select(
+        "id, status, stage, progress, error_message, created_at, started_at, updated_at, next_retry_at, attempt_count, payload, job_type"
+      )
       .eq("job_type", "data_ingest")
       .order("created_at", { ascending: false })
-      .limit(20)
+      .limit(20);
 
     if (error) {
       // Column likely doesn't exist yet — migration not applied, silently skip
-      if (error.message.includes("job_type") || error.message.includes("does not exist")) return null
-      console.error("getLatestDataIngestJob error:", error.message)
-      return null
+      if (error.message.includes("job_type") || error.message.includes("does not exist"))
+        return null;
+      console.error("getLatestDataIngestJob error:", error.message);
+      return null;
     }
 
     const match = (data ?? []).find((j) => {
-      const p = j.payload as { ticker?: string } | null
-      return p?.ticker?.toUpperCase() === normalizedTicker
-    })
-    if (!match) return null
+      const p = j.payload as { ticker?: string } | null;
+      return p?.ticker?.toUpperCase() === normalizedTicker;
+    });
+    if (!match) return null;
 
     return {
       id: match.id,
@@ -1452,10 +1488,10 @@ export async function getLatestDataIngestJob(ticker: string): Promise<DataIngest
       updated_at: match.updated_at ?? null,
       next_retry_at: match.next_retry_at ?? null,
       attempt_count: match.attempt_count ?? null,
-    }
+    };
   } catch (err) {
-    console.error("getLatestDataIngestJob exception:", err)
-    return null
+    console.error("getLatestDataIngestJob exception:", err);
+    return null;
   }
 }
 
@@ -1468,9 +1504,9 @@ export async function getAllBenchmarkCoverage(
   dateEnd: string | null,
   businessDaysInWindow: number
 ): Promise<BenchmarkCoverage[] | null> {
-  const tickers = [...BENCHMARK_OPTIONS]
+  const tickers = [...BENCHMARK_OPTIONS];
   try {
-    const supabase = createAdminClient()
+    const supabase = createAdminClient();
 
     // Fast path: read coverage_window_days from ticker_stats cache.
     // coverage_window_days = COUNT(*) WHERE date >= '2015-01-02' (COVERAGE_WINDOW_START).
@@ -1478,16 +1514,16 @@ export async function getAllBenchmarkCoverage(
     // Falls back to the get_benchmark_coverage_agg RPC if the column is missing
     // (pre-migration environment), and then to row-level fetch as a last resort.
     type StatsRow = {
-      symbol: string
-      first_date: string
-      last_date: string
-      coverage_window_days: string | number | null
-    }
+      symbol: string;
+      first_date: string;
+      last_date: string;
+      coverage_window_days: string | number | null;
+    };
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { data: statsData, error: statsError } = await (supabase as any)
+    const { data: statsData, error: statsError } = (await (supabase as any)
       .from("ticker_stats")
       .select("symbol, first_date, last_date, coverage_window_days")
-      .in("symbol", tickers) as { data: StatsRow[] | null; error: { message: string } | null }
+      .in("symbol", tickers)) as { data: StatsRow[] | null; error: { message: string } | null };
 
     // Fast path is usable when: no error, rows returned, and at least one row
     // has coverage_window_days populated (i.e. migration 20260316 was applied).
@@ -1495,33 +1531,44 @@ export async function getAllBenchmarkCoverage(
       !statsError &&
       statsData !== null &&
       statsData.length > 0 &&
-      statsData.some((r) => r.coverage_window_days !== null)
-    const useTickerStatsFastPath = fastPathOk && dateStart === COVERAGE_WINDOW_START
+      statsData.some((r) => r.coverage_window_days !== null);
+    const useTickerStatsFastPath = fastPathOk && dateStart === COVERAGE_WINDOW_START;
 
-    let agg: Map<string, { actualDays: number; earliest: string | null; latest: string | null }>
+    let agg: Map<string, { actualDays: number; earliest: string | null; latest: string | null }>;
 
     if (useTickerStatsFastPath) {
       // Build from ticker_stats — zero prices queries.
-      agg = new Map()
+      agg = new Map();
       for (const row of statsData!) {
         agg.set(row.symbol, {
           actualDays: Number(row.coverage_window_days ?? 0),
           earliest: row.first_date ?? null,
           latest: row.last_date ?? null,
-        })
+        });
       }
     } else {
       // Fallback: DB-side GROUP BY RPC (returns 1 row per ticker, not ~25k rows to JS).
       if (statsError) {
-        console.warn("getAllBenchmarkCoverage: ticker_stats unavailable, using RPC fallback:", statsError.message)
+        console.warn(
+          "getAllBenchmarkCoverage: ticker_stats unavailable, using RPC fallback:",
+          statsError.message
+        );
       }
-      type AggRow = { ticker: string; actual_days: string | number; earliest_date: string | null; latest_date: string | null }
+      type AggRow = {
+        ticker: string;
+        actual_days: string | number;
+        earliest_date: string | null;
+        latest_date: string | null;
+      };
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const { data: rpcData, error: rpcError } = await (supabase as any).rpc("get_benchmark_coverage_agg", {
-        p_tickers: tickers,
-        p_start: dateStart ?? "1900-01-01",
-        p_end: dateEnd ?? "9999-12-31",
-      }) as { data: AggRow[] | null; error: { message: string } | null }
+      const { data: rpcData, error: rpcError } = (await (supabase as any).rpc(
+        "get_benchmark_coverage_agg",
+        {
+          p_tickers: tickers,
+          p_start: dateStart ?? "1900-01-01",
+          p_end: dateEnd ?? "9999-12-31",
+        }
+      )) as { data: AggRow[] | null; error: { message: string } | null };
 
       if (rpcError) {
         if (rpcError.message.includes("Could not find the function")) {
@@ -1531,51 +1578,51 @@ export async function getAllBenchmarkCoverage(
             .select("ticker, date")
             .in("ticker", tickers)
             .gte("date", dateStart ?? "1900-01-01")
-            .lte("date", dateEnd ?? "9999-12-31")
+            .lte("date", dateEnd ?? "9999-12-31");
 
           if (rowError) {
-            console.error("getAllBenchmarkCoverage fallback error:", rowError.message)
-            return null
+            console.error("getAllBenchmarkCoverage fallback error:", rowError.message);
+            return null;
           }
 
-          agg = new Map()
+          agg = new Map();
           for (const row of rowData ?? []) {
-            const t = row.ticker as string
-            const d = row.date as string
-            const existing = agg.get(t)
+            const t = row.ticker as string;
+            const d = row.date as string;
+            const existing = agg.get(t);
             if (!existing) {
-              agg.set(t, { actualDays: 1, earliest: d, latest: d })
+              agg.set(t, { actualDays: 1, earliest: d, latest: d });
             } else {
-              existing.actualDays += 1
-              if (d < (existing.earliest ?? d)) existing.earliest = d
-              if (d > (existing.latest ?? d)) existing.latest = d
+              existing.actualDays += 1;
+              if (d < (existing.earliest ?? d)) existing.earliest = d;
+              if (d > (existing.latest ?? d)) existing.latest = d;
             }
           }
         } else {
-          console.error("getAllBenchmarkCoverage RPC error:", rpcError.message)
-          return null
+          console.error("getAllBenchmarkCoverage RPC error:", rpcError.message);
+          return null;
         }
       } else {
-        agg = new Map()
+        agg = new Map();
         for (const row of rpcData ?? []) {
           agg.set(row.ticker, {
             actualDays: Number(row.actual_days),
             earliest: row.earliest_date,
             latest: row.latest_date,
-          })
+          });
         }
       }
     }
 
     return tickers.map((ticker) => {
-      const stats = agg.get(ticker)
-      const actualDays = stats?.actualDays ?? 0
-      const earliestDate = stats?.earliest ?? null
-      const latestDate = stats?.latest ?? null
-      const expectedDays = businessDaysInWindow
-      const missingDays = Math.max(expectedDays - actualDays, 0)
+      const stats = agg.get(ticker);
+      const actualDays = stats?.actualDays ?? 0;
+      const earliestDate = stats?.earliest ?? null;
+      const latestDate = stats?.latest ?? null;
+      const expectedDays = businessDaysInWindow;
+      const missingDays = Math.max(expectedDays - actualDays, 0);
       const coveragePercent =
-        expectedDays > 0 ? Math.min((actualDays / expectedDays) * 100, 100) : 0
+        expectedDays > 0 ? Math.min((actualDays / expectedDays) * 100, 100) : 0;
       const status: BenchmarkCoverage["status"] =
         actualDays === 0
           ? "not_ingested"
@@ -1583,10 +1630,10 @@ export async function getAllBenchmarkCoverage(
             ? "missing"
             : coveragePercent < 99
               ? "partial"
-              : "ok"
-      const inceptionDate = TICKER_INCEPTION_DATES[ticker] ?? null
+              : "ok";
+      const inceptionDate = TICKER_INCEPTION_DATES[ticker] ?? null;
       const needsHistoricalBackfill =
-        earliestDate !== null && inceptionDate !== null && earliestDate > inceptionDate
+        earliestDate !== null && inceptionDate !== null && earliestDate > inceptionDate;
       return {
         ticker,
         actualDays,
@@ -1597,11 +1644,11 @@ export async function getAllBenchmarkCoverage(
         earliestDate,
         needsHistoricalBackfill,
         status,
-      }
-    })
+      };
+    });
   } catch (err) {
-    console.error("getAllBenchmarkCoverage exception:", err)
-    return null
+    console.error("getAllBenchmarkCoverage exception:", err);
+    return null;
   }
 }
 
@@ -1613,24 +1660,23 @@ export async function getAllBenchmarkCoverage(
 export async function getLatestDataIngestJobs(
   tickers: readonly string[]
 ): Promise<Record<string, DataIngestJobStatus | null>> {
-  const normalized = tickers.map((t) => t.toUpperCase())
-  const result: Record<string, DataIngestJobStatus | null> = {}
-  for (const t of normalized) result[t] = null
+  const normalized = tickers.map((t) => t.toUpperCase());
+  const result: Record<string, DataIngestJobStatus | null> = {};
+  for (const t of normalized) result[t] = null;
 
   try {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const supabase = await createClient() as any
+    const supabase = (await createClient()) as any;
 
     // Try RPC first (returns 1 row per symbol, no LIMIT needed)
-    const { data: rpcData, error: rpcError } = await supabase.rpc(
-      "get_latest_data_ingest_jobs",
-      { p_symbols: normalized }
-    )
+    const { data: rpcData, error: rpcError } = await supabase.rpc("get_latest_data_ingest_jobs", {
+      p_symbols: normalized,
+    });
 
     if (!rpcError && Array.isArray(rpcData)) {
       for (const j of rpcData) {
-        const t = String(j.symbol ?? "").toUpperCase()
-        if (!normalized.includes(t)) continue
+        const t = String(j.symbol ?? "").toUpperCase();
+        if (!normalized.includes(t)) continue;
         result[t] = {
           id: j.id,
           status: normalizeDataIngestStatus(j.status),
@@ -1653,37 +1699,41 @@ export async function getLatestDataIngestJobs(
           rows_inserted: j.rows_inserted ?? null,
           next_retry_at: j.next_retry_at ?? null,
           attempt_count: j.attempt_count ?? null,
-        }
+        };
       }
-      return result
+      return result;
     }
 
     // Fallback: direct scan of data_ingest_jobs (all rows per symbol, pick latest in JS)
     let { data, error } = await supabase
       .from("data_ingest_jobs")
-      .select("id, symbol, status, stage, progress, error, created_at, started_at, updated_at, finished_at, next_retry_at, attempt_count, start_date, end_date, request_mode, batch_id, target_cutoff_date, requested_by, last_heartbeat_at, rows_inserted")
+      .select(
+        "id, symbol, status, stage, progress, error, created_at, started_at, updated_at, finished_at, next_retry_at, attempt_count, start_date, end_date, request_mode, batch_id, target_cutoff_date, requested_by, last_heartbeat_at, rows_inserted"
+      )
       .in("symbol", normalized)
-      .order("created_at", { ascending: false })
+      .order("created_at", { ascending: false });
 
     if (error && isMissingDataIngestExtendedColumnError(error.message)) {
       const legacyFallback = await supabase
         .from("data_ingest_jobs")
-        .select("id, symbol, status, stage, progress, error, created_at, started_at, updated_at, next_retry_at, attempt_count, start_date, end_date")
+        .select(
+          "id, symbol, status, stage, progress, error, created_at, started_at, updated_at, next_retry_at, attempt_count, start_date, end_date"
+        )
         .in("symbol", normalized)
-        .order("created_at", { ascending: false })
-      data = legacyFallback.data
-      error = legacyFallback.error
+        .order("created_at", { ascending: false });
+      data = legacyFallback.data;
+      error = legacyFallback.error;
     }
 
     if (error) {
-      console.error("getLatestDataIngestJobs fallback error:", error.message)
-      return result
+      console.error("getLatestDataIngestJobs fallback error:", error.message);
+      return result;
     }
 
     for (const j of data ?? []) {
-      const t = String(j.symbol ?? "").toUpperCase()
-      if (!normalized.includes(t)) continue
-      if (result[t] !== null) continue // already have a newer row
+      const t = String(j.symbol ?? "").toUpperCase();
+      if (!normalized.includes(t)) continue;
+      if (result[t] !== null) continue; // already have a newer row
       result[t] = {
         id: j.id,
         status: normalizeDataIngestStatus(j.status),
@@ -1706,34 +1756,34 @@ export async function getLatestDataIngestJobs(
         rows_inserted: j.rows_inserted ?? null,
         next_retry_at: j.next_retry_at ?? null,
         attempt_count: j.attempt_count ?? null,
-      }
+      };
     }
   } catch (err) {
-    console.error("getLatestDataIngestJobs exception:", err)
+    console.error("getLatestDataIngestJobs exception:", err);
   }
 
-  return result
+  return result;
 }
 
 export async function getRecentIngestionHistory(limit = 5): Promise<IngestionLogEntry[]> {
   try {
-    const supabase = await createClient()
+    const supabase = await createClient();
     const { data, error } = await supabase
       .from("data_ingestion_log")
       .select("*")
       .order("ingested_at", { ascending: false })
-      .limit(limit)
+      .limit(limit);
 
     if (error) {
       // Table may not exist yet if migration hasn't been applied
-      console.warn("getRecentIngestionHistory:", error.message)
-      return []
+      console.warn("getRecentIngestionHistory:", error.message);
+      return [];
     }
 
-    return (data ?? []) as IngestionLogEntry[]
+    return (data ?? []) as IngestionLogEntry[];
   } catch (err) {
-    console.error("getRecentIngestionHistory exception:", err)
-    return []
+    console.error("getRecentIngestionHistory exception:", err);
+    return [];
   }
 }
 
@@ -1756,84 +1806,91 @@ export async function autoQueueBenchmarkIngestions(
   tickerStats?: TickerDateRange[]
 ): Promise<void> {
   try {
-    const dataState = await getDataState()
-    const cutoffDate = dataState.dataCutoffDate ?? getLastCompleteTradingDayUtc()
+    const dataState = await getDataState();
+    const cutoffDate = dataState.dataCutoffDate ?? getLastCompleteTradingDayUtc();
 
     // Build a map of ticker → lastDate from ticker_stats for staleness check
-    const lastDateMap = new Map<string, string>()
+    const lastDateMap = new Map<string, string>();
     for (const r of tickerStats ?? []) {
-      if (r.lastDate) lastDateMap.set(r.ticker.toUpperCase(), r.lastDate)
+      if (r.lastDate) lastDateMap.set(r.ticker.toUpperCase(), r.lastDate);
     }
 
     // Determine which tickers need action (including staleness)
     const needsAction = coverages.filter((c) => {
-      if (c.status === "not_ingested") return true
-      if (c.needsHistoricalBackfill) return true
-      const lastDate = lastDateMap.get(c.ticker.toUpperCase()) ?? c.latestDate
-      if (lastDate && lastDate < cutoffDate) return true
-      return false
-    })
-    if (needsAction.length === 0) return
+      if (c.status === "not_ingested") return true;
+      if (c.needsHistoricalBackfill) return true;
+      const lastDate = lastDateMap.get(c.ticker.toUpperCase()) ?? c.latestDate;
+      if (lastDate && lastDate < cutoffDate) return true;
+      return false;
+    });
+    if (needsAction.length === 0) return;
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const admin = createAdminClient() as any
+    const admin = createAdminClient() as any;
 
     // Fetch active jobs from data_ingest_jobs to avoid duplicates
     const { data: activeJobs } = await admin
       .from("data_ingest_jobs")
       .select("symbol, status, start_date, end_date, id")
-      .in("symbol", needsAction.map((c) => c.ticker))
-      .in("status", ["queued", "running", "retrying"])
+      .in(
+        "symbol",
+        needsAction.map((c) => c.ticker)
+      )
+      .in("status", ["queued", "running", "retrying"]);
 
-    const activeBySymbol = new Map<string, { id: string; status: string; start_date: string; end_date: string }>()
+    const activeBySymbol = new Map<
+      string,
+      { id: string; status: string; start_date: string; end_date: string }
+    >();
     for (const j of activeJobs ?? []) {
-      if (!activeBySymbol.has(j.symbol)) activeBySymbol.set(j.symbol, j)
+      if (!activeBySymbol.has(j.symbol)) activeBySymbol.set(j.symbol, j);
     }
 
     const toInsert: {
-      symbol: string
-      start_date: string
-      end_date: string
-      status: string
-      stage: string
-      progress: number
-      request_mode: string
-      target_cutoff_date: string
-      requested_by: string
-    }[] = []
-    const toWiden: { id: string; start_date: string; end_date: string }[] = []
+      symbol: string;
+      start_date: string;
+      end_date: string;
+      status: string;
+      stage: string;
+      progress: number;
+      request_mode: string;
+      target_cutoff_date: string;
+      requested_by: string;
+    }[] = [];
+    const toWiden: { id: string; start_date: string; end_date: string }[] = [];
 
     for (const c of needsAction) {
-      const inceptionDate = TICKER_INCEPTION_DATES[c.ticker] ?? "1993-01-01"
-      const lastDate = lastDateMap.get(c.ticker.toUpperCase()) ?? c.latestDate
-      const existing = activeBySymbol.get(c.ticker)
+      const inceptionDate = TICKER_INCEPTION_DATES[c.ticker] ?? "1993-01-01";
+      const lastDate = lastDateMap.get(c.ticker.toUpperCase()) ?? c.latestDate;
+      const existing = activeBySymbol.get(c.ticker);
 
       // Determine desired start date
-      let desiredStart: string
+      let desiredStart: string;
       if (c.status === "not_ingested" || c.needsHistoricalBackfill) {
-        desiredStart = inceptionDate
+        desiredStart = inceptionDate;
       } else {
         // Incremental only
-        if (!lastDate) { desiredStart = inceptionDate }
-        else {
-          const next = new Date(lastDate)
-          next.setDate(next.getDate() + 1)
-          desiredStart = next.toISOString().slice(0, 10)
-          if (desiredStart > cutoffDate) continue // Already current through the cutoff
+        if (!lastDate) {
+          desiredStart = inceptionDate;
+        } else {
+          const next = new Date(lastDate);
+          next.setDate(next.getDate() + 1);
+          desiredStart = next.toISOString().slice(0, 10);
+          if (desiredStart > cutoffDate) continue; // Already current through the cutoff
         }
       }
 
       if (existing) {
         if (existing.status === "queued") {
           // Widen range if needed
-          const newStart = desiredStart < existing.start_date ? desiredStart : existing.start_date
-          const newEnd = cutoffDate > existing.end_date ? cutoffDate : existing.end_date
+          const newStart = desiredStart < existing.start_date ? desiredStart : existing.start_date;
+          const newEnd = cutoffDate > existing.end_date ? cutoffDate : existing.end_date;
           if (newStart !== existing.start_date || newEnd !== existing.end_date) {
-            toWiden.push({ id: existing.id, start_date: newStart, end_date: newEnd })
+            toWiden.push({ id: existing.id, start_date: newStart, end_date: newEnd });
           }
         }
         // running — leave it alone
-        continue
+        continue;
       }
 
       toInsert.push({
@@ -1846,25 +1903,28 @@ export async function autoQueueBenchmarkIngestions(
         request_mode: "manual",
         target_cutoff_date: cutoffDate,
         requested_by: "auto-queue:benchmark",
-      })
+      });
     }
 
     if (toInsert.length > 0) {
-      await admin.from("data_ingest_jobs").insert(toInsert)
+      await admin.from("data_ingest_jobs").insert(toInsert);
       console.log(
         `[auto-ingest] queued ${toInsert.length} benchmark job(s):`,
         toInsert.map((j) => j.symbol).join(", ")
-      )
+      );
     }
     for (const w of toWiden) {
-      await admin.from("data_ingest_jobs").update({ start_date: w.start_date, end_date: w.end_date }).eq("id", w.id)
+      await admin
+        .from("data_ingest_jobs")
+        .update({ start_date: w.start_date, end_date: w.end_date })
+        .eq("id", w.id);
     }
     if (toWiden.length > 0) {
-      console.log(`[auto-ingest] widened ${toWiden.length} queued job(s)`)
+      console.log(`[auto-ingest] widened ${toWiden.length} queued job(s)`);
     }
   } catch (err) {
     // Non-fatal — page still renders; user can trigger manually
-    console.error("[auto-ingest] autoQueueBenchmarkIngestions error:", err)
+    console.error("[auto-ingest] autoQueueBenchmarkIngestions error:", err);
   }
 }
 
@@ -1880,91 +1940,97 @@ export async function autoQueueBenchmarkIngestions(
 export async function autoQueueUniverseIngestions(
   tickerRanges: TickerDateRange[]
 ): Promise<{ queued: string[]; widened: string[]; skipped: string[] }> {
-  const result = { queued: [] as string[], widened: [] as string[], skipped: [] as string[] }
+  const result = { queued: [] as string[], widened: [] as string[], skipped: [] as string[] };
   try {
-    const dataState = await getDataState()
-    const cutoffDate = dataState.dataCutoffDate ?? getLastCompleteTradingDayUtc()
+    const dataState = await getDataState();
+    const cutoffDate = dataState.dataCutoffDate ?? getLastCompleteTradingDayUtc();
 
     // All unique tickers from every universe preset
-    const allUniverseTickers = [...new Set(Object.values(UNIVERSE_PRESETS).flat())]
+    const allUniverseTickers = [...new Set(Object.values(UNIVERSE_PRESETS).flat())];
 
     // Build map from existing ticker stats
-    const statsMap = new Map<string, TickerDateRange>()
+    const statsMap = new Map<string, TickerDateRange>();
     for (const r of tickerRanges) {
-      statsMap.set(r.ticker.toUpperCase(), r)
+      statsMap.set(r.ticker.toUpperCase(), r);
     }
 
     // Determine which tickers need action
-    const needsAction: { ticker: string; needsFullIngest: boolean; desiredStart: string }[] = []
+    const needsAction: { ticker: string; needsFullIngest: boolean; desiredStart: string }[] = [];
     for (const ticker of allUniverseTickers) {
-      const stats = statsMap.get(ticker.toUpperCase())
-      const inceptionDate = TICKER_INCEPTION_DATES[ticker] ?? "2003-01-01"
+      const stats = statsMap.get(ticker.toUpperCase());
+      const inceptionDate = TICKER_INCEPTION_DATES[ticker] ?? "2003-01-01";
 
       if (!stats || stats.actualDays === 0) {
-        needsAction.push({ ticker, needsFullIngest: true, desiredStart: inceptionDate })
+        needsAction.push({ ticker, needsFullIngest: true, desiredStart: inceptionDate });
       } else if (stats.lastDate && stats.lastDate < cutoffDate) {
-        const next = new Date(stats.lastDate)
-        next.setDate(next.getDate() + 1)
-        const nextStr = next.toISOString().slice(0, 10)
+        const next = new Date(stats.lastDate);
+        next.setDate(next.getDate() + 1);
+        const nextStr = next.toISOString().slice(0, 10);
         if (nextStr <= cutoffDate) {
-          needsAction.push({ ticker, needsFullIngest: false, desiredStart: nextStr })
+          needsAction.push({ ticker, needsFullIngest: false, desiredStart: nextStr });
         } else {
-          result.skipped.push(ticker)
+          result.skipped.push(ticker);
         }
       } else {
-        result.skipped.push(ticker)
+        result.skipped.push(ticker);
       }
     }
 
-    if (needsAction.length === 0) return result
+    if (needsAction.length === 0) return result;
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const admin = createAdminClient() as any
+    const admin = createAdminClient() as any;
 
     // Fetch active (queued/running) jobs to avoid duplicates
     const { data: activeJobs } = await admin
       .from("data_ingest_jobs")
       .select("symbol, status, start_date, end_date, id")
-      .in("symbol", needsAction.map((n) => n.ticker))
-      .in("status", ["queued", "running", "retrying"])
+      .in(
+        "symbol",
+        needsAction.map((n) => n.ticker)
+      )
+      .in("status", ["queued", "running", "retrying"]);
 
-    const activeBySymbol = new Map<string, { id: string; status: string; start_date: string; end_date: string }>()
+    const activeBySymbol = new Map<
+      string,
+      { id: string; status: string; start_date: string; end_date: string }
+    >();
     for (const j of activeJobs ?? []) {
-      if (!activeBySymbol.has(j.symbol)) activeBySymbol.set(j.symbol, j)
+      if (!activeBySymbol.has(j.symbol)) activeBySymbol.set(j.symbol, j);
     }
 
     const toInsert: {
-      symbol: string
-      start_date: string
-      end_date: string
-      status: string
-      stage: string
-      progress: number
-      request_mode: string
-      target_cutoff_date: string
-      requested_by: string
-    }[] = []
+      symbol: string;
+      start_date: string;
+      end_date: string;
+      status: string;
+      stage: string;
+      progress: number;
+      request_mode: string;
+      target_cutoff_date: string;
+      requested_by: string;
+    }[] = [];
 
     for (const { ticker, desiredStart } of needsAction) {
-      const existing = activeBySymbol.get(ticker)
+      const existing = activeBySymbol.get(ticker);
       if (existing) {
         if (existing.status === "queued") {
-          const newStart = desiredStart < existing.start_date ? desiredStart : existing.start_date
-          const newEnd = cutoffDate > existing.end_date ? cutoffDate : existing.end_date
+          const newStart = desiredStart < existing.start_date ? desiredStart : existing.start_date;
+          const newEnd = cutoffDate > existing.end_date ? cutoffDate : existing.end_date;
           if (newStart !== existing.start_date || newEnd !== existing.end_date) {
             await admin
               .from("data_ingest_jobs")
               .update({ start_date: newStart, end_date: newEnd })
-              .eq("id", existing.id)
-            result.widened.push(ticker)
+              .eq("id", existing.id);
+            result.widened.push(ticker);
           } else {
-            result.skipped.push(ticker)
+            result.skipped.push(ticker);
           }
         } else {
           // running — leave alone
-          result.skipped.push(ticker)
+          result.skipped.push(ticker);
         }
-        continue
+        continue;
       }
 
       toInsert.push({
@@ -1977,105 +2043,105 @@ export async function autoQueueUniverseIngestions(
         request_mode: "manual",
         target_cutoff_date: cutoffDate,
         requested_by: "auto-queue:universe",
-      })
+      });
     }
 
     if (toInsert.length > 0) {
-      await admin.from("data_ingest_jobs").insert(toInsert)
-      result.queued.push(...toInsert.map((j) => j.symbol))
+      await admin.from("data_ingest_jobs").insert(toInsert);
+      result.queued.push(...toInsert.map((j) => j.symbol));
       console.log(
         `[auto-ingest] queued ${toInsert.length} universe job(s):`,
         result.queued.join(", ")
-      )
+      );
     }
   } catch (err) {
     // Non-fatal — page still renders
-    console.error("[auto-ingest] autoQueueUniverseIngestions error:", err)
+    console.error("[auto-ingest] autoQueueUniverseIngestions error:", err);
   }
-  return result
+  return result;
 }
 
 // ---------------------------------------------------------------------------
 // Backtest window verification
 // ---------------------------------------------------------------------------
 
-export const BACKTEST_MIN_SPAN_DAYS = 730
-export const BACKTEST_MIN_DATA_POINTS = 500
-export const BACKTEST_END_DATE_TOLERANCE_TRADING_DAYS = 5
+export const BACKTEST_MIN_SPAN_DAYS = 730;
+export const BACKTEST_MIN_DATA_POINTS = 500;
+export const BACKTEST_END_DATE_TOLERANCE_TRADING_DAYS = 5;
 
-export type BacktestAuditOutcome = "pass" | "fail" | "skip"
+export type BacktestAuditOutcome = "pass" | "fail" | "skip";
 
 export type BacktestWindowSummaryRow = {
-  run_id: string
-  name: string
-  strategy_id: string
-  status: RunStatus
-  start_date: string
-  end_date: string
-  span_days: number
-  requested_span_days: number
-  equity_start_date: string | null
-  equity_end_date: string | null
-  equity_span_days: number | null
-  end_gap_trading_days: number | null
-  data_points: number
-  meets_min_span: boolean
-  meets_min_points: boolean
-  meets_end_tolerance: boolean
-  audit_outcome: BacktestAuditOutcome
-}
+  run_id: string;
+  name: string;
+  strategy_id: string;
+  status: RunStatus;
+  start_date: string;
+  end_date: string;
+  span_days: number;
+  requested_span_days: number;
+  equity_start_date: string | null;
+  equity_end_date: string | null;
+  equity_span_days: number | null;
+  end_gap_trading_days: number | null;
+  data_points: number;
+  meets_min_span: boolean;
+  meets_min_points: boolean;
+  meets_end_tolerance: boolean;
+  audit_outcome: BacktestAuditOutcome;
+};
 
 type BacktestAuditRunRow = {
-  id: string
-  name: string
-  strategy_id: string
-  status: RunStatus
-  start_date: string
-  end_date: string
-}
+  id: string;
+  name: string;
+  strategy_id: string;
+  status: RunStatus;
+  start_date: string;
+  end_date: string;
+};
 
 type EquityCurveAuditStats = {
-  data_points: number
-  equity_start_date: string | null
-  equity_end_date: string | null
-}
+  data_points: number;
+  equity_start_date: string | null;
+  equity_end_date: string | null;
+};
 
 function getCalendarDaySpan(startDate: string, endDate: string): number {
-  if (!startDate || !endDate || endDate < startDate) return 0
-  const startMs = new Date(`${startDate}T00:00:00Z`).getTime()
-  const endMs = new Date(`${endDate}T00:00:00Z`).getTime()
-  return Math.floor((endMs - startMs) / (1000 * 60 * 60 * 24))
+  if (!startDate || !endDate || endDate < startDate) return 0;
+  const startMs = new Date(`${startDate}T00:00:00Z`).getTime();
+  const endMs = new Date(`${endDate}T00:00:00Z`).getTime();
+  return Math.floor((endMs - startMs) / (1000 * 60 * 60 * 24));
 }
 
 function getTradingDayGap(dateA: string | null, dateB: string | null): number | null {
-  if (!dateA || !dateB) return null
-  if (dateA === dateB) return 0
-  const startDate = dateA <= dateB ? dateA : dateB
-  const endDate = dateA <= dateB ? dateB : dateA
-  return Math.max(countBusinessDays(startDate, endDate) - 1, 0)
+  if (!dateA || !dateB) return null;
+  if (dateA === dateB) return 0;
+  const startDate = dateA <= dateB ? dateA : dateB;
+  const endDate = dateA <= dateB ? dateB : dateA;
+  return Math.max(countBusinessDays(startDate, endDate) - 1, 0);
 }
 
 async function getEquityCurveAuditStats(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   admin: any,
-  runId: string,
+  runId: string
 ): Promise<EquityCurveAuditStats> {
   const { count, error: countError } = await admin
     .from("equity_curve")
     .select("date", { count: "exact", head: true })
-    .eq("run_id", runId)
+    .eq("run_id", runId);
 
   if (countError) {
-    throw new Error(`count failed for run ${runId}: ${countError.message}`)
+    throw new Error(`count failed for run ${runId}: ${countError.message}`);
   }
 
-  const dataPoints = count ?? 0
+  const dataPoints = count ?? 0;
   if (dataPoints === 0) {
     return {
       data_points: 0,
       equity_start_date: null,
       equity_end_date: null,
-    }
+    };
   }
 
   const [minResult, maxResult] = await Promise.all([
@@ -2091,20 +2157,20 @@ async function getEquityCurveAuditStats(
       .eq("run_id", runId)
       .order("date", { ascending: false })
       .limit(1),
-  ])
+  ]);
 
   if (minResult.error) {
-    throw new Error(`min(date) failed for run ${runId}: ${minResult.error.message}`)
+    throw new Error(`min(date) failed for run ${runId}: ${minResult.error.message}`);
   }
   if (maxResult.error) {
-    throw new Error(`max(date) failed for run ${runId}: ${maxResult.error.message}`)
+    throw new Error(`max(date) failed for run ${runId}: ${maxResult.error.message}`);
   }
 
   return {
     data_points: dataPoints,
     equity_start_date: minResult.data?.[0]?.date ?? null,
     equity_end_date: maxResult.data?.[0]?.date ?? null,
-  }
+  };
 }
 
 /**
@@ -2115,42 +2181,42 @@ async function getEquityCurveAuditStats(
  */
 export async function getRunsBacktestWindowSummary(): Promise<BacktestWindowSummaryRow[]> {
   try {
-    const supabase = await createClient()
+    const supabase = await createClient();
 
     const { data: runs, error: runsError } = await supabase
       .from("runs")
       .select("id, name, strategy_id, status, start_date, end_date")
-      .order("created_at", { ascending: false })
+      .order("created_at", { ascending: false });
 
     if (runsError) {
-      console.error("getRunsBacktestWindowSummary runs error:", runsError.message)
-      return []
+      console.error("getRunsBacktestWindowSummary runs error:", runsError.message);
+      return [];
     }
-    if (!runs?.length) return []
+    if (!runs?.length) return [];
 
-    const admin = createAdminClient()
+    const admin = createAdminClient();
     const summary: BacktestWindowSummaryRow[] = await Promise.all(
       (runs as BacktestAuditRunRow[]).map(async (run) => {
-        const stats = await getEquityCurveAuditStats(admin, run.id)
-        const requestedSpanDays = getCalendarDaySpan(run.start_date, run.end_date)
+        const stats = await getEquityCurveAuditStats(admin, run.id);
+        const requestedSpanDays = getCalendarDaySpan(run.start_date, run.end_date);
         const equitySpanDays =
           stats.equity_start_date && stats.equity_end_date
             ? getCalendarDaySpan(stats.equity_start_date, stats.equity_end_date)
-            : null
-        const spanDays = Math.max(requestedSpanDays, equitySpanDays ?? 0)
-        const endGapTradingDays = getTradingDayGap(stats.equity_end_date, run.end_date)
-        const meetsMinPoints = stats.data_points >= BACKTEST_MIN_DATA_POINTS
-        const meetsMinSpan = spanDays >= BACKTEST_MIN_SPAN_DAYS
+            : null;
+        const spanDays = Math.max(requestedSpanDays, equitySpanDays ?? 0);
+        const endGapTradingDays = getTradingDayGap(stats.equity_end_date, run.end_date);
+        const meetsMinPoints = stats.data_points >= BACKTEST_MIN_DATA_POINTS;
+        const meetsMinSpan = spanDays >= BACKTEST_MIN_SPAN_DAYS;
         const meetsEndTolerance =
           endGapTradingDays != null &&
-          endGapTradingDays <= BACKTEST_END_DATE_TOLERANCE_TRADING_DAYS
+          endGapTradingDays <= BACKTEST_END_DATE_TOLERANCE_TRADING_DAYS;
 
-        let auditOutcome: BacktestAuditOutcome = "skip"
+        let auditOutcome: BacktestAuditOutcome = "skip";
         if (run.status === "completed") {
           auditOutcome =
             stats.data_points > 0 && meetsMinPoints && meetsMinSpan && meetsEndTolerance
               ? "pass"
-              : "fail"
+              : "fail";
         }
 
         return {
@@ -2171,39 +2237,44 @@ export async function getRunsBacktestWindowSummary(): Promise<BacktestWindowSumm
           meets_min_points: meetsMinPoints,
           meets_end_tolerance: meetsEndTolerance,
           audit_outcome: auditOutcome,
-        }
+        };
       })
-    )
+    );
 
     // Console-log summary for server-side audit visibility.
-    console.log("[backtest-audit]", JSON.stringify(
-      summary.map(({
-        run_id,
-        name,
-        status,
-        span_days,
-        data_points,
-        equity_start_date,
-        equity_end_date,
-        end_gap_trading_days,
-        audit_outcome,
-      }) => ({
-        run_id,
-        name,
-        status,
-        span_days,
-        data_points,
-        equity_start_date,
-        equity_end_date,
-        end_gap_trading_days,
-        audit_outcome,
-      }))
-    ))
+    console.log(
+      "[backtest-audit]",
+      JSON.stringify(
+        summary.map(
+          ({
+            run_id,
+            name,
+            status,
+            span_days,
+            data_points,
+            equity_start_date,
+            equity_end_date,
+            end_gap_trading_days,
+            audit_outcome,
+          }) => ({
+            run_id,
+            name,
+            status,
+            span_days,
+            data_points,
+            equity_start_date,
+            equity_end_date,
+            end_gap_trading_days,
+            audit_outcome,
+          })
+        )
+      )
+    );
 
-    return summary
+    return summary;
   } catch (err) {
-    console.error("getRunsBacktestWindowSummary exception:", err)
-    return []
+    console.error("getRunsBacktestWindowSummary exception:", err);
+    return [];
   }
 }
 
@@ -2219,67 +2290,66 @@ export async function getRunsBacktestWindowSummary(): Promise<BacktestWindowSumm
  */
 export async function getActiveIngestJobCount(): Promise<number> {
   try {
-    const supabase = await createClient()
+    const supabase = await createClient();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { count, error } = await (supabase as any)
       .from("data_ingest_jobs")
       .select("*", { count: "exact", head: true })
       .in("status", ["queued", "running", "retrying"])
-      .not("batch_id", "is", null)
-    if (error) return 0
-    return count ?? 0
+      .not("batch_id", "is", null);
+    if (error) return 0;
+    return count ?? 0;
   } catch {
-    return 0
+    return 0;
   }
 }
 
 export async function getPositionsByRunId(runId: string): Promise<PositionRow[]> {
   try {
-    const supabase = await createClient()
+    const supabase = await createClient();
     const { data, error } = await supabase
       .from("positions")
       .select("*")
       .eq("run_id", runId)
       .order("date", { ascending: false })
       .order("symbol", { ascending: true })
-      .limit(2000)
+      .limit(2000);
 
     if (error) {
       if (isMissingPositionsTableError(error.message)) {
-        return []
+        return [];
       }
-      console.error("getPositionsByRunId error:", error.message)
-      return []
+      console.error("getPositionsByRunId error:", error.message);
+      return [];
     }
-    return (data ?? []) as PositionRow[]
+    return (data ?? []) as PositionRow[];
   } catch (err) {
-    console.error("getPositionsByRunId exception:", err)
-    return []
+    console.error("getPositionsByRunId exception:", err);
+    return [];
   }
 }
 
 export async function getUserSettings(): Promise<UserSettings | null> {
   try {
-    const supabase = await createClient()
-    const { data, error } = await supabase
-      .from("user_settings")
-      .select("*")
-      .maybeSingle()
+    const supabase = await createClient();
+    const { data, error } = await supabase.from("user_settings").select("*").maybeSingle();
 
-    if (error || !data) return null
-    return data as UserSettings
+    if (error || !data) return null;
+    return data as UserSettings;
   } catch (err) {
-    console.error("getUserSettings exception:", err)
-    return null
+    console.error("getUserSettings exception:", err);
+    return null;
   }
 }
 
 export async function upsertUserSettings(
   settings: Partial<Omit<UserSettings, "user_id" | "updated_at">>
 ): Promise<void> {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) throw new Error("Not authenticated")
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) throw new Error("Not authenticated");
 
   const { error } = await supabase.from("user_settings").upsert(
     {
@@ -2288,45 +2358,45 @@ export async function upsertUserSettings(
       updated_at: new Date().toISOString(),
     },
     { onConflict: "user_id" }
-  )
-  if (error) throw new Error(error.message)
+  );
+  if (error) throw new Error(error.message);
 }
 
 export async function getBenchmarkOverlapStateForRun(
   run: RunBenchmarkContext
 ): Promise<BenchmarkOverlapState> {
-  const benchmark = getRunBenchmark(run)
+  const benchmark = getRunBenchmark(run);
   const fallbackPossible = inferPossibleOverlapFromUniverse({
     benchmark,
     strategyId: run.strategy_id,
     universeSymbols: run.universe_symbols,
-  })
+  });
 
   try {
-    const supabase = await createClient()
+    const supabase = await createClient();
     const { data, error } = await supabase
       .from("positions")
       .select("date, symbol, weight")
       .eq("run_id", run.id)
       .order("date", { ascending: false })
       .order("symbol", { ascending: true })
-      .limit(50)
+      .limit(50);
 
     if (error) {
-      return { confirmed: false, possible: fallbackPossible }
+      return { confirmed: false, possible: fallbackPossible };
     }
 
-    const positions = (data ?? []) as Pick<PositionRow, "date" | "symbol" | "weight">[]
+    const positions = (data ?? []) as Pick<PositionRow, "date" | "symbol" | "weight">[];
     if (positions.length === 0) {
-      return { confirmed: false, possible: fallbackPossible }
+      return { confirmed: false, possible: fallbackPossible };
     }
 
     return {
       confirmed: isBenchmarkHeldAtLatestRebalance(positions, benchmark),
       possible: false,
-    }
+    };
   } catch {
-    return { confirmed: false, possible: fallbackPossible }
+    return { confirmed: false, possible: fallbackPossible };
   }
 }
 
@@ -2340,13 +2410,13 @@ export async function getBenchmarkOverlapStateForRun(
  * Falls back to getTickerDateRanges() if the table doesn't exist yet.
  */
 type TickerStatsRow = {
-  symbol: string
-  first_date: string
-  last_date: string
-  distinct_days: string | number
-  max_gap_days_window: string | number | null
-  updated_at: string | null
-}
+  symbol: string;
+  first_date: string;
+  last_date: string;
+  distinct_days: string | number;
+  max_gap_days_window: string | number | null;
+  updated_at: string | null;
+};
 
 /**
  * Cross-request cache for ticker_stats using the admin (service-role) client
@@ -2355,15 +2425,15 @@ type TickerStatsRow = {
  */
 const _getCachedTickerStats = unstable_cache(
   async (): Promise<TickerDateRange[]> => {
-    const supabase = createAdminClient()
+    const supabase = createAdminClient();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { data, error } = await (supabase as any)
+    const { data, error } = (await (supabase as any)
       .from("ticker_stats")
-      .select("symbol, first_date, last_date, distinct_days, max_gap_days_window, updated_at") as {
-        data: TickerStatsRow[] | null
-        error: { message: string } | null
-      }
-    if (error || !data || data.length === 0) return []
+      .select("symbol, first_date, last_date, distinct_days, max_gap_days_window, updated_at")) as {
+      data: TickerStatsRow[] | null;
+      error: { message: string } | null;
+    };
+    if (error || !data || data.length === 0) return [];
     return data.map((r) => ({
       ticker: r.symbol,
       firstDate: r.first_date,
@@ -2371,28 +2441,31 @@ const _getCachedTickerStats = unstable_cache(
       actualDays: Number(r.distinct_days),
       maxGapDays: r.max_gap_days_window != null ? Number(r.max_gap_days_window) : undefined,
       updatedAt: r.updated_at ?? undefined,
-    }))
+    }));
   },
   ["ticker-stats"],
   { revalidate: 120, tags: ["ticker-stats"] }
-)
+);
 
 export async function getAllTickerStats(): Promise<TickerDateRange[]> {
   try {
     // Try the cross-request cache first (admin client, no cookies).
     // Falls back to the per-request client path if admin key is unavailable.
-    const cached = await _getCachedTickerStats()
-    if (cached.length > 0) return cached
+    const cached = await _getCachedTickerStats();
+    if (cached.length > 0) return cached;
   } catch {
     // Admin key missing or cache unavailable — fall through to live query.
   }
 
   try {
-    const supabase = await createClient()
+    const supabase = await createClient();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { data, error } = await (supabase as any)
+    const { data, error } = (await (supabase as any)
       .from("ticker_stats")
-      .select("symbol, first_date, last_date, distinct_days, max_gap_days_window, updated_at") as { data: TickerStatsRow[] | null; error: { message: string } | null }
+      .select("symbol, first_date, last_date, distinct_days, max_gap_days_window, updated_at")) as {
+      data: TickerStatsRow[] | null;
+      error: { message: string } | null;
+    };
     if (error) {
       if (
         error.message.includes("does not exist") ||
@@ -2400,15 +2473,15 @@ export async function getAllTickerStats(): Promise<TickerDateRange[]> {
         error.message.includes("schema cache")
       ) {
         // Migration not yet applied — fall back to legacy full-table RPC
-        return getTickerDateRanges()
+        return getTickerDateRanges();
       }
-      console.error("getAllTickerStats error:", error.message)
-      return []
+      console.error("getAllTickerStats error:", error.message);
+      return [];
     }
     // Table exists but hasn't been populated yet (migration applied before worker ran).
     // Fall back to live query so existing prices are still discovered.
     if ((data ?? []).length === 0) {
-      return getTickerDateRanges()
+      return getTickerDateRanges();
     }
     return (data ?? []).map((r) => ({
       ticker: r.symbol,
@@ -2417,10 +2490,10 @@ export async function getAllTickerStats(): Promise<TickerDateRange[]> {
       actualDays: Number(r.distinct_days),
       maxGapDays: r.max_gap_days_window != null ? Number(r.max_gap_days_window) : undefined,
       updatedAt: r.updated_at ?? undefined,
-    }))
+    }));
   } catch (err) {
-    console.error("getAllTickerStats exception:", err)
-    return []
+    console.error("getAllTickerStats exception:", err);
+    return [];
   }
 }
 
@@ -2432,34 +2505,39 @@ export async function getAllTickerStats(): Promise<TickerDateRange[]> {
  */
 export async function getTickerDateRanges(): Promise<TickerDateRange[]> {
   try {
-    const supabase = await createClient()
-    type RawRow = { ticker: string; first_date: string; last_date: string; actual_days: string | number }
-    const { data, error } = await supabase.rpc("get_ticker_date_ranges") as unknown as {
-      data: RawRow[] | null
-      error: { message: string } | null
-    }
+    const supabase = await createClient();
+    type RawRow = {
+      ticker: string;
+      first_date: string;
+      last_date: string;
+      actual_days: string | number;
+    };
+    const { data, error } = (await supabase.rpc("get_ticker_date_ranges")) as unknown as {
+      data: RawRow[] | null;
+      error: { message: string } | null;
+    };
     if (error) {
       if (!error.message.includes("Could not find the function")) {
-        console.error("getTickerDateRanges error:", error.message)
+        console.error("getTickerDateRanges error:", error.message);
       }
-      return []
+      return [];
     }
     return (data ?? []).map((r) => ({
       ticker: r.ticker,
       firstDate: r.first_date,
       lastDate: r.last_date,
       actualDays: Number(r.actual_days),
-    }))
+    }));
   } catch (err) {
-    console.error("getTickerDateRanges exception:", err)
-    return []
+    console.error("getTickerDateRanges exception:", err);
+    return [];
   }
 }
 
 // computeUniverseValidFrom is a pure function defined in lib/universe-config.ts
 // and re-exported from there so client components and tests can import it
 // without hitting the server-only constraint.
-export { computeUniverseValidFrom } from "@/lib/universe-config"
+export { computeUniverseValidFrom } from "@/lib/universe-config";
 
 export async function getUniverseConstraintsSnapshot(
   universe: UniverseId,
@@ -2468,9 +2546,9 @@ export async function getUniverseConstraintsSnapshot(
   const [ranges, dataState] = await Promise.all([
     prefetchedRanges ? Promise.resolve(prefetchedRanges) : getAllTickerStats(),
     getDataState(),
-  ])
+  ]);
 
-  const summary = summarizeUniverseConstraints(universe, ranges)
+  const summary = summarizeUniverseConstraints(universe, ranges);
   return {
     universe,
     universeEarliestStart: summary.earliestStart,
@@ -2480,7 +2558,7 @@ export async function getUniverseConstraintsSnapshot(
     totalCount: summary.totalCount,
     ready: summary.ready,
     dataCutoffDate: dataState.dataCutoffDate,
-  }
+  };
 }
 
 /**
@@ -2495,29 +2573,32 @@ export async function getTopMissingTickersV2(
   globalEnd: string | null,
   prefetchedRanges?: TickerDateRange[]
 ): Promise<TickerMissingnessV2[]> {
-  const ranges = prefetchedRanges ?? await getAllTickerStats()
-  if (!ranges.length) return []
+  const ranges = prefetchedRanges ?? (await getAllTickerStats());
+  if (!ranges.length) return [];
 
-  const effectiveGlobalStart = globalStart ?? ranges.reduce(
-    (min, r) => (!min || r.firstDate < min ? r.firstDate : min),
-    null as string | null
-  ) ?? ""
+  const effectiveGlobalStart =
+    globalStart ??
+    ranges.reduce(
+      (min, r) => (!min || r.firstDate < min ? r.firstDate : min),
+      null as string | null
+    ) ??
+    "";
 
   const rows: TickerMissingnessV2[] = ranges.map((r) => {
-    const expectedDays = countBusinessDays(r.firstDate, r.lastDate)
-    const trueMissingDays = Math.max(expectedDays - r.actualDays, 0)
+    const expectedDays = countBusinessDays(r.firstDate, r.lastDate);
+    const trueMissingDays = Math.max(expectedDays - r.actualDays, 0);
     // Business days from globalStart up to (but not including) firstDate
     const dayBeforeFirst = (() => {
-      const d = new Date(`${r.firstDate}T00:00:00Z`)
-      d.setUTCDate(d.getUTCDate() - 1)
-      return d.toISOString().slice(0, 10)
-    })()
-    const preInceptionDays = effectiveGlobalStart < r.firstDate
-      ? countBusinessDays(effectiveGlobalStart, dayBeforeFirst)
-      : 0
-    const coveragePercent = expectedDays > 0
-      ? Math.min((r.actualDays / expectedDays) * 100, 100)
-      : 100
+      const d = new Date(`${r.firstDate}T00:00:00Z`);
+      d.setUTCDate(d.getUTCDate() - 1);
+      return d.toISOString().slice(0, 10);
+    })();
+    const preInceptionDays =
+      effectiveGlobalStart < r.firstDate
+        ? countBusinessDays(effectiveGlobalStart, dayBeforeFirst)
+        : 0;
+    const coveragePercent =
+      expectedDays > 0 ? Math.min((r.actualDays / expectedDays) * 100, 100) : 100;
 
     return {
       ticker: r.ticker,
@@ -2528,18 +2609,16 @@ export async function getTopMissingTickersV2(
       trueMissingDays,
       preInceptionDays,
       coveragePercent,
-    }
-  })
+    };
+  });
 
   // Filter to window if globalEnd provided
-  const filtered = globalEnd
-    ? rows.filter((r) => r.firstDate <= globalEnd)
-    : rows
+  const filtered = globalEnd ? rows.filter((r) => r.firstDate <= globalEnd) : rows;
 
   return filtered
     .filter((r) => r.trueMissingDays > 0)
     .sort((a, b) => b.trueMissingDays - a.trueMissingDays)
-    .slice(0, limit)
+    .slice(0, limit);
 }
 
 /**
@@ -2549,20 +2628,20 @@ export async function getTopMissingTickersV2(
 export async function getNotIngestedUniverseTickers(
   prefetchedRanges?: TickerDateRange[]
 ): Promise<string[]> {
-  const ranges = prefetchedRanges ?? await getAllTickerStats()
-  const ingested = new Set(ranges.map((r) => r.ticker))
-  const allTickers = new Set<string>()
+  const ranges = prefetchedRanges ?? (await getAllTickerStats());
+  const ingested = new Set(ranges.map((r) => r.ticker));
+  const allTickers = new Set<string>();
   for (const tickers of Object.values(UNIVERSE_PRESETS)) {
-    for (const t of tickers) allTickers.add(t)
+    for (const t of tickers) allTickers.add(t);
   }
-  return [...allTickers].filter((t) => !ingested.has(t)).sort()
+  return [...allTickers].filter((t) => !ingested.has(t)).sort();
 }
 
 function getEffectiveIngestProgress(status: string, progress: number | null | undefined): number {
-  const normalized = normalizeDataIngestStatus(status)
-  if (normalized === "succeeded") return 100
-  if (normalized === "retrying") return Math.min(progress ?? 0, 95)
-  return progress ?? 0
+  const normalized = normalizeDataIngestStatus(status);
+  if (normalized === "succeeded") return 100;
+  if (normalized === "retrying") return Math.min(progress ?? 0, 95);
+  return progress ?? 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -2571,57 +2650,58 @@ function getEffectiveIngestProgress(status: string, progress: number | null | un
 
 export type IngestProgress = {
   /** Total data_ingest_jobs linked to this run via requested_by_run_id. */
-  totalJobs: number
+  totalJobs: number;
   /** Jobs with status = 'succeeded'. */
-  completedJobs: number
+  completedJobs: number;
   /**
    * Weighted average of progress (0–100) across all ingest jobs.
    * Succeeded jobs contribute 100. Used for the aggregated progress bar.
    */
-  avgProgress: number
+  avgProgress: number;
   /**
    * Earliest started_at across all ingest jobs, for ETA computation.
    * Null until at least one job has started.
    */
-  minStartedAt: string | null
+  minStartedAt: string | null;
   /** Per-symbol detail for tooltip / diagnostics. */
-  symbols: Array<{ symbol: string; status: string; progress: number }>
-}
+  symbols: Array<{ symbol: string; status: string; progress: number }>;
+};
 
 /**
  * Returns aggregated ingest progress for a waiting_for_data run.
  * Queries data_ingest_jobs WHERE requested_by_run_id = runId.
  * Returns null if there are no ingest jobs (e.g. run was already READY).
  */
-export async function getIngestProgressForRun(
-  runId: string
-): Promise<IngestProgress | null> {
-  const supabase = await createClient()
+export async function getIngestProgressForRun(runId: string): Promise<IngestProgress | null> {
+  const supabase = await createClient();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data, error } = await (supabase as any)
     .from("data_ingest_jobs")
     .select("symbol, status, progress, started_at")
-    .eq("requested_by_run_id", runId)
+    .eq("requested_by_run_id", runId);
 
   if (error) {
-    console.error("[getIngestProgressForRun] query error:", error.message)
-    return null
+    console.error("[getIngestProgressForRun] query error:", error.message);
+    return null;
   }
-  if (!data || data.length === 0) return null
+  if (!data || data.length === 0) return null;
 
-  type Row = { symbol: string; status: string; progress: number; started_at: string | null }
-  const rows = data as Row[]
-  const totalJobs = rows.length
-  const completedJobs = rows.filter((r) => normalizeDataIngestStatus(r.status) === "succeeded").length
+  type Row = { symbol: string; status: string; progress: number; started_at: string | null };
+  const rows = data as Row[];
+  const totalJobs = rows.length;
+  const completedJobs = rows.filter(
+    (r) => normalizeDataIngestStatus(r.status) === "succeeded"
+  ).length;
 
   // Succeeded jobs contribute 100 to the average even if they stored 100 already.
-  const totalProgress = rows.reduce((sum, r) => sum + getEffectiveIngestProgress(r.status, r.progress), 0)
-  const avgProgress = Math.round(totalProgress / totalJobs)
+  const totalProgress = rows.reduce(
+    (sum, r) => sum + getEffectiveIngestProgress(r.status, r.progress),
+    0
+  );
+  const avgProgress = Math.round(totalProgress / totalJobs);
 
-  const startedAts = rows.map((r) => r.started_at).filter(Boolean) as string[]
-  const minStartedAt = startedAts.length > 0
-    ? startedAts.reduce((a, b) => (a < b ? a : b))
-    : null
+  const startedAts = rows.map((r) => r.started_at).filter(Boolean) as string[];
+  const minStartedAt = startedAts.length > 0 ? startedAts.reduce((a, b) => (a < b ? a : b)) : null;
 
   return {
     totalJobs,
@@ -2629,38 +2709,38 @@ export async function getIngestProgressForRun(
     avgProgress,
     minStartedAt,
     symbols: rows.map((r) => ({ symbol: r.symbol, status: r.status, progress: r.progress ?? 0 })),
-  }
+  };
 }
 
 export async function getUniverseBatchStatus(
   batchId: string
 ): Promise<UniverseBatchStatusSummary | null> {
-  if (!batchId) return null
+  if (!batchId) return null;
 
-  const supabase = await createClient()
+  const supabase = await createClient();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data, error } = await (supabase as any)
     .from("data_ingest_jobs")
     .select("symbol, status, progress, next_retry_at")
-    .eq("batch_id", batchId)
+    .eq("batch_id", batchId);
 
   if (error) {
-    console.error("[getUniverseBatchStatus] query error:", error.message)
-    return null
+    console.error("[getUniverseBatchStatus] query error:", error.message);
+    return null;
   }
 
   type Row = {
-    symbol: string
-    status: string
-    progress: number | null
-    next_retry_at: string | null
-  }
+    symbol: string;
+    status: string;
+    progress: number | null;
+    next_retry_at: string | null;
+  };
 
-  const rows = (data ?? []) as Row[]
-  if (rows.length === 0) return null
+  const rows = (data ?? []) as Row[];
+  if (rows.length === 0) return null;
 
-  const totalJobs = rows.length
-  const { status, completedJobs, avgProgress } = classifyUniverseBatchStatus(rows)
+  const totalJobs = rows.length;
+  const { status, completedJobs, avgProgress } = classifyUniverseBatchStatus(rows);
 
   return {
     batchId,
@@ -2673,14 +2753,14 @@ export async function getUniverseBatchStatus(
       status: normalizeDataIngestStatus(row.status),
       progress: row.progress ?? 0,
     })),
-  }
+  };
 }
 
 // ---------------------------------------------------------------------------
 // Active-runs progress: lightweight batch query for the runs list
 // ---------------------------------------------------------------------------
 
-export type RunProgressMap = Map<string, number> // runId → progress 0-100
+export type RunProgressMap = Map<string, number>; // runId → progress 0-100
 
 /**
  * Returns a progress percentage (0-100) for each provided run ID that is
@@ -2691,11 +2771,9 @@ export type RunProgressMap = Map<string, number> // runId → progress 0-100
  *
  * Designed for the runs list page — one call instead of N per-run queries.
  */
-export async function getActiveRunsProgress(
-  runIds: string[]
-): Promise<RunProgressMap> {
-  if (runIds.length === 0) return new Map()
-  const supabase = await createClient()
+export async function getActiveRunsProgress(runIds: string[]): Promise<RunProgressMap> {
+  if (runIds.length === 0) return new Map();
+  const supabase = await createClient();
 
   const [jobsResult, ingestResult] = await Promise.all([
     // Backtest jobs: latest job per run_id
@@ -2712,33 +2790,37 @@ export async function getActiveRunsProgress(
       .from("data_ingest_jobs")
       .select("requested_by_run_id, status, progress")
       .in("requested_by_run_id", runIds),
-  ])
+  ]);
 
-  const result: RunProgressMap = new Map()
+  const result: RunProgressMap = new Map();
 
   // Build backtest progress map (first row per run_id = latest job)
-  const seenBacktest = new Set<string>()
+  const seenBacktest = new Set<string>();
   for (const row of (jobsResult.data ?? []) as Array<{ run_id: string; progress: number }>) {
     if (!seenBacktest.has(row.run_id)) {
-      seenBacktest.add(row.run_id)
-      result.set(row.run_id, row.progress ?? 0)
+      seenBacktest.add(row.run_id);
+      result.set(row.run_id, row.progress ?? 0);
     }
   }
 
   // Build ingest progress map (avg per requested_by_run_id)
-  const ingestByRun = new Map<string, number[]>()
-  for (const row of (ingestResult.data ?? []) as Array<{ requested_by_run_id: string; status: string; progress: number }>) {
-    const rid = row.requested_by_run_id
-    if (!rid) continue
-    if (!ingestByRun.has(rid)) ingestByRun.set(rid, [])
-    ingestByRun.get(rid)!.push(getEffectiveIngestProgress(row.status, row.progress))
+  const ingestByRun = new Map<string, number[]>();
+  for (const row of (ingestResult.data ?? []) as Array<{
+    requested_by_run_id: string;
+    status: string;
+    progress: number;
+  }>) {
+    const rid = row.requested_by_run_id;
+    if (!rid) continue;
+    if (!ingestByRun.has(rid)) ingestByRun.set(rid, []);
+    ingestByRun.get(rid)!.push(getEffectiveIngestProgress(row.status, row.progress));
   }
   for (const [rid, progresses] of ingestByRun) {
     if (!result.has(rid)) {
-      const avg = Math.round(progresses.reduce((a, b) => a + b, 0) / progresses.length)
-      result.set(rid, avg)
+      const avg = Math.round(progresses.reduce((a, b) => a + b, 0) / progresses.length);
+      result.set(rid, avg);
     }
   }
 
-  return result
+  return result;
 }

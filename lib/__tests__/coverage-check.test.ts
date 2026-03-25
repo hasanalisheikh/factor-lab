@@ -1,12 +1,14 @@
-import { describe, expect, it } from "vitest"
+import { describe, expect, it } from "vitest";
 import {
   buildRunPreflightResult,
   computeBenchmarkCoverage,
   type MissingnessCoverageRow,
   type RunPreflightConstraints,
-} from "@/lib/coverage-check"
+} from "@/lib/coverage-check";
 
-function makeConstraints(overrides: Partial<RunPreflightConstraints> = {}): RunPreflightConstraints {
+function makeConstraints(
+  overrides: Partial<RunPreflightConstraints> = {}
+): RunPreflightConstraints {
   return {
     dataCutoffDate: "2026-03-12",
     universeEarliestStart: "2014-04-03",
@@ -18,7 +20,7 @@ function makeConstraints(overrides: Partial<RunPreflightConstraints> = {}): RunP
     requiredStart: "2014-04-03",
     requiredEnd: "2026-03-12",
     ...overrides,
-  }
+  };
 }
 
 function makeUniverseRows(
@@ -36,7 +38,7 @@ function makeUniverseRows(
     trueMissingDays: 0,
     trueMissingRate: 0,
     ...overrides[index],
-  }))
+  }));
 }
 
 describe("buildRunPreflightResult", () => {
@@ -51,7 +53,7 @@ describe("buildRunPreflightResult", () => {
         lastDate: "2026-03-12",
       },
       benchmarkDates: ["2021-01-04", "2021-01-05", "2021-01-06", "2021-01-07", "2021-01-08"],
-    })
+    });
 
     expect(result).toMatchObject({
       windowStartUsed: "2021-01-04",
@@ -61,8 +63,8 @@ describe("buildRunPreflightResult", () => {
       missingDays: 0,
       trueMissingRate: 0,
       status: "good",
-    })
-  })
+    });
+  });
 
   it("blocks when the start date is before the minimum start date", () => {
     const result = buildRunPreflightResult({
@@ -84,14 +86,14 @@ describe("buildRunPreflightResult", () => {
           trueMissingRate: 0,
         },
       ],
-    })
+    });
 
-    expect(result.status).toBe("block")
+    expect(result.status).toBe("block");
     expect(result.suggested_fixes).toContainEqual({
       kind: "clamp_start_date",
       value: "2014-04-03",
-    })
-  })
+    });
+  });
 
   it("warns for standard strategies when more than 5% of universe tickers exceed 2% true missingness", () => {
     const result = buildRunPreflightResult({
@@ -117,11 +119,11 @@ describe("buildRunPreflightResult", () => {
           1: { trueMissingDays: 3, trueMissingRate: 0.03, actualDays: 97 },
         }),
       ],
-    })
+    });
 
-    expect(result.status).toBe("warn")
-    expect(result.coverage.universe.status).toBe("warning")
-  })
+    expect(result.status).toBe("warn");
+    expect(result.coverage.universe.status).toBe("warning");
+  });
 
   it("blocks for ranking-sensitive strategies when more than 5% of universe tickers exceed 2% true missingness", () => {
     const result = buildRunPreflightResult({
@@ -147,11 +149,11 @@ describe("buildRunPreflightResult", () => {
           1: { trueMissingDays: 3, trueMissingRate: 0.03, actualDays: 97 },
         }),
       ],
-    })
+    });
 
-    expect(result.status).toBe("block")
-    expect(result.coverage.universe.status).toBe("blocked")
-  })
+    expect(result.status).toBe("block");
+    expect(result.coverage.universe.status).toBe("blocked");
+  });
 
   it("blocks when any ticker exceeds 10% true missingness", () => {
     const result = buildRunPreflightResult({
@@ -176,11 +178,11 @@ describe("buildRunPreflightResult", () => {
           0: { trueMissingDays: 12, trueMissingRate: 0.12, actualDays: 88 },
         }),
       ],
-    })
+    });
 
-    expect(result.status).toBe("block")
-    expect(result.coverage.universe.over10Percent).toEqual(["T0"])
-  })
+    expect(result.status).toBe("block");
+    expect(result.coverage.universe.over10Percent).toEqual(["T0"]);
+  });
 
   it("warns when benchmark true missingness is between 3% and 5%", () => {
     const result = buildRunPreflightResult({
@@ -207,12 +209,12 @@ describe("buildRunPreflightResult", () => {
         },
         ...makeUniverseRows(8),
       ],
-    })
+    });
 
-    expect(result.status).toBe("warn")
-    expect(result.coverage.benchmark.status).toBe("warning")
-    expect(result.reasons[0]).toContain("4.0%")
-    expect(result.reasons[0]).toContain("2021-01-04 -> 2026-03-01")
+    expect(result.status).toBe("warn");
+    expect(result.coverage.benchmark.status).toBe("warning");
+    expect(result.reasons[0]).toContain("4.0%");
+    expect(result.reasons[0]).toContain("2021-01-04 -> 2026-03-01");
     expect(result.coverage.benchmark).toMatchObject({
       metricSourceUsed: "run_window",
       windowStartUsed: "2021-01-04",
@@ -221,6 +223,6 @@ describe("buildRunPreflightResult", () => {
       actualDays: 96,
       missingDays: 4,
       trueMissingRate: 0.04,
-    })
-  })
-})
+    });
+  });
+});

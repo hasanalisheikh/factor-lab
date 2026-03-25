@@ -1,97 +1,103 @@
-"use server"
+"use server";
 
-import type { User } from "@supabase/supabase-js"
-import { headers } from "next/headers"
-import { redirect } from "next/navigation"
-import { z } from "zod"
-import { createClient } from "@/lib/supabase/server"
-import { createAdminClient } from "@/lib/supabase/admin"
-import { checkAccountCreationRateLimit, checkResendRateLimit } from "@/lib/supabase/rate-limit"
+import type { User } from "@supabase/supabase-js";
+import { headers } from "next/headers";
+import { redirect } from "next/navigation";
+import { z } from "zod";
+import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
+import { checkAccountCreationRateLimit, checkResendRateLimit } from "@/lib/supabase/rate-limit";
 
 async function transferGuestRuns(guestUserId: string, newUserId: string) {
-  const admin = createAdminClient()
-  await admin.from("runs").update({ user_id: newUserId }).eq("user_id", guestUserId)
+  const admin = createAdminClient();
+  await admin.from("runs").update({ user_id: newUserId }).eq("user_id", guestUserId);
   const notificationsUpdate = await admin
     .from("notifications")
     .update({ user_id: newUserId })
-    .eq("user_id", guestUserId)
+    .eq("user_id", guestUserId);
   if (notificationsUpdate.error && !notificationsUpdate.error.message.includes("does not exist")) {
-    console.warn("[auth] transferGuestRuns notifications update:", notificationsUpdate.error.message)
+    console.warn(
+      "[auth] transferGuestRuns notifications update:",
+      notificationsUpdate.error.message
+    );
   }
-  await admin.auth.admin.deleteUser(guestUserId)
+  await admin.auth.admin.deleteUser(guestUserId);
 }
 
-export type AuthState = { error: string } | { unverifiedEmail: string } | null
-export type ResendState = { error: string } | { success: true } | null
-export type ForgotPasswordState = { success: true } | { error: string } | null
-export type ResetPasswordState = { error: string } | null
+export type AuthState = { error: string } | { unverifiedEmail: string } | null;
+export type ResendState = { error: string } | { success: true } | null;
+export type ForgotPasswordState = { success: true } | { error: string } | null;
+export type ResetPasswordState = { error: string } | null;
 
 const passwordSchema = z
   .string()
   .min(8, "Password must be at least 8 characters")
   .regex(/[A-Z]/, "Password must contain at least one uppercase letter")
-  .regex(/[^a-zA-Z0-9]/, "Password must contain at least one special character")
+  .regex(/[^a-zA-Z0-9]/, "Password must contain at least one special character");
 
 const emailPasswordSchema = z.object({
   email: z.string().email("Invalid email address"),
   password: passwordSchema,
-})
+});
 
-const ACCOUNT_EXISTS_ERROR = "An account with this email already exists. Sign in to that account instead."
+const ACCOUNT_EXISTS_ERROR =
+  "An account with this email already exists. Sign in to that account instead.";
 
 async function checkCreateAccountRateLimit(): Promise<AuthState> {
-  const headersList = await headers()
-  const ip = headersList.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "unknown"
-  const { allowed, error } = await checkAccountCreationRateLimit(ip)
+  const headersList = await headers();
+  const ip = headersList.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "unknown";
+  const { allowed, error } = await checkAccountCreationRateLimit(ip);
 
   if (allowed) {
-    return null
+    return null;
   }
 
-  return { error: error ?? "Rate limit exceeded. Try again later." }
+  return { error: error ?? "Rate limit exceeded. Try again later." };
 }
 
 function isEmailAlreadyTakenError(message: string) {
-  const normalized = message.toLowerCase()
+  const normalized = message.toLowerCase();
 
   return (
     normalized.includes("already registered") ||
     normalized.includes("already been registered") ||
     normalized.includes("already exists") ||
     normalized.includes("duplicate key")
-  )
+  );
 }
 
 async function findUserByEmail(
   admin: ReturnType<typeof createAdminClient>,
   email: string
 ): Promise<User | null> {
-  const normalizedEmail = email.trim().toLowerCase()
-  const perPage = 1000
-  let page = 1
+  const normalizedEmail = email.trim().toLowerCase();
+  const perPage = 1000;
+  let page = 1;
 
   while (true) {
-    const { data, error } = await admin.auth.admin.listUsers({ page, perPage })
+    const { data, error } = await admin.auth.admin.listUsers({ page, perPage });
     if (error) {
-      console.warn("[auth] listUsers email lookup failed:", error.message)
-      return null
+      console.warn("[auth] listUsers email lookup failed:", error.message);
+      return null;
     }
 
-    const match = data.users.find((candidate) => candidate.email?.toLowerCase() === normalizedEmail)
+    const match = data.users.find(
+      (candidate) => candidate.email?.toLowerCase() === normalizedEmail
+    );
     if (match) {
-      return match
+      return match;
     }
 
     const hasMorePages =
       data.nextPage != null ||
       (data.lastPage > 0 && page < data.lastPage) ||
-      data.users.length === perPage
+      data.users.length === perPage;
 
     if (!hasMorePages) {
-      return null
+      return null;
     }
 
-    page += 1
+    page += 1;
   }
 }
 
@@ -100,24 +106,25 @@ async function refreshOrReauthenticateSession(
   email: string,
   password: string
 ): Promise<AuthState> {
-  const { data: refreshData, error: refreshError } = await supabase.auth.refreshSession()
+  const { data: refreshData, error: refreshError } = await supabase.auth.refreshSession();
 
   if (!refreshError && refreshData.session && refreshData.user?.user_metadata?.is_guest !== true) {
-    return null
+    return null;
   }
 
   const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({
     email,
     password,
-  })
+  });
 
   if (signInError || !signInData.session) {
     return {
-      error: "Account upgraded, but we couldn't refresh your session. Please sign in with your new email and password.",
-    }
+      error:
+        "Account upgraded, but we couldn't refresh your session. Please sign in with your new email and password.",
+    };
   }
 
-  return null
+  return null;
 }
 
 async function upgradeGuestUserInPlace({
@@ -126,16 +133,16 @@ async function upgradeGuestUserInPlace({
   email,
   password,
 }: {
-  supabase: Awaited<ReturnType<typeof createClient>>
-  guestUser: User
-  email: string
-  password: string
+  supabase: Awaited<ReturnType<typeof createClient>>;
+  guestUser: User;
+  email: string;
+  password: string;
 }): Promise<AuthState> {
-  const admin = createAdminClient()
-  const existingUser = await findUserByEmail(admin, email)
+  const admin = createAdminClient();
+  const existingUser = await findUserByEmail(admin, email);
 
   if (existingUser && existingUser.id !== guestUser.id) {
-    return { error: ACCOUNT_EXISTS_ERROR }
+    return { error: ACCOUNT_EXISTS_ERROR };
   }
 
   const { error: updateError } = await admin.auth.admin.updateUserById(guestUser.id, {
@@ -146,50 +153,53 @@ async function upgradeGuestUserInPlace({
       is_guest: false,
     },
     email_confirm: true,
-  })
+  });
 
   if (updateError) {
     if (isEmailAlreadyTakenError(updateError.message)) {
-      return { error: ACCOUNT_EXISTS_ERROR }
+      return { error: ACCOUNT_EXISTS_ERROR };
     }
 
-    return { error: updateError.message }
+    return { error: updateError.message };
   }
 
-  const sessionError = await refreshOrReauthenticateSession(supabase, email, password)
+  const sessionError = await refreshOrReauthenticateSession(supabase, email, password);
   if (sessionError) {
-    return sessionError
+    return sessionError;
   }
 
-  redirect("/dashboard")
+  redirect("/dashboard");
 }
 
 export async function upgradeGuestToEmailPassword({
   email,
   password,
 }: {
-  email: string
-  password: string
+  email: string;
+  password: string;
 }): Promise<AuthState> {
-  const parsed = emailPasswordSchema.safeParse({ email, password })
+  const parsed = emailPasswordSchema.safeParse({ email, password });
   if (!parsed.success) {
-    return { error: parsed.error.issues[0].message }
+    return { error: parsed.error.issues[0].message };
   }
 
-  const rateLimitState = await checkCreateAccountRateLimit()
+  const rateLimitState = await checkCreateAccountRateLimit();
   if (rateLimitState) {
-    return rateLimitState
+    return rateLimitState;
   }
 
-  const supabase = await createClient()
-  const { data: { user }, error: userError } = await supabase.auth.getUser()
+  const supabase = await createClient();
+  const {
+    data: { user },
+    error: userError,
+  } = await supabase.auth.getUser();
 
   if (userError || !user) {
-    return { error: "Sign in as a guest before upgrading your account." }
+    return { error: "Sign in as a guest before upgrading your account." };
   }
 
   if (user.user_metadata?.is_guest !== true) {
-    return { error: "Only guest accounts can be upgraded here." }
+    return { error: "Only guest accounts can be upgraded here." };
   }
 
   return upgradeGuestUserInPlace({
@@ -197,88 +207,82 @@ export async function upgradeGuestToEmailPassword({
     guestUser: user,
     email: parsed.data.email,
     password: parsed.data.password,
-  })
+  });
 }
 
-export async function upgradeGuestAction(
-  _prev: AuthState,
-  formData: FormData
-): Promise<AuthState> {
+export async function upgradeGuestAction(_prev: AuthState, formData: FormData): Promise<AuthState> {
   return upgradeGuestToEmailPassword({
     email: String(formData.get("email") ?? "").trim(),
     password: String(formData.get("password") ?? ""),
-  })
+  });
 }
 
 // ─── Sign In ─────────────────────────────────────────────────────────────────
 
-export async function signInAction(
-  _prev: AuthState,
-  formData: FormData
-): Promise<AuthState> {
+export async function signInAction(_prev: AuthState, formData: FormData): Promise<AuthState> {
   const raw = {
     email: formData.get("email"),
     password: formData.get("password"),
-  }
-  const parsed = emailPasswordSchema.safeParse(raw)
+  };
+  const parsed = emailPasswordSchema.safeParse(raw);
   if (!parsed.success) {
-    return { error: parsed.error.issues[0].message }
+    return { error: parsed.error.issues[0].message };
   }
 
-  const supabase = await createClient()
+  const supabase = await createClient();
 
   // Capture any active guest session before it gets replaced
-  const { data: { user: currentUser } } = await supabase.auth.getUser()
-  const guestUserId =
-    currentUser?.user_metadata?.is_guest === true ? currentUser.id : null
+  const {
+    data: { user: currentUser },
+  } = await supabase.auth.getUser();
+  const guestUserId = currentUser?.user_metadata?.is_guest === true ? currentUser.id : null;
 
   const { data: signInData, error } = await supabase.auth.signInWithPassword({
     email: parsed.data.email,
     password: parsed.data.password,
-  })
+  });
 
   if (error) {
-    const status = (error as { status?: number }).status
-    const message = error.message.toLowerCase()
+    const status = (error as { status?: number }).status;
+    const message = error.message.toLowerCase();
     if (status === 429 || message.includes("rate limit") || message.includes("too many")) {
-      return { error: "Too many sign-in attempts. Please wait a bit and try again." }
+      return { error: "Too many sign-in attempts. Please wait a bit and try again." };
     }
     if (message.includes("email not confirmed")) {
-      return { unverifiedEmail: parsed.data.email }
+      return { unverifiedEmail: parsed.data.email };
     }
-    return { error: "Invalid email or password." }
+    return { error: "Invalid email or password." };
   }
 
   // Transfer any guest runs to the newly signed-in account
   if (guestUserId && signInData.user && signInData.user.id !== guestUserId) {
-    await transferGuestRuns(guestUserId, signInData.user.id)
+    await transferGuestRuns(guestUserId, signInData.user.id);
   }
 
-  redirect("/dashboard")
+  redirect("/dashboard");
 }
 
 // ─── Sign Up ─────────────────────────────────────────────────────────────────
 
-export async function signUpAction(
-  _prev: AuthState,
-  formData: FormData
-): Promise<AuthState> {
+export async function signUpAction(_prev: AuthState, formData: FormData): Promise<AuthState> {
   const raw = {
     email: formData.get("email"),
     password: formData.get("password"),
-  }
-  const parsed = emailPasswordSchema.safeParse(raw)
+  };
+  const parsed = emailPasswordSchema.safeParse(raw);
   if (!parsed.success) {
-    return { error: parsed.error.issues[0].message }
+    return { error: parsed.error.issues[0].message };
   }
 
-  const rateLimitState = await checkCreateAccountRateLimit()
+  const rateLimitState = await checkCreateAccountRateLimit();
   if (rateLimitState) {
-    return rateLimitState
+    return rateLimitState;
   }
 
-  const supabase = await createClient()
-  const { data: { user: currentUser } } = await supabase.auth.getUser()
+  const supabase = await createClient();
+  const {
+    data: { user: currentUser },
+  } = await supabase.auth.getUser();
 
   if (currentUser?.user_metadata?.is_guest === true) {
     return upgradeGuestUserInPlace({
@@ -286,53 +290,51 @@ export async function signUpAction(
       guestUser: currentUser,
       email: parsed.data.email,
       password: parsed.data.password,
-    })
+    });
   }
 
   // Build the callback URL for email verification.
   // NEXT_PUBLIC_SITE_URL should be set to https://factor-lab.vercel.app in production.
   // Falls back to the request origin (works for local dev automatically).
   const origin =
-    process.env.NEXT_PUBLIC_SITE_URL ??
-    (await headers()).get("origin") ??
-    "http://localhost:3000"
-  const emailRedirectTo = `${origin}/auth/callback`
+    process.env.NEXT_PUBLIC_SITE_URL ?? (await headers()).get("origin") ?? "http://localhost:3000";
+  const emailRedirectTo = `${origin}/auth/callback`;
 
   const { data: signUpData, error } = await supabase.auth.signUp({
     email: parsed.data.email,
     password: parsed.data.password,
     options: { emailRedirectTo },
-  })
+  });
 
   if (error) {
     if (isEmailAlreadyTakenError(error.message)) {
-      return { error: ACCOUNT_EXISTS_ERROR }
+      return { error: ACCOUNT_EXISTS_ERROR };
     }
-    return { error: error.message }
+    return { error: error.message };
   }
 
   // When email confirmation is enabled, Supabase silently re-sends the confirmation
   // email for duplicate addresses instead of returning an error. An empty identities
   // array is the reliable signal that the email is already taken.
   if (signUpData.user && (signUpData.user.identities?.length ?? 0) === 0) {
-    return { error: ACCOUNT_EXISTS_ERROR }
+    return { error: ACCOUNT_EXISTS_ERROR };
   }
 
   if (!signUpData.session) {
     // Email confirmation required — session will be established when they click the link
-    const verifyUrl = `/login?tab=verify&email=${encodeURIComponent(parsed.data.email)}`
-    redirect(verifyUrl)
+    const verifyUrl = `/login?tab=verify&email=${encodeURIComponent(parsed.data.email)}`;
+    redirect(verifyUrl);
   }
 
-  redirect("/dashboard")
+  redirect("/dashboard");
 }
 
 // ─── Sign Out ────────────────────────────────────────────────────────────────
 
 export async function signOutAction(): Promise<void> {
-  const supabase = await createClient()
-  await supabase.auth.signOut()
-  redirect("/login")
+  const supabase = await createClient();
+  await supabase.auth.signOut();
+  redirect("/login");
 }
 
 // ─── Forgot Password ─────────────────────────────────────────────────────────
@@ -341,23 +343,21 @@ export async function forgotPasswordAction(
   _prev: ForgotPasswordState,
   formData: FormData
 ): Promise<ForgotPasswordState> {
-  const email = String(formData.get("email") ?? "").trim()
+  const email = String(formData.get("email") ?? "").trim();
   if (!email || !z.string().email().safeParse(email).success) {
-    return { error: "Please enter a valid email address." }
+    return { error: "Please enter a valid email address." };
   }
 
   const origin =
-    process.env.NEXT_PUBLIC_SITE_URL ??
-    (await headers()).get("origin") ??
-    "http://localhost:3000"
+    process.env.NEXT_PUBLIC_SITE_URL ?? (await headers()).get("origin") ?? "http://localhost:3000";
 
-  const supabase = await createClient()
+  const supabase = await createClient();
   await supabase.auth.resetPasswordForEmail(email, {
     redirectTo: `${origin}/auth/callback?next=/reset-password`,
-  })
+  });
 
   // Always return success — don't reveal whether the email exists
-  return { success: true }
+  return { success: true };
 }
 
 // ─── Reset Password ───────────────────────────────────────────────────────────
@@ -366,26 +366,26 @@ export async function resetPasswordAction(
   _prev: ResetPasswordState,
   formData: FormData
 ): Promise<ResetPasswordState> {
-  const password = String(formData.get("password") ?? "")
-  const confirmPassword = String(formData.get("confirmPassword") ?? "")
+  const password = String(formData.get("password") ?? "");
+  const confirmPassword = String(formData.get("confirmPassword") ?? "");
 
   if (password !== confirmPassword) {
-    return { error: "Passwords do not match." }
+    return { error: "Passwords do not match." };
   }
 
-  const parsed = passwordSchema.safeParse(password)
+  const parsed = passwordSchema.safeParse(password);
   if (!parsed.success) {
-    return { error: parsed.error.issues[0].message }
+    return { error: parsed.error.issues[0].message };
   }
 
-  const supabase = await createClient()
-  const { error } = await supabase.auth.updateUser({ password: parsed.data })
+  const supabase = await createClient();
+  const { error } = await supabase.auth.updateUser({ password: parsed.data });
 
   if (error) {
-    return { error: error.message }
+    return { error: error.message };
   }
 
-  redirect("/dashboard")
+  redirect("/dashboard");
 }
 
 // ─── Resend Verification Email ────────────────────────────────────────────────
@@ -394,32 +394,30 @@ export async function resendVerificationAction(
   _prev: ResendState,
   formData: FormData
 ): Promise<ResendState> {
-  const email = String(formData.get("email") ?? "").trim()
+  const email = String(formData.get("email") ?? "").trim();
   if (!email) {
-    return { error: "Email address is required." }
+    return { error: "Email address is required." };
   }
 
-  const { allowed, error: rateLimitError } = await checkResendRateLimit(email)
+  const { allowed, error: rateLimitError } = await checkResendRateLimit(email);
   if (!allowed) {
-    return { error: rateLimitError ?? "Please wait before requesting another verification email." }
+    return { error: rateLimitError ?? "Please wait before requesting another verification email." };
   }
 
   const origin =
-    process.env.NEXT_PUBLIC_SITE_URL ??
-    (await headers()).get("origin") ??
-    "http://localhost:3000"
-  const emailRedirectTo = `${origin}/auth/callback`
+    process.env.NEXT_PUBLIC_SITE_URL ?? (await headers()).get("origin") ?? "http://localhost:3000";
+  const emailRedirectTo = `${origin}/auth/callback`;
 
-  const supabase = await createClient()
+  const supabase = await createClient();
   const { error } = await supabase.auth.resend({
     type: "signup",
     email,
     options: { emailRedirectTo },
-  })
+  });
 
   if (error) {
-    return { error: error.message }
+    return { error: error.message };
   }
 
-  return { success: true }
+  return { success: true };
 }

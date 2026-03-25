@@ -1,10 +1,10 @@
-"use client"
+"use client";
 
-import { useState, useMemo, type ReactNode } from "react"
-import { MetricCards } from "@/components/metric-cards"
-import { EquityChart } from "@/components/equity-chart"
-import { computeMetrics } from "@/lib/metrics"
-import { getAlignedTimeframeEquityCurve, getDefaultTimeframe } from "@/lib/equity-curve"
+import { useState, useMemo, type ReactNode } from "react";
+import { MetricCards } from "@/components/metric-cards";
+import { EquityChart } from "@/components/equity-chart";
+import { computeMetrics } from "@/lib/metrics";
+import { getAlignedTimeframeEquityCurve, getDefaultTimeframe } from "@/lib/equity-curve";
 import {
   formatSignedPct,
   formatPct,
@@ -12,23 +12,22 @@ import {
   formatSignedPctPoints,
   formatSignedNum,
   formatDrawdown,
-} from "@/lib/format"
-import type { DashboardMetric } from "@/lib/types"
-import { BenchmarkOverlapWarning } from "@/components/benchmark-overlap-warning"
-
+} from "@/lib/format";
+import type { DashboardMetric } from "@/lib/types";
+import { BenchmarkOverlapWarning } from "@/components/benchmark-overlap-warning";
 
 interface EquityPoint {
-  date: string
-  portfolio: number
-  benchmark: number
+  date: string;
+  portfolio: number;
+  benchmark: number;
 }
 
 interface DashboardOverviewProps {
-  equityCurve: EquityPoint[]
-  benchmark: string
-  benchmarkOverlapConfirmed: boolean
-  storedTurnover: number | null
-  children?: ReactNode
+  equityCurve: EquityPoint[];
+  benchmark: string;
+  benchmarkOverlapConfirmed: boolean;
+  storedTurnover: number | null;
+  children?: ReactNode;
 }
 
 export function DashboardOverview({
@@ -38,41 +37,37 @@ export function DashboardOverview({
   storedTurnover,
   children,
 }: DashboardOverviewProps) {
-  const [selectedTf, setSelectedTf] = useState(() => getDefaultTimeframe(equityCurve))
+  const [selectedTf, setSelectedTf] = useState(() => getDefaultTimeframe(equityCurve));
 
   const sliced = useMemo(() => {
-    return getAlignedTimeframeEquityCurve(equityCurve, selectedTf)
-  }, [equityCurve, selectedTf])
+    return getAlignedTimeframeEquityCurve(equityCurve, selectedTf);
+  }, [equityCurve, selectedTf]);
 
   // Compute all metrics from the same slice shown in the chart.
   const computed = useMemo(() => {
-    if (sliced.length < 3) return null
-    const dates = sliced.map((p) => p.date)
-    const portfolio = sliced.map((p) => p.portfolio)
-    const benchmark = sliced.map((p) => p.benchmark)
-    return computeMetrics(dates, portfolio, benchmark)
-  }, [sliced])
+    if (sliced.length < 3) return null;
+    const dates = sliced.map((p) => p.date);
+    const portfolio = sliced.map((p) => p.portfolio);
+    const benchmark = sliced.map((p) => p.benchmark);
+    return computeMetrics(dates, portfolio, benchmark);
+  }, [sliced]);
 
   const dashboardMetrics: DashboardMetric[] = useMemo(() => {
-    const pm = computed?.portfolio ?? null
-    const bm = computed?.benchmark ?? null
-    const sp = computed?.sparklines
+    const pm = computed?.portfolio ?? null;
+    const bm = computed?.benchmark ?? null;
+    const sp = computed?.sparklines;
 
     // ── CAGR ──────────────────────────────────────────────────────────────
-    const cagrDelta =
-      pm?.cagr != null && bm?.cagr != null ? pm.cagr - bm.cagr : null
+    const cagrDelta = pm?.cagr != null && bm?.cagr != null ? pm.cagr - bm.cagr : null;
 
     // ── Sharpe ────────────────────────────────────────────────────────────
-    const sharpeDelta =
-      pm?.sharpe != null && bm?.sharpe != null ? pm.sharpe - bm.sharpe : null
+    const sharpeDelta = pm?.sharpe != null && bm?.sharpe != null ? pm.sharpe - bm.sharpe : null;
 
     // ── Max Drawdown ───────────────────────────────────────────────────────
     // Both are positive fractions (lower is better).
     // Negative delta means portfolio drew down less → good.
     const maxDDDelta =
-      pm?.maxDrawdown != null && bm?.maxDrawdown != null
-        ? pm.maxDrawdown - bm.maxDrawdown
-        : null
+      pm?.maxDrawdown != null && bm?.maxDrawdown != null ? pm.maxDrawdown - bm.maxDrawdown : null;
 
     return [
       {
@@ -117,17 +112,15 @@ export function DashboardOverview({
         // Use portfolio equity mini-trend as a neutral background sparkline.
         sparkline: sp?.equity ?? [],
       },
-    ]
-  }, [benchmark, computed, storedTurnover])
+    ];
+  }, [benchmark, computed, storedTurnover]);
 
   return (
     <>
-      {benchmarkOverlapConfirmed ? (
-        <BenchmarkOverlapWarning benchmark={benchmark} />
-      ) : null}
+      {benchmarkOverlapConfirmed ? <BenchmarkOverlapWarning benchmark={benchmark} /> : null}
       <MetricCards metrics={dashboardMetrics} />
 
-      <div className="grid grid-cols-1 lg:grid-cols-[280px_minmax(0,1fr)] xl:grid-cols-[340px_minmax(0,1fr)] gap-4">
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[280px_minmax(0,1fr)] xl:grid-cols-[340px_minmax(0,1fr)]">
         {children}
         <div className="flex flex-col gap-2">
           <EquityChart
@@ -139,5 +132,5 @@ export function DashboardOverview({
         </div>
       </div>
     </>
-  )
+  );
 }

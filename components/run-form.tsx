@@ -1,10 +1,17 @@
-"use client"
+"use client";
 
-import { useEffect, useRef, useState } from "react"
-import Link from "next/link"
-import { useRouter } from "next/navigation"
-import { ArrowLeft, CalendarIcon, ChevronsLeft, ChevronsRight, RefreshCcw, Zap } from "lucide-react"
-import { format } from "date-fns"
+import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+import {
+  ArrowLeft,
+  CalendarIcon,
+  ChevronsLeft,
+  ChevronsRight,
+  RefreshCcw,
+  Zap,
+} from "lucide-react";
+import { format } from "date-fns";
 import {
   createRun,
   ensureUniverseDataReady,
@@ -15,16 +22,16 @@ import {
   type RunConfigInput,
   type RunPreflightResult,
   type UniverseBatchStatusSummary,
-} from "@/app/actions/runs"
-import { Switch } from "@/components/ui/switch"
-import { Separator } from "@/components/ui/separator"
-import { Button } from "@/components/ui/button"
-import { Calendar } from "@/components/ui/calendar"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import { NativeSelect } from "@/components/ui/native-select"
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+} from "@/app/actions/runs";
+import { Switch } from "@/components/ui/switch";
+import { Separator } from "@/components/ui/separator";
+import { Button } from "@/components/ui/button";
+import { Calendar } from "@/components/ui/calendar";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { NativeSelect } from "@/components/ui/native-select";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   AlertDialog,
   AlertDialogCancel,
@@ -33,7 +40,7 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-} from "@/components/ui/alert-dialog"
+} from "@/components/ui/alert-dialog";
 import {
   Dialog,
   DialogContent,
@@ -41,35 +48,35 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog"
-import { STRATEGY_LABELS, type StrategyId } from "@/lib/types"
-import { BENCHMARK_OPTIONS } from "@/lib/benchmark"
-import type { UserSettings } from "@/lib/supabase/types"
-import { cn } from "@/lib/utils"
-import { ALL_UNIVERSES, UNIVERSE_SIZES, type UniverseId } from "@/lib/universe-config"
+} from "@/components/ui/dialog";
+import { STRATEGY_LABELS, type StrategyId } from "@/lib/types";
+import { BENCHMARK_OPTIONS } from "@/lib/benchmark";
+import type { UserSettings } from "@/lib/supabase/types";
+import { cn } from "@/lib/utils";
+import { ALL_UNIVERSES, UNIVERSE_SIZES, type UniverseId } from "@/lib/universe-config";
 import {
   STRATEGY_WARMUP_CALENDAR_DAYS,
   STRATEGY_WARMUP_DESCRIPTIONS,
   computeStrategyEarliestStart,
-} from "@/lib/strategy-warmup"
+} from "@/lib/strategy-warmup";
 
-const STRATEGIES = Object.entries(STRATEGY_LABELS) as [StrategyId, string][]
-const CAPITAL_MIN = 1_000
-const CAPITAL_MAX = 10_000_000
-const CAPITAL_DEFAULT = 100_000
+const STRATEGIES = Object.entries(STRATEGY_LABELS) as [StrategyId, string][];
+const CAPITAL_MIN = 1_000;
+const CAPITAL_MAX = 10_000_000;
+const CAPITAL_DEFAULT = 100_000;
 const CAPITAL_PRESETS = [
   { label: "10k", value: 10_000 },
   { label: "100k", value: 100_000 },
   { label: "1m", value: 1_000_000 },
-] as const
+] as const;
 
 function toInputDate(d: Date | undefined) {
-  return d ? format(d, "yyyy-MM-dd") : ""
+  return d ? format(d, "yyyy-MM-dd") : "";
 }
 
 function parseLocalDate(str: string): Date {
-  const [y, m, d] = str.split("-").map(Number)
-  return new Date(y, m - 1, d)
+  const [y, m, d] = str.split("-").map(Number);
+  return new Date(y, m - 1, d);
 }
 
 function resolveMinStartDate(
@@ -77,58 +84,56 @@ function resolveMinStartDate(
   universeValidFrom: string | null
 ): string | null {
   if (universeEarliestStart && universeValidFrom) {
-    return universeEarliestStart > universeValidFrom ? universeEarliestStart : universeValidFrom
+    return universeEarliestStart > universeValidFrom ? universeEarliestStart : universeValidFrom;
   }
-  return universeEarliestStart ?? universeValidFrom ?? null
+  return universeEarliestStart ?? universeValidFrom ?? null;
 }
 
 type DataCoverage = {
-  minDateStr: string
-  maxDateStr: string
-}
+  minDateStr: string;
+  maxDateStr: string;
+};
 
 type Props = {
-  defaults: UserSettings | null
-  dataCoverage?: DataCoverage | null
-  initialUniverseState: EnsureUniverseDataReadyResult
-  diagnostics?: boolean
-}
+  defaults: UserSettings | null;
+  dataCoverage?: DataCoverage | null;
+  initialUniverseState: EnsureUniverseDataReadyResult;
+  diagnostics?: boolean;
+};
 
 function formatPreflightPercent(value: number): string {
-  return `${(value * 100).toFixed(1)}%`
+  return `${(value * 100).toFixed(1)}%`;
 }
 
-function PreflightBenchmarkDiagnostics({
-  result,
-}: {
-  result: RunPreflightResult
-}) {
-  const benchmark = result.coverage.benchmark
-  if (!benchmark.windowStartUsed || !benchmark.windowEndUsed) return null
+function PreflightBenchmarkDiagnostics({ result }: { result: RunPreflightResult }) {
+  const benchmark = result.coverage.benchmark;
+  if (!benchmark.windowStartUsed || !benchmark.windowEndUsed) return null;
 
   return (
-    <div className="rounded-md border border-border/60 bg-muted/20 px-3 py-2.5">
-      <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+    <div className="border-border/60 bg-muted/20 rounded-md border px-3 py-2.5">
+      <p className="text-muted-foreground text-[11px] font-medium tracking-wide uppercase">
         Benchmark Diagnostics
       </p>
       <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-[12px]">
         <span className="text-muted-foreground">Window</span>
-        <span className="font-mono text-foreground">
+        <span className="text-foreground font-mono">
           {benchmark.windowStartUsed} to {benchmark.windowEndUsed}
         </span>
         <span className="text-muted-foreground">Source</span>
-        <span className="font-mono text-foreground">{benchmark.metricSourceUsed}</span>
+        <span className="text-foreground font-mono">{benchmark.metricSourceUsed}</span>
         <span className="text-muted-foreground">Expected days</span>
-        <span className="font-mono text-foreground">{benchmark.expectedDays}</span>
+        <span className="text-foreground font-mono">{benchmark.expectedDays}</span>
         <span className="text-muted-foreground">Actual days</span>
-        <span className="font-mono text-foreground">{benchmark.actualDays}</span>
+        <span className="text-foreground font-mono">{benchmark.actualDays}</span>
         <span className="text-muted-foreground">Missing days</span>
-        <span className="font-mono text-foreground">{benchmark.missingDays}</span>
+        <span className="text-foreground font-mono">{benchmark.missingDays}</span>
         <span className="text-muted-foreground">True missing rate</span>
-        <span className="font-mono text-foreground">{formatPreflightPercent(benchmark.trueMissingRate)}</span>
+        <span className="text-foreground font-mono">
+          {formatPreflightPercent(benchmark.trueMissingRate)}
+        </span>
       </div>
     </div>
-  )
+  );
 }
 
 function YearPickCalendar({
@@ -139,38 +144,42 @@ function YearPickCalendar({
   disabled,
   autoFocus,
 }: {
-  startMonth?: Date
-  endMonth?: Date
-  selected?: Date
-  onSelect: (d: Date | undefined) => void
-  disabled?: (d: Date) => boolean
-  autoFocus?: boolean
+  startMonth?: Date;
+  endMonth?: Date;
+  selected?: Date;
+  onSelect: (d: Date | undefined) => void;
+  disabled?: (d: Date) => boolean;
+  autoFocus?: boolean;
 }) {
-  const [yearPickMode, setYearPickMode] = useState(false)
-  const [displayMonth, setDisplayMonth] = useState<Date>(selected ?? startMonth ?? new Date())
+  const [yearPickMode, setYearPickMode] = useState(false);
+  const [displayMonth, setDisplayMonth] = useState<Date>(selected ?? startMonth ?? new Date());
 
-  const startYear = startMonth?.getFullYear() ?? 2015
-  const endYear = endMonth?.getFullYear() ?? new Date().getFullYear()
+  const startYear = startMonth?.getFullYear() ?? 2015;
+  const endYear = endMonth?.getFullYear() ?? new Date().getFullYear();
 
-  const prevMonth = new Date(displayMonth.getFullYear(), displayMonth.getMonth() - 1)
-  const nextMonth = new Date(displayMonth.getFullYear(), displayMonth.getMonth() + 1)
-  const prevYear = new Date(displayMonth.getFullYear() - 1, displayMonth.getMonth())
-  const nextYear = new Date(displayMonth.getFullYear() + 1, displayMonth.getMonth())
-  const canPrevMonth = !startMonth || prevMonth >= new Date(startMonth.getFullYear(), startMonth.getMonth())
-  const canNextMonth = !endMonth || nextMonth <= new Date(endMonth.getFullYear(), endMonth.getMonth())
-  const canPrevYear = !startMonth || prevYear >= new Date(startMonth.getFullYear(), startMonth.getMonth())
-  const canNextYear = !endMonth || nextYear <= new Date(endMonth.getFullYear(), endMonth.getMonth())
+  const prevMonth = new Date(displayMonth.getFullYear(), displayMonth.getMonth() - 1);
+  const nextMonth = new Date(displayMonth.getFullYear(), displayMonth.getMonth() + 1);
+  const prevYear = new Date(displayMonth.getFullYear() - 1, displayMonth.getMonth());
+  const nextYear = new Date(displayMonth.getFullYear() + 1, displayMonth.getMonth());
+  const canPrevMonth =
+    !startMonth || prevMonth >= new Date(startMonth.getFullYear(), startMonth.getMonth());
+  const canNextMonth =
+    !endMonth || nextMonth <= new Date(endMonth.getFullYear(), endMonth.getMonth());
+  const canPrevYear =
+    !startMonth || prevYear >= new Date(startMonth.getFullYear(), startMonth.getMonth());
+  const canNextYear =
+    !endMonth || nextYear <= new Date(endMonth.getFullYear(), endMonth.getMonth());
 
   return (
     <div className="p-3">
       {/* Custom nav header */}
-      <div className="flex items-center justify-between mb-2 h-8">
+      <div className="mb-2 flex h-8 items-center justify-between">
         <div className="flex items-center gap-0.5">
           <button
             type="button"
             onClick={() => canPrevYear && setDisplayMonth(prevYear)}
             disabled={!canPrevYear}
-            className="p-1 rounded-md hover:bg-accent text-muted-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-not-allowed"
+            className="hover:bg-accent text-muted-foreground hover:text-foreground rounded-md p-1 disabled:cursor-not-allowed disabled:opacity-30"
             aria-label="Previous year"
           >
             <ChevronsLeft className="size-3.5" />
@@ -179,17 +188,17 @@ function YearPickCalendar({
             type="button"
             onClick={() => canPrevMonth && setDisplayMonth(prevMonth)}
             disabled={!canPrevMonth}
-            className="p-1 rounded-md hover:bg-accent text-muted-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-not-allowed"
+            className="hover:bg-accent text-muted-foreground hover:text-foreground rounded-md p-1 disabled:cursor-not-allowed disabled:opacity-30"
             aria-label="Previous month"
           >
-            <ChevronsLeft className="size-3 -ml-2" />
+            <ChevronsLeft className="-ml-2 size-3" />
           </button>
         </div>
 
         <button
           type="button"
           onClick={() => setYearPickMode((v) => !v)}
-          className="text-sm font-medium px-2 py-0.5 rounded hover:bg-accent transition-colors"
+          className="hover:bg-accent rounded px-2 py-0.5 text-sm font-medium transition-colors"
           title="Pick a year"
         >
           {format(displayMonth, yearPickMode ? "yyyy" : "MMMM yyyy")}
@@ -200,16 +209,16 @@ function YearPickCalendar({
             type="button"
             onClick={() => canNextMonth && setDisplayMonth(nextMonth)}
             disabled={!canNextMonth}
-            className="p-1 rounded-md hover:bg-accent text-muted-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-not-allowed"
+            className="hover:bg-accent text-muted-foreground hover:text-foreground rounded-md p-1 disabled:cursor-not-allowed disabled:opacity-30"
             aria-label="Next month"
           >
-            <ChevronsRight className="size-3 -mr-2" />
+            <ChevronsRight className="-mr-2 size-3" />
           </button>
           <button
             type="button"
             onClick={() => canNextYear && setDisplayMonth(nextYear)}
             disabled={!canNextYear}
-            className="p-1 rounded-md hover:bg-accent text-muted-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-not-allowed"
+            className="hover:bg-accent text-muted-foreground hover:text-foreground rounded-md p-1 disabled:cursor-not-allowed disabled:opacity-30"
             aria-label="Next year"
           >
             <ChevronsRight className="size-3.5" />
@@ -219,17 +228,17 @@ function YearPickCalendar({
 
       {yearPickMode ? (
         /* Year grid */
-        <div className="grid grid-cols-4 gap-1 w-[220px]">
+        <div className="grid w-[220px] grid-cols-4 gap-1">
           {Array.from({ length: endYear - startYear + 1 }, (_, i) => startYear + i).map((year) => (
             <button
               key={year}
               type="button"
               onClick={() => {
-                setDisplayMonth(new Date(year, displayMonth.getMonth()))
-                setYearPickMode(false)
+                setDisplayMonth(new Date(year, displayMonth.getMonth()));
+                setYearPickMode(false);
               }}
               className={cn(
-                "py-1.5 text-sm rounded-md transition-colors",
+                "rounded-md py-1.5 text-sm transition-colors",
                 year === displayMonth.getFullYear()
                   ? "bg-primary text-primary-foreground"
                   : "hover:bg-accent"
@@ -258,221 +267,229 @@ function YearPickCalendar({
         />
       )}
     </div>
-  )
+  );
 }
 
-export function RunForm({ defaults, dataCoverage, initialUniverseState, diagnostics = false }: Props) {
-  const router = useRouter()
-  const formRef = useRef<HTMLFormElement>(null)
-  const lastLoadedUniverseRef = useRef(initialUniverseState.constraints.universe)
-  const coverageMin = dataCoverage ? parseLocalDate(dataCoverage.minDateStr) : null
-  const initialMaxEndDate = initialUniverseState.constraints.dataCutoffDate ?? dataCoverage?.maxDateStr ?? null
+export function RunForm({
+  defaults,
+  dataCoverage,
+  initialUniverseState,
+  diagnostics = false,
+}: Props) {
+  const router = useRouter();
+  const formRef = useRef<HTMLFormElement>(null);
+  const lastLoadedUniverseRef = useRef(initialUniverseState.constraints.universe);
+  const coverageMin = dataCoverage ? parseLocalDate(dataCoverage.minDateStr) : null;
+  const initialMaxEndDate =
+    initialUniverseState.constraints.dataCutoffDate ?? dataCoverage?.maxDateStr ?? null;
   const initialMinStartDate = resolveMinStartDate(
     initialUniverseState.constraints.universeEarliestStart,
-    initialUniverseState.constraints.universeValidFrom,
-  )
+    initialUniverseState.constraints.universeValidFrom
+  );
 
-  const [strategy, setStrategy] = useState<string>("")
-  const [benchmark, setBenchmark] = useState<typeof BENCHMARK_OPTIONS[number]>(
-    (defaults?.default_benchmark ?? "SPY") as typeof BENCHMARK_OPTIONS[number]
-  )
+  const [strategy, setStrategy] = useState<string>("");
+  const [benchmark, setBenchmark] = useState<(typeof BENCHMARK_OPTIONS)[number]>(
+    (defaults?.default_benchmark ?? "SPY") as (typeof BENCHMARK_OPTIONS)[number]
+  );
   const [universe, setUniverse] = useState<UniverseId>(
     (defaults?.default_universe ?? "ETF8") as UniverseId
-  )
-  const [universeState, setUniverseState] = useState(initialUniverseState)
-  const [batchStatus, setBatchStatus] = useState<UniverseBatchStatusSummary | null>(null)
-  const [allowBatchPolling, setAllowBatchPolling] = useState(Boolean(initialUniverseState.batchId))
-  const [isUniverseLoading, setIsUniverseLoading] = useState(false)
-  const [isPreflighting, setIsPreflighting] = useState(false)
-  const [isSubmitting, setIsSubmitting] = useState(false)
-  const [submitError, setSubmitError] = useState<string | null>(null)
-  const [dateAdjustmentMessage, setDateAdjustmentMessage] = useState<string | null>(null)
-  const [blockResult, setBlockResult] = useState<RunPreflightResult | null>(null)
-  const [warnResult, setWarnResult] = useState<RunPreflightResult | null>(null)
+  );
+  const [universeState, setUniverseState] = useState(initialUniverseState);
+  const [batchStatus, setBatchStatus] = useState<UniverseBatchStatusSummary | null>(null);
+  const [allowBatchPolling, setAllowBatchPolling] = useState(Boolean(initialUniverseState.batchId));
+  const [isUniverseLoading, setIsUniverseLoading] = useState(false);
+  const [isPreflighting, setIsPreflighting] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [dateAdjustmentMessage, setDateAdjustmentMessage] = useState<string | null>(null);
+  const [blockResult, setBlockResult] = useState<RunPreflightResult | null>(null);
+  const [warnResult, setWarnResult] = useState<RunPreflightResult | null>(null);
 
   const [startDate, setStartDate] = useState<Date | undefined>(() => {
-    const yearsBack = defaults?.default_date_range_years ?? 5
+    const yearsBack = defaults?.default_date_range_years ?? 5;
     if (initialMaxEndDate) {
-      const candidate = parseLocalDate(initialMaxEndDate)
-      candidate.setFullYear(candidate.getFullYear() - yearsBack)
+      const candidate = parseLocalDate(initialMaxEndDate);
+      candidate.setFullYear(candidate.getFullYear() - yearsBack);
       if (coverageMin && candidate < coverageMin) {
-        return new Date(coverageMin)
+        return new Date(coverageMin);
       }
       if (initialMinStartDate && format(candidate, "yyyy-MM-dd") < initialMinStartDate) {
-        return parseLocalDate(initialMinStartDate)
+        return parseLocalDate(initialMinStartDate);
       }
-      return candidate
+      return candidate;
     }
-    return undefined
-  })
-  const [endDate, setEndDate] = useState<Date | undefined>(
-    () => (initialMaxEndDate ? parseLocalDate(initialMaxEndDate) : undefined)
-  )
-  const [startOpen, setStartOpen] = useState(false)
-  const [endOpen, setEndOpen] = useState(false)
-  const [applyCosts, setApplyCosts] = useState(defaults?.apply_costs_default ?? true)
+    return undefined;
+  });
+  const [endDate, setEndDate] = useState<Date | undefined>(() =>
+    initialMaxEndDate ? parseLocalDate(initialMaxEndDate) : undefined
+  );
+  const [startOpen, setStartOpen] = useState(false);
+  const [endOpen, setEndOpen] = useState(false);
+  const [applyCosts, setApplyCosts] = useState(defaults?.apply_costs_default ?? true);
   const [capitalDisplay, setCapitalDisplay] = useState(
     (defaults?.default_initial_capital ?? CAPITAL_DEFAULT).toLocaleString("en-US")
-  )
+  );
   const [capitalValue, setCapitalValue] = useState(
     defaults?.default_initial_capital ?? CAPITAL_DEFAULT
-  )
+  );
   const [topNValue, setTopNValue] = useState(() =>
-    String(Math.min(defaults?.default_top_n ?? 5, UNIVERSE_SIZES[(defaults?.default_universe ?? "ETF8") as UniverseId] ?? 20))
-  )
+    String(
+      Math.min(
+        defaults?.default_top_n ?? 5,
+        UNIVERSE_SIZES[(defaults?.default_universe ?? "ETF8") as UniverseId] ?? 20
+      )
+    )
+  );
 
-  const topNMax = UNIVERSE_SIZES[universe] ?? 20
+  const topNMax = UNIVERSE_SIZES[universe] ?? 20;
   const minStartDateStr = resolveMinStartDate(
     universeState.constraints.universeEarliestStart,
-    universeState.constraints.universeValidFrom,
-  )
-  const maxEndDateStr = universeState.constraints.dataCutoffDate ?? dataCoverage?.maxDateStr ?? null
-  const startDateStr = startDate ? format(startDate, "yyyy-MM-dd") : null
-  const endDateStr = endDate ? format(endDate, "yyyy-MM-dd") : null
+    universeState.constraints.universeValidFrom
+  );
+  const maxEndDateStr =
+    universeState.constraints.dataCutoffDate ?? dataCoverage?.maxDateStr ?? null;
+  const startDateStr = startDate ? format(startDate, "yyyy-MM-dd") : null;
+  const endDateStr = endDate ? format(endDate, "yyyy-MM-dd") : null;
   const effectiveStrategyStart = strategy
     ? computeStrategyEarliestStart(strategy as StrategyId, dataCoverage?.minDateStr ?? null)
-    : null
+    : null;
   const showWarmupWarning =
     effectiveStrategyStart !== null &&
     startDateStr !== null &&
-    startDateStr < effectiveStrategyStart
-  const warmupDays = strategy ? STRATEGY_WARMUP_CALENDAR_DAYS[strategy as StrategyId] ?? 0 : 0
-  const warmupDesc = strategy ? STRATEGY_WARMUP_DESCRIPTIONS[strategy as StrategyId] ?? "" : ""
-  const hasMissingTickers = universeState.constraints.missingTickers.length > 0
-  const isUniverseReady = universeState.ready && !hasMissingTickers
+    startDateStr < effectiveStrategyStart;
+  const warmupDays = strategy ? (STRATEGY_WARMUP_CALENDAR_DAYS[strategy as StrategyId] ?? 0) : 0;
+  const warmupDesc = strategy ? (STRATEGY_WARMUP_DESCRIPTIONS[strategy as StrategyId] ?? "") : "";
+  const hasMissingTickers = universeState.constraints.missingTickers.length > 0;
+  const isUniverseReady = universeState.ready && !hasMissingTickers;
   const isQueueDisabled =
-    !strategy ||
-    isUniverseLoading ||
-    isPreflighting ||
-    isSubmitting ||
-    !isUniverseReady
+    !strategy || isUniverseLoading || isPreflighting || isSubmitting || !isUniverseReady;
 
   useEffect(() => {
-    const numericValue = Number(topNValue)
+    const numericValue = Number(topNValue);
     if (!Number.isFinite(numericValue) || numericValue < 1) {
-      setTopNValue(String(Math.min(defaults?.default_top_n ?? 5, topNMax)))
-      return
+      setTopNValue(String(Math.min(defaults?.default_top_n ?? 5, topNMax)));
+      return;
     }
     if (numericValue > topNMax) {
-      setTopNValue(String(topNMax))
+      setTopNValue(String(topNMax));
     }
-  // NOTE: topNValue is intentionally NOT in the dependency array.
-  // Including it causes a tight re-render loop that fights the user while typing
-  // (e.g. can't type "10" when max is 8 — it gets clamped on every keystroke).
-  // The effect only needs to run when the universe changes (topNMax) or when
-  // defaults load. The HTML max attribute + server-side validation guard the rest.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [defaults?.default_top_n, topNMax])
+    // NOTE: topNValue is intentionally NOT in the dependency array.
+    // Including it causes a tight re-render loop that fights the user while typing
+    // (e.g. can't type "10" when max is 8 — it gets clamped on every keystroke).
+    // The effect only needs to run when the universe changes (topNMax) or when
+    // defaults load. The HTML max attribute + server-side validation guard the rest.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [defaults?.default_top_n, topNMax]);
 
   async function loadUniverseState(universeId: UniverseId, options?: { createBatch?: boolean }) {
-    setIsUniverseLoading(true)
-    setSubmitError(null)
-    setBatchStatus(null)
-    lastLoadedUniverseRef.current = universeId
+    setIsUniverseLoading(true);
+    setSubmitError(null);
+    setBatchStatus(null);
+    lastLoadedUniverseRef.current = universeId;
     try {
-      const nextState = await ensureUniverseDataReady(universeId, options)
-      setAllowBatchPolling(options?.createBatch !== false && Boolean(nextState.batchId))
-      setUniverseState(nextState)
+      const nextState = await ensureUniverseDataReady(universeId, options);
+      setAllowBatchPolling(options?.createBatch !== false && Boolean(nextState.batchId));
+      setUniverseState(nextState);
     } catch (error) {
-      console.error("[RunForm] ensureUniverseDataReady failed:", error)
-      setSubmitError("Failed to load universe data readiness. Please try again.")
+      console.error("[RunForm] ensureUniverseDataReady failed:", error);
+      setSubmitError("Failed to load universe data readiness. Please try again.");
     } finally {
-      setIsUniverseLoading(false)
+      setIsUniverseLoading(false);
     }
   }
 
   useEffect(() => {
-    if (universe === lastLoadedUniverseRef.current) return
-    void loadUniverseState(universe, { createBatch: true })
-  }, [universe])
+    if (universe === lastLoadedUniverseRef.current) return;
+    void loadUniverseState(universe, { createBatch: true });
+  }, [universe]);
 
   useEffect(() => {
-    const batchId = universeState.batchId
-    if (!batchId || universeState.ready || !allowBatchPolling) return
-    const currentBatchId = batchId
+    const batchId = universeState.batchId;
+    if (!batchId || universeState.ready || !allowBatchPolling) return;
+    const currentBatchId = batchId;
 
-    let cancelled = false
-    let timeoutId: ReturnType<typeof setTimeout> | null = null
+    let cancelled = false;
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
 
     async function poll() {
-      const nextStatus = await getUniverseBatchStatusAction(currentBatchId)
-      if (cancelled) return
+      const nextStatus = await getUniverseBatchStatusAction(currentBatchId);
+      if (cancelled) return;
 
-      setBatchStatus(nextStatus)
+      setBatchStatus(nextStatus);
 
       if (!nextStatus || (nextStatus.status !== "pending" && nextStatus.status !== "running")) {
-        const refreshed = await ensureUniverseDataReady(universe, { createBatch: false })
-        if (cancelled) return
-        setAllowBatchPolling(false)
-        setUniverseState(refreshed)
-        return
+        const refreshed = await ensureUniverseDataReady(universe, { createBatch: false });
+        if (cancelled) return;
+        setAllowBatchPolling(false);
+        setUniverseState(refreshed);
+        return;
       }
 
-      timeoutId = setTimeout(poll, 2000)
+      timeoutId = setTimeout(poll, 2000);
     }
 
-    void poll()
+    void poll();
 
     return () => {
-      cancelled = true
-      if (timeoutId) clearTimeout(timeoutId)
-    }
-  }, [allowBatchPolling, universe, universeState.batchId, universeState.ready])
+      cancelled = true;
+      if (timeoutId) clearTimeout(timeoutId);
+    };
+  }, [allowBatchPolling, universe, universeState.batchId, universeState.ready]);
 
   useEffect(() => {
-    if (!startDateStr && !endDateStr) return
+    if (!startDateStr && !endDateStr) return;
 
-    let nextStart = startDate
-    let nextEnd = endDate
-    let snappedMessage: string | null = null
+    let nextStart = startDate;
+    let nextEnd = endDate;
+    let snappedMessage: string | null = null;
 
     if (minStartDateStr && startDateStr && startDateStr < minStartDateStr) {
-      nextStart = parseLocalDate(minStartDateStr)
-      snappedMessage = `Start date snapped to ${minStartDateStr} because some assets in ${universe} started later.`
+      nextStart = parseLocalDate(minStartDateStr);
+      snappedMessage = `Start date snapped to ${minStartDateStr} because some assets in ${universe} started later.`;
     }
 
     if (maxEndDateStr && endDateStr && endDateStr > maxEndDateStr) {
-      nextEnd = parseLocalDate(maxEndDateStr)
-      snappedMessage = `End date snapped to ${maxEndDateStr} because backtests stop at the current data cutoff.`
+      nextEnd = parseLocalDate(maxEndDateStr);
+      snappedMessage = `End date snapped to ${maxEndDateStr} because backtests stop at the current data cutoff.`;
     }
 
-    const nextStartStr = nextStart ? format(nextStart, "yyyy-MM-dd") : null
-    const nextEndStr = nextEnd ? format(nextEnd, "yyyy-MM-dd") : null
+    const nextStartStr = nextStart ? format(nextStart, "yyyy-MM-dd") : null;
+    const nextEndStr = nextEnd ? format(nextEnd, "yyyy-MM-dd") : null;
     if (nextStartStr && nextEndStr && nextStartStr > nextEndStr) {
-      nextEnd = parseLocalDate(nextStartStr)
-      snappedMessage = `End date snapped to ${nextStartStr} to keep the date range valid.`
+      nextEnd = parseLocalDate(nextStartStr);
+      snappedMessage = `End date snapped to ${nextStartStr} to keep the date range valid.`;
     }
 
-    if (nextStart !== startDate) setStartDate(nextStart)
-    if (nextEnd !== endDate) setEndDate(nextEnd)
-    if (snappedMessage) setDateAdjustmentMessage(snappedMessage)
-  }, [endDate, endDateStr, maxEndDateStr, minStartDateStr, startDate, startDateStr, universe])
+    if (nextStart !== startDate) setStartDate(nextStart);
+    if (nextEnd !== endDate) setEndDate(nextEnd);
+    if (snappedMessage) setDateAdjustmentMessage(snappedMessage);
+  }, [endDate, endDateStr, maxEndDateStr, minStartDateStr, startDate, startDateStr, universe]);
 
   function handleCapitalChange(e: React.ChangeEvent<HTMLInputElement>) {
-    setCapitalDisplay(e.target.value)
+    setCapitalDisplay(e.target.value);
   }
 
   function handleCapitalBlur() {
-    const cleaned = capitalDisplay.replace(/,/g, "").trim()
-    const n = Math.round(Number(cleaned))
+    const cleaned = capitalDisplay.replace(/,/g, "").trim();
+    const n = Math.round(Number(cleaned));
     if (!cleaned || !Number.isFinite(n) || isNaN(n)) {
-      setCapitalValue(CAPITAL_DEFAULT)
-      setCapitalDisplay(CAPITAL_DEFAULT.toLocaleString("en-US"))
-      return
+      setCapitalValue(CAPITAL_DEFAULT);
+      setCapitalDisplay(CAPITAL_DEFAULT.toLocaleString("en-US"));
+      return;
     }
-    const clamped = Math.max(CAPITAL_MIN, Math.min(CAPITAL_MAX, n))
-    setCapitalValue(clamped)
-    setCapitalDisplay(clamped.toLocaleString("en-US"))
+    const clamped = Math.max(CAPITAL_MIN, Math.min(CAPITAL_MAX, n));
+    setCapitalValue(clamped);
+    setCapitalDisplay(clamped.toLocaleString("en-US"));
   }
 
   function setCapitalPreset(value: number) {
-    setCapitalValue(value)
-    setCapitalDisplay(value.toLocaleString("en-US"))
+    setCapitalValue(value);
+    setCapitalDisplay(value.toLocaleString("en-US"));
   }
 
   function collectRunInput(): RunConfigInput | null {
-    if (!formRef.current || !startDate || !endDate) return null
-    const formData = new FormData(formRef.current)
+    if (!formRef.current || !startDate || !endDate) return null;
+    const formData = new FormData(formRef.current);
 
     return {
       name: String(formData.get("name") ?? ""),
@@ -486,181 +503,181 @@ export function RunForm({ defaults, dataCoverage, initialUniverseState, diagnost
       initial_capital: capitalValue,
       apply_costs: applyCosts,
       slippage_bps: Number(formData.get("slippage_bps") ?? 0),
-    }
+    };
   }
 
   async function runCreate(acknowledgeWarnings: boolean) {
-    const input = collectRunInput()
+    const input = collectRunInput();
     if (!input) {
-      setSubmitError("Please complete the form before queueing a backtest.")
-      return
+      setSubmitError("Please complete the form before queueing a backtest.");
+      return;
     }
 
-    setIsSubmitting(true)
-    setSubmitError(null)
+    setIsSubmitting(true);
+    setSubmitError(null);
     try {
       const result = await createRun({
         ...input,
         acknowledge_warnings: acknowledgeWarnings,
-      })
+      });
       if (result.ok) {
-        router.push(`/runs/${result.runId}`)
-        return
+        router.push(`/runs/${result.runId}`);
+        return;
       }
 
       if (result.preflight?.status === "block") {
-        setBlockResult(result.preflight)
+        setBlockResult(result.preflight);
       } else if (result.preflight?.status === "warn") {
-        setWarnResult(result.preflight)
+        setWarnResult(result.preflight);
       } else {
-        setSubmitError(result.error)
+        setSubmitError(result.error);
       }
     } catch (error) {
-      console.error("[RunForm] createRun failed:", error)
-      setSubmitError("Failed to queue the backtest. Please try again.")
+      console.error("[RunForm] createRun failed:", error);
+      setSubmitError("Failed to queue the backtest. Please try again.");
     } finally {
-      setIsSubmitting(false)
+      setIsSubmitting(false);
     }
   }
 
   async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
-    e.preventDefault()
-    setSubmitError(null)
-    setDateAdjustmentMessage(null)
+    e.preventDefault();
+    setSubmitError(null);
+    setDateAdjustmentMessage(null);
 
-    const input = collectRunInput()
+    const input = collectRunInput();
     if (!input) {
-      setSubmitError("Please complete the form before queueing a backtest.")
-      return
+      setSubmitError("Please complete the form before queueing a backtest.");
+      return;
     }
 
-    setIsPreflighting(true)
+    setIsPreflighting(true);
     try {
-      const result = await preflightRun(input)
+      const result = await preflightRun(input);
       if (result.status === "block") {
-        setBlockResult(result)
-        return
+        setBlockResult(result);
+        return;
       }
       if (result.status === "warn") {
-        setWarnResult(result)
-        return
+        setWarnResult(result);
+        return;
       }
-      await runCreate(false)
+      await runCreate(false);
     } catch (error) {
-      console.error("[RunForm] preflightRun failed:", error)
-      setSubmitError("Preflight failed. Please try again.")
+      console.error("[RunForm] preflightRun failed:", error);
+      setSubmitError("Preflight failed. Please try again.");
     } finally {
-      setIsPreflighting(false)
+      setIsPreflighting(false);
     }
   }
 
   async function applySuggestedFix(kind: string, value?: string | number | string[]) {
     if (kind === "clamp_start_date" && typeof value === "string") {
-      setStartDate(parseLocalDate(value))
-      setDateAdjustmentMessage(`We've moved your start date to ${value}.`)
-      setBlockResult(null)
-      setWarnResult(null)
-      return
+      setStartDate(parseLocalDate(value));
+      setDateAdjustmentMessage(`We've moved your start date to ${value}.`);
+      setBlockResult(null);
+      setWarnResult(null);
+      return;
     }
     if (kind === "clamp_end_date" && typeof value === "string") {
-      setEndDate(parseLocalDate(value))
-      setDateAdjustmentMessage(`We've moved your end date to ${value}.`)
-      setBlockResult(null)
-      setWarnResult(null)
-      return
+      setEndDate(parseLocalDate(value));
+      setDateAdjustmentMessage(`We've moved your end date to ${value}.`);
+      setBlockResult(null);
+      setWarnResult(null);
+      return;
     }
     if (kind === "set_top_n" && typeof value === "number") {
-      setTopNValue(String(value))
-      setDateAdjustmentMessage(`We've reduced Top N to ${value}.`)
-      setBlockResult(null)
-      setWarnResult(null)
-      return
+      setTopNValue(String(value));
+      setDateAdjustmentMessage(`We've reduced Top N to ${value}.`);
+      setBlockResult(null);
+      setWarnResult(null);
+      return;
     }
     if (kind === "reduce_top_n" && typeof value === "number") {
-      setTopNValue(String(value))
-      setDateAdjustmentMessage(`We've reduced Top N to ${value}.`)
-      setBlockResult(null)
-      setWarnResult(null)
-      return
+      setTopNValue(String(value));
+      setDateAdjustmentMessage(`We've reduced Top N to ${value}.`);
+      setBlockResult(null);
+      setWarnResult(null);
+      return;
     }
     if (kind === "change_benchmark" && typeof value === "string") {
-      setBenchmark(value as typeof BENCHMARK_OPTIONS[number])
-      setDateAdjustmentMessage(`We've switched the benchmark to ${value}.`)
-      setBlockResult(null)
-      setWarnResult(null)
-      return
+      setBenchmark(value as (typeof BENCHMARK_OPTIONS)[number]);
+      setDateAdjustmentMessage(`We've switched the benchmark to ${value}.`);
+      setBlockResult(null);
+      setWarnResult(null);
+      return;
     }
     if (kind === "retry_repairs" && Array.isArray(value)) {
-      setSubmitError(null)
-      const input = collectRunInput()
-      if (!input) return
+      setSubmitError(null);
+      const input = collectRunInput();
+      if (!input) return;
       const result = await retryPreflightRepairs({
         symbols: value,
         required_end: blockResult?.requiredEnd ?? warnResult?.requiredEnd ?? input.end_date,
-      })
+      });
       if (!result.ok) {
-        setSubmitError(result.error)
-        return
+        setSubmitError(result.error);
+        return;
       }
       if (value.some((symbol) => universeState.constraints.missingTickers.includes(symbol))) {
-        await loadUniverseState(universe, { createBatch: false })
+        await loadUniverseState(universe, { createBatch: false });
       }
-      setBlockResult(null)
-      setWarnResult(null)
-      setDateAdjustmentMessage("We restarted the data repair. Try queueing the run again once it finishes.")
+      setBlockResult(null);
+      setWarnResult(null);
+      setDateAdjustmentMessage(
+        "We restarted the data repair. Try queueing the run again once it finishes."
+      );
     }
   }
-  const blockIssues = (blockResult?.issues ?? []).filter((issue) => issue.severity === "blocked")
-  const warnIssues = (warnResult?.issues ?? []).filter((issue) => issue.severity === "warning")
+  const blockIssues = (blockResult?.issues ?? []).filter((issue) => issue.severity === "blocked");
+  const warnIssues = (warnResult?.issues ?? []).filter((issue) => issue.severity === "warning");
 
   return (
     <>
-      <div className="flex items-center gap-3 mb-1">
+      <div className="mb-1 flex items-center gap-3">
         <Link href="/runs">
           <Button
             variant="ghost"
             size="icon"
-            className="h-8 w-8 text-muted-foreground hover:text-foreground"
+            className="text-muted-foreground hover:text-foreground h-8 w-8"
             aria-label="Back to runs"
           >
-            <ArrowLeft className="w-4 h-4" />
+            <ArrowLeft className="h-4 w-4" />
           </Button>
         </Link>
-        <h2 className="text-base font-semibold text-foreground">New Backtest Run</h2>
+        <h2 className="text-foreground text-base font-semibold">New Backtest Run</h2>
       </div>
 
       <Card className="bg-card border-border">
-        <CardHeader className="pb-3 px-5 pt-5">
-          <CardTitle className="text-[13px] font-medium text-card-foreground">
+        <CardHeader className="px-5 pt-5 pb-3">
+          <CardTitle className="text-card-foreground text-[13px] font-medium">
             Configure Run
           </CardTitle>
         </CardHeader>
         <CardContent className="px-5 pb-5">
           <form ref={formRef} onSubmit={handleSubmit} className="flex flex-col gap-4">
             <div className="flex flex-col gap-1.5">
-              <Label htmlFor="name" className="text-[12px] font-medium text-muted-foreground">
+              <Label htmlFor="name" className="text-muted-foreground text-[12px] font-medium">
                 Run name
               </Label>
               <Input
                 id="name"
                 name="name"
                 placeholder="e.g. Momentum 2015–2020"
-                className="h-8 text-[13px] bg-secondary/40 border-border"
+                className="bg-secondary/40 border-border h-8 text-[13px]"
                 required
               />
             </div>
 
             <div className="flex flex-col gap-1.5">
-              <Label className="text-[12px] font-medium text-muted-foreground">
-                Strategy
-              </Label>
+              <Label className="text-muted-foreground text-[12px] font-medium">Strategy</Label>
               <NativeSelect
                 name="strategy_id"
                 value={strategy}
                 onChange={(e) => setStrategy(e.target.value)}
                 required
                 hasValue={!!strategy}
-                className="h-8 border-border bg-secondary/40 pl-3 pr-8 text-[13px]"
+                className="border-border bg-secondary/40 h-8 pr-8 pl-3 text-[13px]"
               >
                 <option value="" disabled>
                   Select a strategy...
@@ -674,16 +691,14 @@ export function RunForm({ defaults, dataCoverage, initialUniverseState, diagnost
             </div>
 
             <div className="flex flex-col gap-1.5">
-              <Label className="text-[12px] font-medium text-muted-foreground">
-                Universe
-              </Label>
+              <Label className="text-muted-foreground text-[12px] font-medium">Universe</Label>
               <NativeSelect
                 name="universe"
                 value={universe}
                 onChange={(e) => setUniverse(e.target.value as UniverseId)}
                 required
                 hasValue
-                className="h-8 border-border bg-secondary/40 pl-3 pr-8 text-[13px]"
+                className="border-border bg-secondary/40 h-8 pr-8 pl-3 text-[13px]"
               >
                 {ALL_UNIVERSES.map((preset) => (
                   <option key={preset} value={preset} className="text-foreground">
@@ -692,13 +707,13 @@ export function RunForm({ defaults, dataCoverage, initialUniverseState, diagnost
                 ))}
               </NativeSelect>
               {minStartDateStr ? (
-                <p className="text-[11px] text-muted-foreground mt-0.5">
+                <p className="text-muted-foreground mt-0.5 text-[11px]">
                   Earliest valid start for this universe:{" "}
-                  <span className="font-mono text-foreground">{minStartDateStr}</span>{" "}
-                  (because some assets started later).
+                  <span className="text-foreground font-mono">{minStartDateStr}</span> (because some
+                  assets started later).
                 </p>
               ) : (
-                <p className="text-[11px] text-muted-foreground mt-0.5">
+                <p className="text-muted-foreground mt-0.5 text-[11px]">
                   Earliest valid start will appear once every ticker in this universe is ingested.
                 </p>
               )}
@@ -710,19 +725,21 @@ export function RunForm({ defaults, dataCoverage, initialUniverseState, diagnost
             </div>
 
             {!isUniverseReady && (
-              <div className="flex items-start gap-2 px-2.5 py-2 rounded-md bg-amber-950/30 border border-amber-800/40">
-                <span className="text-amber-400 text-xs mt-0.5">!</span>
-                <div className="space-y-1 text-xs text-amber-300/80 leading-snug">
+              <div className="flex items-start gap-2 rounded-md border border-amber-800/40 bg-amber-950/30 px-2.5 py-2">
+                <span className="mt-0.5 text-xs text-amber-400">!</span>
+                <div className="space-y-1 text-xs leading-snug text-amber-300/80">
                   {isUniverseLoading ? (
                     <p>Checking universe data readiness...</p>
-                  ) : batchStatus && (batchStatus.status === "pending" || batchStatus.status === "running") ? (
+                  ) : batchStatus &&
+                    (batchStatus.status === "pending" || batchStatus.status === "running") ? (
                     <p>
-                      Preparing missing universe data: {batchStatus.completedJobs}/{batchStatus.totalJobs} jobs complete
-                      ({batchStatus.avgProgress}%).
+                      Preparing missing universe data: {batchStatus.completedJobs}/
+                      {batchStatus.totalJobs} jobs complete ({batchStatus.avgProgress}%).
                     </p>
                   ) : (
                     <p>
-                      Queue Backtest stays disabled until the selected universe is fully ingested and ready.
+                      Queue Backtest stays disabled until the selected universe is fully ingested
+                      and ready.
                     </p>
                   )}
                   {!isUniverseLoading && !universeState.batchId && hasMissingTickers && (
@@ -731,9 +748,9 @@ export function RunForm({ defaults, dataCoverage, initialUniverseState, diagnost
                       variant="outline"
                       size="sm"
                       onClick={() => void loadUniverseState(universe, { createBatch: true })}
-                      className="h-7 text-[11px] border-amber-700/50 bg-transparent text-amber-200 hover:bg-amber-950/40"
+                      className="h-7 border-amber-700/50 bg-transparent text-[11px] text-amber-200 hover:bg-amber-950/40"
                     >
-                      <RefreshCcw className="w-3 h-3 mr-1.5" />
+                      <RefreshCcw className="mr-1.5 h-3 w-3" />
                       Retry data repair
                     </Button>
                   )}
@@ -743,10 +760,8 @@ export function RunForm({ defaults, dataCoverage, initialUniverseState, diagnost
 
             <div className="flex flex-col gap-1.5">
               <div className="flex items-baseline justify-between">
-                <Label className="text-[12px] font-medium text-muted-foreground">
-                  Date range
-                </Label>
-                <span className="text-[11px] text-muted-foreground">
+                <Label className="text-muted-foreground text-[12px] font-medium">Date range</Label>
+                <span className="text-muted-foreground text-[11px]">
                   Min 2 years · 3+ recommended
                 </span>
               </div>
@@ -757,7 +772,7 @@ export function RunForm({ defaults, dataCoverage, initialUniverseState, diagnost
                       <Button
                         type="button"
                         variant="outline"
-                        className="h-8 w-full justify-start text-[13px] bg-secondary/40 border-border font-normal"
+                        className="bg-secondary/40 border-border h-8 w-full justify-start text-[13px] font-normal"
                       >
                         <CalendarIcon className="mr-2 size-3.5 opacity-60" />
                         {startDate ? format(startDate, "MMM d, yyyy") : "Start date"}
@@ -769,24 +784,24 @@ export function RunForm({ defaults, dataCoverage, initialUniverseState, diagnost
                         endMonth={maxEndDateStr ? parseLocalDate(maxEndDateStr) : new Date()}
                         selected={startDate}
                         onSelect={(d) => {
-                          if (!d) return
-                          const selectedStr = format(d, "yyyy-MM-dd")
+                          if (!d) return;
+                          const selectedStr = format(d, "yyyy-MM-dd");
                           if (minStartDateStr && selectedStr < minStartDateStr) {
-                            setStartDate(parseLocalDate(minStartDateStr))
-                            setDateAdjustmentMessage(`Start date snapped to ${minStartDateStr}.`)
-                            setStartOpen(false)
-                            return
+                            setStartDate(parseLocalDate(minStartDateStr));
+                            setDateAdjustmentMessage(`Start date snapped to ${minStartDateStr}.`);
+                            setStartOpen(false);
+                            return;
                           }
-                          if (maxEndDateStr && selectedStr > maxEndDateStr) return
-                          setStartDate(d)
-                          setStartOpen(false)
+                          if (maxEndDateStr && selectedStr > maxEndDateStr) return;
+                          setStartDate(d);
+                          setStartOpen(false);
                         }}
                         disabled={(d) => {
-                          const value = format(d, "yyyy-MM-dd")
-                          if (minStartDateStr && value < minStartDateStr) return true
-                          if (maxEndDateStr && value > maxEndDateStr) return true
-                          if (endDateStr && value > endDateStr) return true
-                          return false
+                          const value = format(d, "yyyy-MM-dd");
+                          if (minStartDateStr && value < minStartDateStr) return true;
+                          if (maxEndDateStr && value > maxEndDateStr) return true;
+                          if (endDateStr && value > endDateStr) return true;
+                          return false;
                         }}
                         autoFocus
                       />
@@ -799,7 +814,7 @@ export function RunForm({ defaults, dataCoverage, initialUniverseState, diagnost
                       <Button
                         type="button"
                         variant="outline"
-                        className="h-8 w-full justify-start text-[13px] bg-secondary/40 border-border font-normal"
+                        className="bg-secondary/40 border-border h-8 w-full justify-start text-[13px] font-normal"
                       >
                         <CalendarIcon className="mr-2 size-3.5 opacity-60" />
                         {endDate ? format(endDate, "MMM d, yyyy") : "End date"}
@@ -811,28 +826,28 @@ export function RunForm({ defaults, dataCoverage, initialUniverseState, diagnost
                         endMonth={maxEndDateStr ? parseLocalDate(maxEndDateStr) : new Date()}
                         selected={endDate}
                         onSelect={(d) => {
-                          if (!d) return
-                          const selectedStr = format(d, "yyyy-MM-dd")
+                          if (!d) return;
+                          const selectedStr = format(d, "yyyy-MM-dd");
                           if (startDateStr && selectedStr < startDateStr) {
-                            setEndDate(parseLocalDate(startDateStr))
-                            setDateAdjustmentMessage(`End date snapped to ${startDateStr}.`)
-                            setEndOpen(false)
-                            return
+                            setEndDate(parseLocalDate(startDateStr));
+                            setDateAdjustmentMessage(`End date snapped to ${startDateStr}.`);
+                            setEndOpen(false);
+                            return;
                           }
                           if (maxEndDateStr && selectedStr > maxEndDateStr) {
-                            setEndDate(parseLocalDate(maxEndDateStr))
-                            setDateAdjustmentMessage(`End date snapped to ${maxEndDateStr}.`)
-                            setEndOpen(false)
-                            return
+                            setEndDate(parseLocalDate(maxEndDateStr));
+                            setDateAdjustmentMessage(`End date snapped to ${maxEndDateStr}.`);
+                            setEndOpen(false);
+                            return;
                           }
-                          setEndDate(d)
-                          setEndOpen(false)
+                          setEndDate(d);
+                          setEndOpen(false);
                         }}
                         disabled={(d) => {
-                          const value = format(d, "yyyy-MM-dd")
-                          if (startDateStr && value < startDateStr) return true
-                          if (maxEndDateStr && value > maxEndDateStr) return true
-                          return false
+                          const value = format(d, "yyyy-MM-dd");
+                          if (startDateStr && value < startDateStr) return true;
+                          if (maxEndDateStr && value > maxEndDateStr) return true;
+                          return false;
                         }}
                         autoFocus
                       />
@@ -842,14 +857,14 @@ export function RunForm({ defaults, dataCoverage, initialUniverseState, diagnost
               </div>
               <div className="space-y-0.5">
                 {maxEndDateStr && (
-                  <p className="text-[11px] text-muted-foreground">
+                  <p className="text-muted-foreground text-[11px]">
                     Data current through{" "}
-                    <span className="font-mono font-medium text-foreground">{maxEndDateStr}</span>{" "}
+                    <span className="text-foreground font-mono font-medium">{maxEndDateStr}</span>{" "}
                     <span className="text-emerald-400">(Backtest-ready)</span>.
                   </p>
                 )}
                 {dataCoverage?.minDateStr && (
-                  <p className="text-[11px] text-muted-foreground">
+                  <p className="text-muted-foreground text-[11px]">
                     Earliest visible history: {dataCoverage.minDateStr}
                   </p>
                 )}
@@ -857,9 +872,9 @@ export function RunForm({ defaults, dataCoverage, initialUniverseState, diagnost
             </div>
 
             {showWarmupWarning && effectiveStrategyStart && (
-              <div className="flex items-start gap-2 px-2.5 py-2 rounded-md bg-amber-950/30 border border-amber-800/40">
-                <span className="text-amber-400 text-xs mt-0.5">!</span>
-                <p className="text-xs text-amber-300/80 leading-snug">
+              <div className="flex items-start gap-2 rounded-md border border-amber-800/40 bg-amber-950/30 px-2.5 py-2">
+                <span className="mt-0.5 text-xs text-amber-400">!</span>
+                <p className="text-xs leading-snug text-amber-300/80">
                   <strong>{STRATEGY_LABELS[strategy as StrategyId]}</strong> needs ~{warmupDays}{" "}
                   calendar days of history before it can trade.{warmupDesc ? ` ${warmupDesc}` : ""}{" "}
                   Earliest recommended start:{" "}
@@ -869,7 +884,10 @@ export function RunForm({ defaults, dataCoverage, initialUniverseState, diagnost
             )}
 
             <div className="flex flex-col gap-1.5">
-              <Label htmlFor="initial_capital" className="text-[12px] font-medium text-muted-foreground">
+              <Label
+                htmlFor="initial_capital"
+                className="text-muted-foreground text-[12px] font-medium"
+              >
                 Initial Capital ($)
               </Label>
               <div className="flex gap-2">
@@ -880,9 +898,9 @@ export function RunForm({ defaults, dataCoverage, initialUniverseState, diagnost
                   value={capitalDisplay}
                   onChange={handleCapitalChange}
                   onBlur={handleCapitalBlur}
-                  className="h-8 text-[13px] bg-secondary/40 border-border flex-1 min-w-0"
+                  className="bg-secondary/40 border-border h-8 min-w-0 flex-1 text-[13px]"
                 />
-                <div className="flex gap-1 shrink-0">
+                <div className="flex shrink-0 gap-1">
                   {CAPITAL_PRESETS.map(({ label, value }) => (
                     <Button
                       key={label}
@@ -891,8 +909,9 @@ export function RunForm({ defaults, dataCoverage, initialUniverseState, diagnost
                       size="sm"
                       onClick={() => setCapitalPreset(value)}
                       className={cn(
-                        "h-8 px-2.5 text-[11px] font-medium border-border bg-secondary/40",
-                        capitalValue === value && "border-emerald-700 text-emerald-400 bg-emerald-950/30"
+                        "border-border bg-secondary/40 h-8 px-2.5 text-[11px] font-medium",
+                        capitalValue === value &&
+                          "border-emerald-700 bg-emerald-950/30 text-emerald-400"
                       )}
                     >
                       {label}
@@ -902,18 +921,23 @@ export function RunForm({ defaults, dataCoverage, initialUniverseState, diagnost
               </div>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
               <div className="flex flex-col gap-1.5">
-                <Label htmlFor="benchmark" className="text-[12px] font-medium text-muted-foreground">
+                <Label
+                  htmlFor="benchmark"
+                  className="text-muted-foreground text-[12px] font-medium"
+                >
                   Benchmark
                 </Label>
                 <NativeSelect
                   id="benchmark"
                   name="benchmark"
                   value={benchmark}
-                  onChange={(e) => setBenchmark(e.target.value as typeof BENCHMARK_OPTIONS[number])}
+                  onChange={(e) =>
+                    setBenchmark(e.target.value as (typeof BENCHMARK_OPTIONS)[number])
+                  }
                   hasValue
-                  className="h-8 border-border bg-secondary/40 pl-3 pr-8 text-[13px]"
+                  className="border-border bg-secondary/40 h-8 pr-8 pl-3 text-[13px]"
                 >
                   {BENCHMARK_OPTIONS.map((b) => (
                     <option key={b} value={b} className="text-foreground">
@@ -923,7 +947,10 @@ export function RunForm({ defaults, dataCoverage, initialUniverseState, diagnost
                 </NativeSelect>
               </div>
               <div className="flex flex-col gap-1.5">
-                <Label htmlFor="costs_bps" className="text-[12px] font-medium text-muted-foreground">
+                <Label
+                  htmlFor="costs_bps"
+                  className="text-muted-foreground text-[12px] font-medium"
+                >
                   Costs (bps)
                 </Label>
                 <Input
@@ -934,12 +961,12 @@ export function RunForm({ defaults, dataCoverage, initialUniverseState, diagnost
                   max={500}
                   step={1}
                   defaultValue={defaults?.default_costs_bps ?? 10}
-                  className="h-8 text-[13px] bg-secondary/40 border-border"
+                  className="bg-secondary/40 border-border h-8 text-[13px]"
                   required
                 />
               </div>
               <div className="flex flex-col gap-1.5">
-                <Label htmlFor="top_n" className="text-[12px] font-medium text-muted-foreground">
+                <Label htmlFor="top_n" className="text-muted-foreground text-[12px] font-medium">
                   Top N
                 </Label>
                 <Input
@@ -951,24 +978,26 @@ export function RunForm({ defaults, dataCoverage, initialUniverseState, diagnost
                   step={1}
                   value={topNValue}
                   onChange={(e) => setTopNValue(e.target.value)}
-                  className="h-8 text-[13px] bg-secondary/40 border-border"
+                  className="bg-secondary/40 border-border h-8 text-[13px]"
                   required
                 />
-                <span className="text-[11px] text-muted-foreground">Max {topNMax} for {universe}</span>
+                <span className="text-muted-foreground text-[11px]">
+                  Max {topNMax} for {universe}
+                </span>
               </div>
             </div>
 
-            <Separator className="my-1 bg-border/50" />
+            <Separator className="bg-border/50 my-1" />
 
             <div className="flex items-center justify-between">
               <div className="flex flex-col gap-0.5">
                 <Label
                   htmlFor="apply_costs_toggle"
-                  className="text-[12px] font-medium text-foreground cursor-pointer"
+                  className="text-foreground cursor-pointer text-[12px] font-medium"
                 >
                   Apply transaction costs
                 </Label>
-                <span className="text-[11px] text-muted-foreground">
+                <span className="text-muted-foreground text-[11px]">
                   Deduct costs_bps from returns at each rebalance
                 </span>
               </div>
@@ -981,7 +1010,10 @@ export function RunForm({ defaults, dataCoverage, initialUniverseState, diagnost
             </div>
 
             <div className="flex flex-col gap-1.5">
-              <Label htmlFor="slippage_bps" className="text-[12px] font-medium text-muted-foreground">
+              <Label
+                htmlFor="slippage_bps"
+                className="text-muted-foreground text-[12px] font-medium"
+              >
                 Slippage (bps)
                 <span className="ml-1.5 text-[11px] font-normal opacity-60">optional</span>
               </Label>
@@ -993,18 +1025,18 @@ export function RunForm({ defaults, dataCoverage, initialUniverseState, diagnost
                 max={500}
                 step={1}
                 defaultValue={defaults?.slippage_bps_default ?? 0}
-                className="h-8 text-[13px] bg-secondary/40 border-border"
+                className="bg-secondary/40 border-border h-8 text-[13px]"
               />
             </div>
 
             {dateAdjustmentMessage && (
-              <p className="text-[12px] text-amber-300 bg-amber-950/30 border border-amber-800/40 rounded-md px-3 py-2">
+              <p className="rounded-md border border-amber-800/40 bg-amber-950/30 px-3 py-2 text-[12px] text-amber-300">
                 {dateAdjustmentMessage}
               </p>
             )}
 
             {submitError && (
-              <p className="text-[12px] text-destructive bg-destructive/8 border border-destructive/20 rounded-md px-3 py-2">
+              <p className="text-destructive bg-destructive/8 border-destructive/20 rounded-md border px-3 py-2 text-[12px]">
                 {submitError}
               </p>
             )}
@@ -1013,16 +1045,19 @@ export function RunForm({ defaults, dataCoverage, initialUniverseState, diagnost
               type="submit"
               size="sm"
               disabled={isQueueDisabled}
-              className="h-8 text-[12px] font-medium mt-1 w-full"
+              className="mt-1 h-8 w-full text-[12px] font-medium"
             >
-              <Zap className="w-3.5 h-3.5 mr-1.5" />
+              <Zap className="mr-1.5 h-3.5 w-3.5" />
               {isSubmitting ? "Queueing..." : isPreflighting ? "Checking..." : "Queue Backtest"}
             </Button>
           </form>
         </CardContent>
       </Card>
 
-      <AlertDialog open={blockResult !== null} onOpenChange={(open) => !open && setBlockResult(null)}>
+      <AlertDialog
+        open={blockResult !== null}
+        onOpenChange={(open) => !open && setBlockResult(null)}
+      >
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>This run is blocked</AlertDialogTitle>
@@ -1032,11 +1067,14 @@ export function RunForm({ defaults, dataCoverage, initialUniverseState, diagnost
           </AlertDialogHeader>
           <div className="space-y-3">
             {blockIssues.map((issue) => {
-              const action = issue.action
+              const action = issue.action;
               return (
-                <div key={`${issue.code}:${issue.reason}`} className="rounded-md border border-border/60 bg-secondary/30 px-3 py-2.5">
-                  <p className="text-sm text-foreground">{issue.reason}</p>
-                  <p className="mt-1 text-[12px] text-muted-foreground">{issue.fix}</p>
+                <div
+                  key={`${issue.code}:${issue.reason}`}
+                  className="border-border/60 bg-secondary/30 rounded-md border px-3 py-2.5"
+                >
+                  <p className="text-foreground text-sm">{issue.reason}</p>
+                  <p className="text-muted-foreground mt-1 text-[12px]">{issue.fix}</p>
                   {action && (
                     <div className="mt-2">
                       <Button
@@ -1050,7 +1088,7 @@ export function RunForm({ defaults, dataCoverage, initialUniverseState, diagnost
                     </div>
                   )}
                 </div>
-              )
+              );
             })}
             {diagnostics && blockResult && <PreflightBenchmarkDiagnostics result={blockResult} />}
           </div>
@@ -1064,17 +1102,18 @@ export function RunForm({ defaults, dataCoverage, initialUniverseState, diagnost
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Warning</DialogTitle>
-            <DialogDescription>
-              Review these warnings before you continue.
-            </DialogDescription>
+            <DialogDescription>Review these warnings before you continue.</DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
             {warnIssues.map((issue) => {
-              const action = issue.action
+              const action = issue.action;
               return (
-                <div key={`${issue.code}:${issue.reason}`} className="rounded-md border border-amber-800/40 bg-amber-950/20 px-3 py-2.5">
-                  <p className="text-sm text-foreground">{issue.reason}</p>
-                  <p className="mt-1 text-[12px] text-muted-foreground">{issue.fix}</p>
+                <div
+                  key={`${issue.code}:${issue.reason}`}
+                  className="rounded-md border border-amber-800/40 bg-amber-950/20 px-3 py-2.5"
+                >
+                  <p className="text-foreground text-sm">{issue.reason}</p>
+                  <p className="text-muted-foreground mt-1 text-[12px]">{issue.fix}</p>
                   {action && (
                     <div className="mt-2">
                       <Button
@@ -1088,7 +1127,7 @@ export function RunForm({ defaults, dataCoverage, initialUniverseState, diagnost
                     </div>
                   )}
                 </div>
-              )
+              );
             })}
             {diagnostics && warnResult && <PreflightBenchmarkDiagnostics result={warnResult} />}
           </div>
@@ -1099,8 +1138,8 @@ export function RunForm({ defaults, dataCoverage, initialUniverseState, diagnost
             <Button
               type="button"
               onClick={() => {
-                setWarnResult(null)
-                void runCreate(true)
+                setWarnResult(null);
+                void runCreate(true);
               }}
             >
               Acknowledge and Queue
@@ -1109,5 +1148,5 @@ export function RunForm({ defaults, dataCoverage, initialUniverseState, diagnost
         </DialogContent>
       </Dialog>
     </>
-  )
+  );
 }

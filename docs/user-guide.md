@@ -26,22 +26,23 @@ Navigate to **New Run** in the sidebar.
 
 ### Run Parameters
 
-| Field | Description |
-|-------|-------------|
-| **Run name** | A label you choose for easy identification |
-| **Strategy** | Which strategy to execute (see [Strategy Reference](strategies.md)) |
-| **Universe** | The investable asset set: ETF8, SP100 subset, or NASDAQ100 subset |
-| **Benchmark** | Index for relative performance comparison: SPY, QQQ, IWM, VTI, EFA, EEM, TLT, GLD, or VNQ |
-| **Start date** | First date of the backtest |
-| **End date** | Last date (capped at the data cutoff — "Current through" date) |
-| **Top N** | Number of assets to hold. Capped by universe size and strategy constraints |
-| **Costs (bps)** | Transaction cost per rebalance per unit of turnover. Default: 10 bps |
+| Field           | Description                                                                               |
+| --------------- | ----------------------------------------------------------------------------------------- |
+| **Run name**    | A label you choose for easy identification                                                |
+| **Strategy**    | Which strategy to execute (see [Strategy Reference](strategies.md))                       |
+| **Universe**    | The investable asset set: ETF8, SP100 subset, or NASDAQ100 subset                         |
+| **Benchmark**   | Index for relative performance comparison: SPY, QQQ, IWM, VTI, EFA, EEM, TLT, GLD, or VNQ |
+| **Start date**  | First date of the backtest                                                                |
+| **End date**    | Last date (capped at the data cutoff — "Current through" date)                            |
+| **Top N**       | Number of assets to hold. Capped by universe size and strategy constraints                |
+| **Costs (bps)** | Transaction cost per rebalance per unit of turnover. Default: 10 bps                      |
 
 Your default settings are saved in **Settings → Backtest** and pre-populate the form.
 
 ### Date Constraints
 
 The earliest allowed start date depends on:
+
 1. **Data availability** — the earliest date with sufficient price history in the database
 2. **Strategy warmup** — each strategy requires a look-back window before the first rebalance:
    - `equal_weight`: no warmup
@@ -60,11 +61,11 @@ When you submit the form, FactorLab runs a **preflight coverage check** before c
 
 ### Possible Outcomes
 
-| Outcome | What Happens |
-|---------|-------------|
-| **All data ready** | Run is created with status `queued`; backtest starts immediately |
-| **Data partially missing** | Run is created with status `waiting_for_data`; data ingestion jobs are queued automatically; the backtest chains automatically when ingestion finishes |
-| **Ticker inception date too late** | Run form shows an error with the minimum viable start date — no run is created |
+| Outcome                            | What Happens                                                                                                                                           |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **All data ready**                 | Run is created with status `queued`; backtest starts immediately                                                                                       |
+| **Data partially missing**         | Run is created with status `waiting_for_data`; data ingestion jobs are queued automatically; the backtest chains automatically when ingestion finishes |
+| **Ticker inception date too late** | Run form shows an error with the minimum viable start date — no run is created                                                                         |
 
 You never need to manually trigger data ingestion. If data is missing, the system handles it.
 
@@ -77,19 +78,20 @@ You never need to manually trigger data ingestion. If data is missing, the syste
 
 ## Run Statuses
 
-| Status | Meaning |
-|--------|---------|
-| `queued` | Job is waiting for the Python worker to pick it up |
-| `waiting_for_data` | Price data is being ingested; backtest will start automatically |
-| `running` | Worker is actively executing the backtest |
-| `completed` | Backtest finished successfully; results are available |
-| `failed` | Job encountered an unrecoverable error (see the Jobs page for the error message) |
+| Status             | Meaning                                                                          |
+| ------------------ | -------------------------------------------------------------------------------- |
+| `queued`           | Job is waiting for the Python worker to pick it up                               |
+| `waiting_for_data` | Price data is being ingested; backtest will start automatically                  |
+| `running`          | Worker is actively executing the backtest                                        |
+| `completed`        | Backtest finished successfully; results are available                            |
+| `failed`           | Job encountered an unrecoverable error (see the Jobs page for the error message) |
 
 ---
 
 ## Runs Page
 
 The **Runs** page lists all your runs. You can filter by:
+
 - Name (search bar)
 - Status
 - Strategy
@@ -124,6 +126,7 @@ Full rebalance log — one entry per rebalance date showing what was bought and 
 ### ML Insights Tab (ML strategies only)
 
 Shown only for `ml_ridge` and `ml_lightgbm` runs. Contains:
+
 - **Feature importance** — which factors are driving the model's predictions (displayed as % contribution)
 - **Predicted picks** — the model's most recent ranked asset list with predicted return
 - **Realized vs. predicted** — how well the model's predictions corresponded to actual returns
@@ -135,6 +138,7 @@ Shown only for `ml_ridge` and `ml_lightgbm` runs. Contains:
 On any completed run, the Overview tab has a **Download Report** button that delivers a self-contained HTML tearsheet. Open it in any browser — it requires no internet connection.
 
 The tearsheet includes:
+
 - Full equity curve chart
 - All performance metrics
 - Holdings snapshot
@@ -159,11 +163,11 @@ The **Data** page shows the health of the price database. Understanding it helps
 
 FactorLab uses a singleton **data cutoff date** as the global dataset boundary:
 
-| Label | Meaning |
-|-------|---------|
-| **Current through** | The effective end date for all data. Backtests and coverage checks cap at this date. |
+| Label                             | Meaning                                                                                                                                        |
+| --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Current through**               | The effective end date for all data. Backtests and coverage checks cap at this date.                                                           |
 | **Backtest-ready** (Monthly mode) | Updated once per month via a scheduled refresh. All coverage checks are relative to the cutoff date. This is the default and most stable mode. |
-| **Advanced** (Daily mode) | Updated daily. Provides more recent data but may have partial ingest coverage until the nightly patch completes. |
+| **Advanced** (Daily mode)         | Updated daily. Provides more recent data but may have partial ingest coverage until the nightly patch completes.                               |
 
 If `ENABLE_DAILY_UPDATES=false` (the default), the system operates in Backtest-ready / Monthly mode. The daily patch route exists but exits without action.
 
@@ -174,24 +178,26 @@ Assets are grouped by their earliest available start date ("tiers"). An asset li
 ### Benchmark Coverage
 
 Each supported benchmark has a coverage card showing:
+
 - Ingested date range
 - Coverage percentage vs. expected trading days
 - Health status
 
 ### Benchmark Coverage Job Statuses
 
-| Status | Meaning |
-|--------|---------|
-| **Good** | Coverage ≥ 99% with no gaps > 5 days |
-| **Warning** | Coverage between 95–99% or a gap between 5–10 days |
-| **Degraded** | Coverage < 95% or gap > 10 days |
-| **Retrying…** | A failed ingest is scheduled for automatic retry |
-| **Will retry at HH:MM** | Exponential backoff retry is scheduled |
-| **Blocked** | Permanent failure (e.g., invalid ticker, delisted). Requires manual intervention — click "Retry now" to force a new attempt |
+| Status                  | Meaning                                                                                                                     |
+| ----------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| **Good**                | Coverage ≥ 99% with no gaps > 5 days                                                                                        |
+| **Warning**             | Coverage between 95–99% or a gap between 5–10 days                                                                          |
+| **Degraded**            | Coverage < 95% or gap > 10 days                                                                                             |
+| **Retrying…**           | A failed ingest is scheduled for automatic retry                                                                            |
+| **Will retry at HH:MM** | Exponential backoff retry is scheduled                                                                                      |
+| **Blocked**             | Permanent failure (e.g., invalid ticker, delisted). Requires manual intervention — click "Retry now" to force a new attempt |
 
 ### Diagnostics
 
 The Data page includes an overall health assessment based on:
+
 - Missing data rate across all ingested tickers
 - Maximum gap length
 - Benchmark-specific coverage
@@ -209,6 +215,7 @@ If the selected benchmark ticker (e.g., SPY) is also an asset in the investable 
 ## Jobs Page
 
 The **Jobs** page shows all jobs associated with your runs:
+
 - Data ingest jobs (status: queued, running, completed, failed, blocked)
 - Backtest jobs (status: queued, running, completed, failed)
 

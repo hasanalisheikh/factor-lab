@@ -1,15 +1,15 @@
-import Link from "next/link"
-import { notFound } from "next/navigation"
-import { ArrowLeft, Download } from "lucide-react"
-import { Button } from "@/components/ui/button"
-import { Badge } from "@/components/ui/badge"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { AppShell } from "@/components/layout/app-shell"
-import { StatusBadge } from "@/components/status-badge"
-import { OverviewTab, type RunConfig } from "@/components/run-detail/overview-tab"
-import { HoldingsTab } from "@/components/run-detail/holdings-tab"
-import { TradesTab } from "@/components/run-detail/trades-tab"
-import { MlInsightsTab } from "@/components/run-detail/ml-insights-tab"
+import Link from "next/link";
+import { notFound } from "next/navigation";
+import { ArrowLeft, Download } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { AppShell } from "@/components/layout/app-shell";
+import { StatusBadge } from "@/components/status-badge";
+import { OverviewTab, type RunConfig } from "@/components/run-detail/overview-tab";
+import { HoldingsTab } from "@/components/run-detail/holdings-tab";
+import { TradesTab } from "@/components/run-detail/trades-tab";
+import { MlInsightsTab } from "@/components/run-detail/ml-insights-tab";
 import {
   getRunById,
   getEquityCurve,
@@ -21,62 +21,59 @@ import {
   getBenchmarkOverlapStateForRun,
   getIngestProgressForRun,
   type RunMetricsRow,
-} from "@/lib/supabase/queries"
-import { STRATEGY_LABELS, type StrategyId, type RunStatus } from "@/lib/types"
-import { JobStatusPanel } from "@/components/run-detail/job-status-panel"
-import { RunStatusPoller } from "@/components/run-detail/run-status-poller"
-import { GenerateReportButton } from "@/components/run-detail/generate-report-button"
-import { getRunBenchmark } from "@/lib/benchmark"
-import { BenchmarkOverlapWarning } from "@/components/benchmark-overlap-warning"
-import { RunDeleteButton } from "@/components/run-delete-button"
+} from "@/lib/supabase/queries";
+import { STRATEGY_LABELS, type StrategyId, type RunStatus } from "@/lib/types";
+import { JobStatusPanel } from "@/components/run-detail/job-status-panel";
+import { RunStatusPoller } from "@/components/run-detail/run-status-poller";
+import { GenerateReportButton } from "@/components/run-detail/generate-report-button";
+import { getRunBenchmark } from "@/lib/benchmark";
+import { BenchmarkOverlapWarning } from "@/components/benchmark-overlap-warning";
+import { RunDeleteButton } from "@/components/run-delete-button";
 
-export const maxDuration = 60
+export const maxDuration = 60;
 
 function getMetrics(value: RunMetricsRow[] | RunMetricsRow | null): RunMetricsRow | null {
-  if (Array.isArray(value)) return value[0] ?? null
-  return value ?? null
+  if (Array.isArray(value)) return value[0] ?? null;
+  return value ?? null;
 }
 
 function isUuid(value: string): boolean {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 }
 
-function getUniversePreset(run: {
-  universe?: string | null
-  run_params?: unknown
-}): string {
+function getUniversePreset(run: { universe?: string | null; run_params?: unknown }): string {
   if (typeof run.universe === "string" && run.universe.trim()) {
-    return run.universe.trim().toUpperCase()
+    return run.universe.trim().toUpperCase();
   }
   const nested =
     run.run_params && typeof run.run_params === "object"
       ? (run.run_params as Record<string, unknown>)["universe"]
-      : null
+      : null;
   if (typeof nested === "string" && nested.trim()) {
-    return nested.trim().toUpperCase()
+    return nested.trim().toUpperCase();
   }
-  return "ETF8"
+  return "ETF8";
 }
 
 function getRunPreflightSnapshot(run: { run_params?: unknown }): {
-  dataCutoffUsed: string | null
-  universeEarliestStart: string | null
-  benchmarkCoverageHealth: { status: string; reason: string | null } | null
+  dataCutoffUsed: string | null;
+  universeEarliestStart: string | null;
+  benchmarkCoverageHealth: { status: string; reason: string | null } | null;
 } {
   const params =
     run.run_params && typeof run.run_params === "object" && !Array.isArray(run.run_params)
       ? (run.run_params as Record<string, unknown>)
-      : null
+      : null;
   const preflight =
     params?.preflight && typeof params.preflight === "object" && !Array.isArray(params.preflight)
       ? (params.preflight as Record<string, unknown>)
-      : null
+      : null;
   const benchmarkHealth =
     preflight?.benchmark_coverage_health &&
     typeof preflight.benchmark_coverage_health === "object" &&
     !Array.isArray(preflight.benchmark_coverage_health)
       ? (preflight.benchmark_coverage_health as Record<string, unknown>)
-      : null
+      : null;
 
   return {
     dataCutoffUsed:
@@ -87,29 +84,38 @@ function getRunPreflightSnapshot(run: { run_params?: unknown }): {
         : null,
     benchmarkCoverageHealth: benchmarkHealth
       ? {
-        status:
-          typeof benchmarkHealth.status === "string"
-            ? benchmarkHealth.status.charAt(0).toUpperCase() + benchmarkHealth.status.slice(1)
-            : "—",
-        reason: typeof benchmarkHealth.reason === "string" ? benchmarkHealth.reason : null,
-      }
+          status:
+            typeof benchmarkHealth.status === "string"
+              ? benchmarkHealth.status.charAt(0).toUpperCase() + benchmarkHealth.status.slice(1)
+              : "—",
+          reason: typeof benchmarkHealth.reason === "string" ? benchmarkHealth.reason : null,
+        }
       : null,
-  }
+  };
 }
 
 export default async function RunDetailPage({ params }: { params: Promise<{ id: string }> }) {
-  const { id } = await params
+  const { id } = await params;
   if (!isUuid(id)) {
-    notFound()
+    notFound();
   }
 
-  const run = await getRunById(id)
+  const run = await getRunById(id);
 
   if (!run) {
-    notFound()
+    notFound();
   }
 
-  const [equityCurve, job, report, modelMetadata, modelPredictions, positions, benchmarkOverlap, ingestProgress] = await Promise.all([
+  const [
+    equityCurve,
+    job,
+    report,
+    modelMetadata,
+    modelPredictions,
+    positions,
+    benchmarkOverlap,
+    ingestProgress,
+  ] = await Promise.all([
     getEquityCurve(id),
     getJobByRunId(id),
     getReportByRunId(id),
@@ -119,23 +125,25 @@ export default async function RunDetailPage({ params }: { params: Promise<{ id: 
     getBenchmarkOverlapStateForRun(run),
     // Only needed while waiting for data ingestion to complete.
     run.status === "waiting_for_data" ? getIngestProgressForRun(id) : Promise.resolve(null),
-  ])
+  ]);
 
-  const metrics = getMetrics(run.run_metrics)
-  const status = run.status as RunStatus
-  const strategyLabel = STRATEGY_LABELS[run.strategy_id as StrategyId] ?? run.strategy_id
-  const universePreset = getUniversePreset(run)
-  const universeCount = Array.isArray(run.universe_symbols) ? run.universe_symbols.length : null
-  const canGenerateReport = status === "completed" && equityCurve.length > 0 && metrics != null
+  const metrics = getMetrics(run.run_metrics);
+  const status = run.status as RunStatus;
+  const strategyLabel = STRATEGY_LABELS[run.strategy_id as StrategyId] ?? run.strategy_id;
+  const universePreset = getUniversePreset(run);
+  const universeCount = Array.isArray(run.universe_symbols) ? run.universe_symbols.length : null;
+  const canGenerateReport = status === "completed" && equityCurve.length > 0 && metrics != null;
 
-  const resolvedReport = report
+  const resolvedReport = report;
 
-  const costsBps = run.costs_bps ?? 10
-  const benchmarkTicker = getRunBenchmark(run)
-  const isMlRun = run.strategy_id === "ml_ridge" || run.strategy_id === "ml_lightgbm"
-  const preflightSnapshot = getRunPreflightSnapshot(run)
-  const universeSymbols = Array.isArray(run.universe_symbols) ? (run.universe_symbols as string[]) : []
-  const dualClassDisclosure = universeSymbols.includes("GOOGL") && universeSymbols.includes("GOOG")
+  const costsBps = run.costs_bps ?? 10;
+  const benchmarkTicker = getRunBenchmark(run);
+  const isMlRun = run.strategy_id === "ml_ridge" || run.strategy_id === "ml_lightgbm";
+  const preflightSnapshot = getRunPreflightSnapshot(run);
+  const universeSymbols = Array.isArray(run.universe_symbols)
+    ? (run.universe_symbols as string[])
+    : [];
+  const dualClassDisclosure = universeSymbols.includes("GOOGL") && universeSymbols.includes("GOOG");
 
   const runConfig: RunConfig = {
     strategyLabel,
@@ -151,39 +159,37 @@ export default async function RunDetailPage({ params }: { params: Promise<{ id: 
     universeEarliestStart: preflightSnapshot.universeEarliestStart,
     benchmarkCoverageHealth: preflightSnapshot.benchmarkCoverageHealth,
     dualClassDisclosure,
-  }
+  };
 
   return (
     <AppShell title={run.name}>
       {/* Header row */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-        <div className="flex items-center gap-3 min-w-0">
+      <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
+        <div className="flex min-w-0 items-center gap-3">
           <Link href="/runs">
             <Button
               variant="ghost"
               size="icon"
-              className="h-8 w-8 text-muted-foreground hover:text-foreground shrink-0"
+              className="text-muted-foreground hover:text-foreground h-8 w-8 shrink-0"
               aria-label="Back to runs"
             >
-              <ArrowLeft className="w-4 h-4" />
+              <ArrowLeft className="h-4 w-4" />
             </Button>
           </Link>
-          <div className="flex items-center gap-2.5 min-w-0">
+          <div className="flex min-w-0 items-center gap-2.5">
             <div className="min-w-0">
-              <div className="flex items-center gap-2.5 min-w-0">
-                <h2 className="text-base font-semibold text-foreground truncate">
-                  {run.name}
-                </h2>
+              <div className="flex min-w-0 items-center gap-2.5">
+                <h2 className="text-foreground truncate text-base font-semibold">{run.name}</h2>
                 <Badge
                   variant="outline"
-                  className="text-[10px] font-medium px-2 py-0 h-5 leading-5 rounded-md border-border text-muted-foreground bg-secondary/50 shrink-0"
+                  className="border-border text-muted-foreground bg-secondary/50 h-5 shrink-0 rounded-md px-2 py-0 text-[10px] leading-5 font-medium"
                 >
                   {strategyLabel}
                 </Badge>
                 <StatusBadge status={status} />
               </div>
               {/* Run configuration line */}
-              <p className="text-[12px] text-muted-foreground mt-0.5 flex flex-wrap gap-x-2">
+              <p className="text-muted-foreground mt-0.5 flex flex-wrap gap-x-2 text-[12px]">
                 <span>
                   Universe: {universePreset}
                   {typeof universeCount === "number" ? ` (${universeCount})` : ""}
@@ -198,16 +204,16 @@ export default async function RunDetailPage({ params }: { params: Promise<{ id: 
             </div>
           </div>
         </div>
-        <div className="flex items-center gap-2 shrink-0">
+        <div className="flex shrink-0 items-center gap-2">
           {resolvedReport?.url ? (
             <Button
               asChild
               variant="outline"
               size="sm"
-              className="h-8 text-[12px] font-medium border-border text-muted-foreground hover:text-foreground shrink-0"
+              className="border-border text-muted-foreground hover:text-foreground h-8 shrink-0 text-[12px] font-medium"
             >
               <a href={resolvedReport.url} target="_blank" rel="noreferrer">
-                <Download className="w-3.5 h-3.5 mr-1.5" />
+                <Download className="mr-1.5 h-3.5 w-3.5" />
                 Download Report
               </a>
             </Button>
@@ -218,9 +224,9 @@ export default async function RunDetailPage({ params }: { params: Promise<{ id: 
               variant="outline"
               size="sm"
               disabled
-              className="h-8 text-[12px] font-medium border-border text-muted-foreground shrink-0"
+              className="border-border text-muted-foreground h-8 shrink-0 text-[12px] font-medium"
             >
-              <Download className="w-3.5 h-3.5 mr-1.5" />
+              <Download className="mr-1.5 h-3.5 w-3.5" />
               Report Unavailable
             </Button>
           )}
@@ -231,41 +237,39 @@ export default async function RunDetailPage({ params }: { params: Promise<{ id: 
       {/* Job status panel — visible for queued / running / waiting_for_data runs */}
       <JobStatusPanel job={job} runStatus={status} ingestProgress={ingestProgress} />
       <RunStatusPoller status={status} />
-      {benchmarkOverlap.confirmed ? (
-        <BenchmarkOverlapWarning benchmark={benchmarkTicker} />
-      ) : null}
+      {benchmarkOverlap.confirmed ? <BenchmarkOverlapWarning benchmark={benchmarkTicker} /> : null}
 
       {/* Tabs */}
       <Tabs defaultValue="overview" className="w-full">
-        <div className="overflow-x-auto w-full">
-        <TabsList className="bg-secondary/50 h-9 p-0.5 rounded-lg w-max">
-          <TabsTrigger
-            value="overview"
-            className="text-[12px] font-medium h-8 rounded-md px-3 data-[state=active]:bg-accent data-[state=active]:text-accent-foreground"
-          >
-            Overview
-          </TabsTrigger>
-          <TabsTrigger
-            value="holdings"
-            className="text-[12px] font-medium h-8 rounded-md px-3 data-[state=active]:bg-accent data-[state=active]:text-accent-foreground"
-          >
-            Holdings
-          </TabsTrigger>
-          <TabsTrigger
-            value="trades"
-            className="text-[12px] font-medium h-8 rounded-md px-3 data-[state=active]:bg-accent data-[state=active]:text-accent-foreground"
-          >
-            Trades
-          </TabsTrigger>
-          {isMlRun && (
+        <div className="w-full overflow-x-auto">
+          <TabsList className="bg-secondary/50 h-9 w-max rounded-lg p-0.5">
             <TabsTrigger
-              value="ml-insights"
-              className="text-[12px] font-medium h-8 rounded-md px-3 data-[state=active]:bg-accent data-[state=active]:text-accent-foreground"
+              value="overview"
+              className="data-[state=active]:bg-accent data-[state=active]:text-accent-foreground h-8 rounded-md px-3 text-[12px] font-medium"
             >
-              ML Insights
+              Overview
             </TabsTrigger>
-          )}
-        </TabsList>
+            <TabsTrigger
+              value="holdings"
+              className="data-[state=active]:bg-accent data-[state=active]:text-accent-foreground h-8 rounded-md px-3 text-[12px] font-medium"
+            >
+              Holdings
+            </TabsTrigger>
+            <TabsTrigger
+              value="trades"
+              className="data-[state=active]:bg-accent data-[state=active]:text-accent-foreground h-8 rounded-md px-3 text-[12px] font-medium"
+            >
+              Trades
+            </TabsTrigger>
+            {isMlRun && (
+              <TabsTrigger
+                value="ml-insights"
+                className="data-[state=active]:bg-accent data-[state=active]:text-accent-foreground h-8 rounded-md px-3 text-[12px] font-medium"
+              >
+                ML Insights
+              </TabsTrigger>
+            )}
+          </TabsList>
         </div>
 
         <TabsContent value="overview" className="mt-4">
@@ -293,5 +297,5 @@ export default async function RunDetailPage({ params }: { params: Promise<{ id: 
         )}
       </Tabs>
     </AppShell>
-  )
+  );
 }

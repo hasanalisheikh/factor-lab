@@ -1,28 +1,25 @@
-"use client"
+"use client";
 
-import Link from "next/link"
-import { usePathname } from "next/navigation"
-import { cn } from "@/lib/utils"
-import { Logo } from "@/components/logo"
-import { mainNavItems, bottomNavItems, isNavItemActive } from "@/lib/nav-items"
+import Link from "next/link";
+import { usePathname } from "next/navigation";
+import { cn } from "@/lib/utils";
+import { Logo } from "@/components/logo";
+import { mainNavItems, bottomNavItems, isNavItemActive } from "@/lib/nav-items";
 
 export function MobileNav() {
-  const pathname = usePathname()
-  const allItems = [...mainNavItems, ...bottomNavItems]
+  const pathname = usePathname();
+  const allItems = [...mainNavItems, ...bottomNavItems];
 
   return (
-    <div className="flex flex-col h-full">
-      <div className="flex items-center px-5 h-14 border-b border-sidebar-border">
+    <div className="flex h-full flex-col">
+      <div className="border-sidebar-border flex h-14 items-center border-b px-5">
         <Link href="/dashboard" aria-label="Go to dashboard">
           <Logo size={52} />
         </Link>
       </div>
-      <nav
-        className="flex-1 flex flex-col gap-0.5 px-3 py-4"
-        aria-label="Mobile navigation"
-      >
+      <nav className="flex flex-1 flex-col gap-0.5 px-3 py-4" aria-label="Mobile navigation">
         {[...mainNavItems, ...bottomNavItems].map((item) => {
-          const active = isNavItemActive(item, pathname, allItems)
+          const active = isNavItemActive(item, pathname, allItems);
           return (
             <Link
               key={item.name}
@@ -35,12 +32,12 @@ export function MobileNav() {
               )}
               aria-current={active ? "page" : undefined}
             >
-              <item.icon className="w-[15px] h-[15px] shrink-0" />
+              <item.icon className="h-[15px] w-[15px] shrink-0" />
               {item.name}
             </Link>
-          )
+          );
         })}
       </nav>
     </div>
-  )
+  );
 }

@@ -1,6 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from "vitest"
-import type { RunPreflightSnapshot } from "@/lib/coverage-check"
-import type { UniverseConstraintsSnapshot } from "@/lib/supabase/queries"
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { RunPreflightSnapshot } from "@/lib/coverage-check";
+import type { UniverseConstraintsSnapshot } from "@/lib/supabase/queries";
 
 const {
   createClientMock,
@@ -17,41 +17,42 @@ const {
   getUniverseBatchStatusMock: vi.fn(),
   evaluateRunPreflightSnapshotMock: vi.fn(),
   redirectMock: vi.fn((path: string) => {
-    throw new Error(`REDIRECT:${path}`)
+    throw new Error(`REDIRECT:${path}`);
   }),
   revalidatePathMock: vi.fn(),
-}))
+}));
 
 vi.mock("next/navigation", () => ({
   redirect: redirectMock,
-}))
+}));
 
 vi.mock("next/cache", () => ({
   revalidatePath: revalidatePathMock,
-}))
+}));
 
 vi.mock("@/lib/supabase/server", () => ({
   createClient: createClientMock,
-}))
+}));
 
 vi.mock("@/lib/supabase/admin", () => ({
   createAdminClient: createAdminClientMock,
-}))
+}));
 
 vi.mock("@/lib/supabase/queries", () => ({
   getUniverseConstraintsSnapshot: getUniverseConstraintsSnapshotMock,
   getUniverseBatchStatus: getUniverseBatchStatusMock,
-}))
+}));
 
 vi.mock("@/lib/coverage-check", async () => {
-  const actual = await vi.importActual<typeof import("@/lib/coverage-check")>("@/lib/coverage-check")
+  const actual =
+    await vi.importActual<typeof import("@/lib/coverage-check")>("@/lib/coverage-check");
   return {
     ...actual,
     evaluateRunPreflightSnapshot: evaluateRunPreflightSnapshotMock,
-  }
-})
+  };
+});
 
-import { createRun, deleteRunAction, preflightRun } from "@/app/actions/runs"
+import { createRun, deleteRunAction, preflightRun } from "@/app/actions/runs";
 
 const BASE_CONSTRAINTS: UniverseConstraintsSnapshot = {
   universe: "ETF8",
@@ -62,26 +63,26 @@ const BASE_CONSTRAINTS: UniverseConstraintsSnapshot = {
   totalCount: 8,
   ready: true,
   dataCutoffDate: "2026-03-12",
-}
+};
 
 function makeSnapshot(options?: {
-  minStartDate?: string
-  maxEndDate?: string
-  benchmarkFirstDate?: string | null
-  benchmarkMissingRate?: number
-  universeFirstDates?: Record<string, string | null>
-  universeMissingRates?: Record<string, number>
-  missingTickers?: string[]
-  warmupStart?: string
-  requiredStart?: string
-  requiredEnd?: string
-  symbols?: string[]
+  minStartDate?: string;
+  maxEndDate?: string;
+  benchmarkFirstDate?: string | null;
+  benchmarkMissingRate?: number;
+  universeFirstDates?: Record<string, string | null>;
+  universeMissingRates?: Record<string, number>;
+  missingTickers?: string[];
+  warmupStart?: string;
+  requiredStart?: string;
+  requiredEnd?: string;
+  symbols?: string[];
   benchmarkCandidates?: Array<{
-    symbol: string
-    status: "ok" | "warn" | "block"
-    benchmarkTrueMissingRate: number
-    affectedShare: number
-  }>
+    symbol: string;
+    status: "ok" | "warn" | "block";
+    benchmarkTrueMissingRate: number;
+    affectedShare: number;
+  }>;
 }): RunPreflightSnapshot {
   const {
     minStartDate = "2004-11-18",
@@ -96,20 +97,20 @@ function makeSnapshot(options?: {
     requiredEnd = "2026-03-12",
     symbols = ["SPY", "QQQ", "IWM", "TLT", "GLD", "VNQ", "EFA", "EEM", "SPY"],
     benchmarkCandidates = [],
-  } = options ?? {}
+  } = options ?? {};
 
-  const uniqueSymbols = [...new Set(symbols)]
+  const uniqueSymbols = [...new Set(symbols)];
   const coverageSymbols = uniqueSymbols.map((symbol) => {
-    const isBenchmark = symbol === "SPY"
+    const isBenchmark = symbol === "SPY";
     const firstDate = isBenchmark
       ? benchmarkFirstDate
-      : universeFirstDates[symbol] ?? "2000-01-03"
+      : (universeFirstDates[symbol] ?? "2000-01-03");
     const trueMissingRate = isBenchmark
       ? benchmarkMissingRate
-      : universeMissingRates[symbol] ?? 0
-    const expectedDays = firstDate ? 100 : 0
-    const trueMissingDays = expectedDays > 0 ? Math.round(expectedDays * trueMissingRate) : 0
-    const actualDays = expectedDays - trueMissingDays
+      : (universeMissingRates[symbol] ?? 0);
+    const expectedDays = firstDate ? 100 : 0;
+    const trueMissingDays = expectedDays > 0 ? Math.round(expectedDays * trueMissingRate) : 0;
+    const actualDays = expectedDays - trueMissingDays;
 
     return {
       symbol,
@@ -121,8 +122,8 @@ function makeSnapshot(options?: {
       actualDays,
       trueMissingDays,
       trueMissingRate,
-    }
-  })
+    };
+  });
 
   return {
     constraints: {
@@ -138,12 +139,14 @@ function makeSnapshot(options?: {
     },
     coverage: {
       benchmark: {
-        status: benchmarkMissingRate > 0.10 ? "blocked" : benchmarkMissingRate > 0.02 ? "warning" : "good",
-        reason: benchmarkMissingRate > 0.10
-          ? `SPY missingness is ${(benchmarkMissingRate * 100).toFixed(1)}% over ${warmupStart} -> ${requiredEnd} (source: run_window) (10.0% max allowed).`
-          : benchmarkMissingRate > 0.02
-            ? `SPY missingness is ${(benchmarkMissingRate * 100).toFixed(1)}% over ${warmupStart} -> ${requiredEnd} (source: run_window) (2.0% good threshold, 10.0% block threshold).`
-            : null,
+        status:
+          benchmarkMissingRate > 0.1 ? "blocked" : benchmarkMissingRate > 0.02 ? "warning" : "good",
+        reason:
+          benchmarkMissingRate > 0.1
+            ? `SPY missingness is ${(benchmarkMissingRate * 100).toFixed(1)}% over ${warmupStart} -> ${requiredEnd} (source: run_window) (10.0% max allowed).`
+            : benchmarkMissingRate > 0.02
+              ? `SPY missingness is ${(benchmarkMissingRate * 100).toFixed(1)}% over ${warmupStart} -> ${requiredEnd} (source: run_window) (2.0% good threshold, 10.0% block threshold).`
+              : null,
         metricSourceUsed: "run_window",
         trueMissingRate: benchmarkMissingRate,
         symbol: "SPY",
@@ -166,13 +169,13 @@ function makeSnapshot(options?: {
     warmupStart,
     requiredStart,
     requiredEnd,
-  }
+  };
 }
 
 function makeAuthenticatedClient(userId = "user-1") {
-  const runInsertPayloads: Record<string, unknown>[] = []
-  const jobInsertPayloads: Record<string, unknown>[] = []
-  const deletedRunIds: string[] = []
+  const runInsertPayloads: Record<string, unknown>[] = [];
+  const jobInsertPayloads: Record<string, unknown>[] = [];
+  const deletedRunIds: string[] = [];
 
   return {
     runInsertPayloads,
@@ -189,7 +192,7 @@ function makeAuthenticatedClient(userId = "user-1") {
       if (table === "runs") {
         return {
           insert: (payload: Record<string, unknown>) => {
-            runInsertPayloads.push(payload)
+            runInsertPayloads.push(payload);
             return {
               select: () => ({
                 single: async () => ({
@@ -197,34 +200,34 @@ function makeAuthenticatedClient(userId = "user-1") {
                   error: null,
                 }),
               }),
-            }
+            };
           },
           delete: () => ({
             eq: async (_column: string, id: string) => {
-              deletedRunIds.push(id)
-              return { error: null }
+              deletedRunIds.push(id);
+              return { error: null };
             },
           }),
-        }
+        };
       }
 
       if (table === "jobs") {
         return {
           insert: async (payload: Record<string, unknown>) => {
-            jobInsertPayloads.push(payload)
-            return { error: null }
+            jobInsertPayloads.push(payload);
+            return { error: null };
           },
-        }
+        };
       }
 
-      throw new Error(`Unexpected authenticated table access in test: ${table}`)
+      throw new Error(`Unexpected authenticated table access in test: ${table}`);
     },
-  }
+  };
 }
 
 function makeAdminStub() {
-  const runInsertPayloads: Record<string, unknown>[] = []
-  const jobInsertPayloads: Record<string, unknown>[] = []
+  const runInsertPayloads: Record<string, unknown>[] = [];
+  const jobInsertPayloads: Record<string, unknown>[] = [];
 
   return {
     runInsertPayloads,
@@ -233,7 +236,7 @@ function makeAdminStub() {
       if (table === "runs") {
         return {
           insert: (payload: Record<string, unknown>) => {
-            runInsertPayloads.push(payload)
+            runInsertPayloads.push(payload);
             return {
               select: () => ({
                 single: async () => ({
@@ -241,18 +244,18 @@ function makeAdminStub() {
                   error: null,
                 }),
               }),
-            }
+            };
           },
-        }
+        };
       }
 
       if (table === "jobs") {
         return {
           insert: async (payload: Record<string, unknown>) => {
-            jobInsertPayloads.push(payload)
-            return { error: null }
+            jobInsertPayloads.push(payload);
+            return { error: null };
           },
-        }
+        };
       }
 
       if (table === "ticker_stats") {
@@ -266,16 +269,16 @@ function makeAdminStub() {
               error: null,
             }),
           }),
-        }
+        };
       }
 
-      throw new Error(`Unexpected table access in test: ${table}`)
+      throw new Error(`Unexpected table access in test: ${table}`);
     },
-  }
+  };
 }
 
 function makeRepairAdminStub() {
-  const dataIngestRows: Record<string, unknown>[] = []
+  const dataIngestRows: Record<string, unknown>[] = [];
 
   return {
     dataIngestRows,
@@ -293,30 +296,28 @@ function makeRepairAdminStub() {
             }),
           }),
           insert: async (rows: Record<string, unknown>[]) => {
-            dataIngestRows.push(...rows)
-            return { error: null }
+            dataIngestRows.push(...rows);
+            return { error: null };
           },
-        }
+        };
       }
 
-      throw new Error(`Unexpected repair-table access in test: ${table}`)
+      throw new Error(`Unexpected repair-table access in test: ${table}`);
     },
-  }
+  };
 }
 
 function makeDeleteServerClient(options?: {
-  userId?: string
+  userId?: string;
   visibleRuns?: Array<{
-    id: string
-    status: string
-    user_id: string
-  }>
+    id: string;
+    status: string;
+    user_id: string;
+  }>;
 }) {
-  const userId = options?.userId ?? "user-1"
-  const visibleRuns = new Map(
-    (options?.visibleRuns ?? []).map((run) => [run.id, run])
-  )
-  const deletedRunIds: string[] = []
+  const userId = options?.userId ?? "user-1";
+  const visibleRuns = new Map((options?.visibleRuns ?? []).map((run) => [run.id, run]));
+  const deletedRunIds: string[] = [];
 
   return {
     deletedRunIds,
@@ -329,7 +330,7 @@ function makeDeleteServerClient(options?: {
     },
     from(table: string) {
       if (table !== "runs") {
-        throw new Error(`Unexpected delete-table access in test: ${table}`)
+        throw new Error(`Unexpected delete-table access in test: ${table}`);
       }
 
       return {
@@ -343,21 +344,19 @@ function makeDeleteServerClient(options?: {
         }),
         delete: () => ({
           eq: async (_column: string, runId: string) => {
-            deletedRunIds.push(runId)
-            visibleRuns.delete(runId)
-            return { error: null }
+            deletedRunIds.push(runId);
+            visibleRuns.delete(runId);
+            return { error: null };
           },
         }),
-      }
+      };
     },
-  }
+  };
 }
 
-function makeDeleteAdminStub(options?: {
-  storagePath?: string | null
-}) {
-  const deletedIngestRunIds: string[] = []
-  const deletedStoragePaths: string[] = []
+function makeDeleteAdminStub(options?: { storagePath?: string | null }) {
+  const deletedIngestRunIds: string[] = [];
+  const deletedStoragePaths: string[] = [];
 
   return {
     deletedIngestRunIds,
@@ -365,8 +364,8 @@ function makeDeleteAdminStub(options?: {
     storage: {
       from: vi.fn(() => ({
         remove: async (paths: string[]) => {
-          deletedStoragePaths.push(...paths)
-          return { error: null }
+          deletedStoragePaths.push(...paths);
+          return { error: null };
         },
       })),
     },
@@ -381,36 +380,36 @@ function makeDeleteAdminStub(options?: {
               }),
             }),
           }),
-        }
+        };
       }
 
       if (table === "data_ingest_jobs") {
         return {
           delete: () => ({
             eq: async (_column: string, runId: string) => {
-              deletedIngestRunIds.push(runId)
-              return { error: null }
+              deletedIngestRunIds.push(runId);
+              return { error: null };
             },
           }),
-        }
+        };
       }
 
-      throw new Error(`Unexpected delete-admin table access in test: ${table}`)
+      throw new Error(`Unexpected delete-admin table access in test: ${table}`);
     },
-  }
+  };
 }
 
 describe("run actions preflight gating", () => {
   beforeEach(() => {
-    vi.clearAllMocks()
-    vi.unstubAllEnvs()
+    vi.clearAllMocks();
+    vi.unstubAllEnvs();
 
-    createClientMock.mockResolvedValue(makeAuthenticatedClient())
-    createAdminClientMock.mockReturnValue(makeAdminStub())
-    getUniverseConstraintsSnapshotMock.mockResolvedValue(BASE_CONSTRAINTS)
-    getUniverseBatchStatusMock.mockResolvedValue(null)
-    evaluateRunPreflightSnapshotMock.mockResolvedValue(makeSnapshot())
-  })
+    createClientMock.mockResolvedValue(makeAuthenticatedClient());
+    createAdminClientMock.mockReturnValue(makeAdminStub());
+    getUniverseConstraintsSnapshotMock.mockResolvedValue(BASE_CONSTRAINTS);
+    getUniverseBatchStatusMock.mockResolvedValue(null);
+    evaluateRunPreflightSnapshotMock.mockResolvedValue(makeSnapshot());
+  });
 
   it("preflight blocks invalid date ranges with clear clamp actions", async () => {
     evaluateRunPreflightSnapshotMock.mockResolvedValue(
@@ -418,7 +417,7 @@ describe("run actions preflight gating", () => {
         minStartDate: "2004-11-18",
         maxEndDate: "2026-03-12",
       })
-    )
+    );
 
     const result = await preflightRun({
       name: "Invalid dates",
@@ -432,22 +431,22 @@ describe("run actions preflight gating", () => {
       initial_capital: 100000,
       apply_costs: true,
       slippage_bps: 0,
-    })
+    });
 
-    expect(result.status).toBe("block")
+    expect(result.status).toBe("block");
     expect(result.issues.map((issue) => issue.code)).toEqual([
       "start_before_universe_min",
       "end_after_cutoff",
-    ])
+    ]);
     expect(result.issues.map((issue) => issue.action?.kind)).toEqual([
       "clamp_start_date",
       "clamp_end_date",
-    ])
-  })
+    ]);
+  });
 
   it("preflight blocks ML runs with insufficient training history and includes diagnostics", async () => {
-    vi.stubEnv("ML_MIN_TRAIN_DAYS", "252")
-    vi.stubEnv("ML_TRAIN_WINDOW_DAYS", "504")
+    vi.stubEnv("ML_MIN_TRAIN_DAYS", "252");
+    vi.stubEnv("ML_TRAIN_WINDOW_DAYS", "504");
 
     evaluateRunPreflightSnapshotMock.mockResolvedValue(
       makeSnapshot({
@@ -463,7 +462,7 @@ describe("run actions preflight gating", () => {
         },
         requiredStart: "2022-01-01",
       })
-    )
+    );
 
     const result = await preflightRun({
       name: "ML too short",
@@ -477,17 +476,17 @@ describe("run actions preflight gating", () => {
       initial_capital: 100000,
       apply_costs: true,
       slippage_bps: 0,
-    })
+    });
 
-    expect(result.status).toBe("block")
-    expect(result.issues[0]?.code).toBe("ml_insufficient_training_history")
-    expect(result.issues[0]?.reason).toContain("train days")
-    expect(result.issues[0]?.fix).toContain("reduce Top N")
-  })
+    expect(result.status).toBe("block");
+    expect(result.issues[0]?.code).toBe("ml_insufficient_training_history");
+    expect(result.issues[0]?.reason).toContain("train days");
+    expect(result.issues[0]?.fix).toContain("reduce Top N");
+  });
 
   it("preflight evaluates ML training coverage in the initial rolling window", async () => {
-    vi.stubEnv("ML_MIN_TRAIN_DAYS", "252")
-    vi.stubEnv("ML_TRAIN_WINDOW_DAYS", "504")
+    vi.stubEnv("ML_MIN_TRAIN_DAYS", "252");
+    vi.stubEnv("ML_TRAIN_WINDOW_DAYS", "504");
 
     evaluateRunPreflightSnapshotMock.mockResolvedValue(
       makeSnapshot({
@@ -504,7 +503,7 @@ describe("run actions preflight gating", () => {
           EEM: "2023-10-02",
         },
       })
-    )
+    );
 
     const result = await preflightRun({
       name: "ML rolling window",
@@ -518,21 +517,23 @@ describe("run actions preflight gating", () => {
       initial_capital: 100000,
       apply_costs: true,
       slippage_bps: 0,
-    })
+    });
 
-    expect(result.status).toBe("ok")
-    expect(result.issues.some((issue) => issue.code === "ml_insufficient_training_history")).toBe(false)
-  })
+    expect(result.status).toBe("ok");
+    expect(result.issues.some((issue) => issue.code === "ml_insufficient_training_history")).toBe(
+      false
+    );
+  });
 
   it("preflight starts universe repairs and blocks queueing until missing data is ready", async () => {
-    const repairAdmin = makeRepairAdminStub()
-    createAdminClientMock.mockReturnValue(repairAdmin)
+    const repairAdmin = makeRepairAdminStub();
+    createAdminClientMock.mockReturnValue(repairAdmin);
     getUniverseConstraintsSnapshotMock.mockResolvedValue({
       ...BASE_CONSTRAINTS,
       ready: false,
       missingTickers: ["QQQ"],
       ingestedCount: 7,
-    })
+    });
     evaluateRunPreflightSnapshotMock.mockResolvedValue(
       makeSnapshot({
         missingTickers: ["QQQ"],
@@ -541,7 +542,7 @@ describe("run actions preflight gating", () => {
           QQQ: null,
         },
       })
-    )
+    );
 
     const result = await preflightRun({
       name: "Missing data repair",
@@ -555,18 +556,18 @@ describe("run actions preflight gating", () => {
       initial_capital: 100000,
       apply_costs: true,
       slippage_bps: 0,
-    })
+    });
 
-    expect(result.status).toBe("block")
-    expect(result.issues[0]?.code).toBe("universe_missing_data_repair_started")
-    expect(result.issues[0]?.reason).toContain("We're downloading it now")
-    expect(repairAdmin.dataIngestRows).toHaveLength(1)
+    expect(result.status).toBe("block");
+    expect(result.issues[0]?.code).toBe("universe_missing_data_repair_started");
+    expect(result.issues[0]?.reason).toContain("We're downloading it now");
+    expect(repairAdmin.dataIngestRows).toHaveLength(1);
     expect(repairAdmin.dataIngestRows[0]).toMatchObject({
       symbol: "QQQ",
       status: "queued",
       end_date: "2026-03-12",
-    })
-  })
+    });
+  });
 
   it("preflight blocks top_n above universe size with a one-click fix", async () => {
     const result = await preflightRun({
@@ -581,29 +582,29 @@ describe("run actions preflight gating", () => {
       initial_capital: 100000,
       apply_costs: true,
       slippage_bps: 0,
-    })
+    });
 
-    expect(result.status).toBe("block")
-    expect(result.issues).toHaveLength(1)
+    expect(result.status).toBe("block");
+    expect(result.issues).toHaveLength(1);
     expect(result.issues[0]).toMatchObject({
       code: "top_n_above_universe_size",
       action: {
         kind: "reduce_top_n",
         value: 8,
       },
-    })
-  })
+    });
+  });
 
   it("does not queue repairs for current symbols that only fail missingness thresholds", async () => {
-    const repairAdmin = makeRepairAdminStub()
-    createAdminClientMock.mockReturnValue(repairAdmin)
+    const repairAdmin = makeRepairAdminStub();
+    createAdminClientMock.mockReturnValue(repairAdmin);
     evaluateRunPreflightSnapshotMock.mockResolvedValue(
       makeSnapshot({
         universeMissingRates: {
           QQQ: 0.12,
         },
       })
-    )
+    );
 
     const result = await preflightRun({
       name: "Current but gappy",
@@ -617,12 +618,14 @@ describe("run actions preflight gating", () => {
       initial_capital: 100000,
       apply_costs: true,
       slippage_bps: 0,
-    })
+    });
 
-    expect(result.status).toBe("block")
-    expect(result.issues.some((issue) => issue.code === "universe_missingness_per_ticker_blocked")).toBe(true)
-    expect(repairAdmin.dataIngestRows).toHaveLength(0)
-  })
+    expect(result.status).toBe("block");
+    expect(
+      result.issues.some((issue) => issue.code === "universe_missingness_per_ticker_blocked")
+    ).toBe(true);
+    expect(repairAdmin.dataIngestRows).toHaveLength(0);
+  });
 
   it("suggests a benchmark change when an alternative benchmark is cleaner", async () => {
     evaluateRunPreflightSnapshotMock.mockResolvedValue(
@@ -633,7 +636,7 @@ describe("run actions preflight gating", () => {
           { symbol: "SPY", status: "block", benchmarkTrueMissingRate: 0.12, affectedShare: 0 },
         ],
       })
-    )
+    );
 
     const result = await preflightRun({
       name: "Switch benchmark",
@@ -647,23 +650,25 @@ describe("run actions preflight gating", () => {
       initial_capital: 100000,
       apply_costs: true,
       slippage_bps: 0,
-    })
+    });
 
-    expect(result.status).toBe("block")
-    expect(result.issues.find((issue) => issue.code === "benchmark_missingness_blocked")).toMatchObject({
+    expect(result.status).toBe("block");
+    expect(
+      result.issues.find((issue) => issue.code === "benchmark_missingness_blocked")
+    ).toMatchObject({
       action: {
         kind: "change_benchmark",
         value: "QQQ",
       },
-    })
-  })
+    });
+  });
 
   it("createRun rechecks preflight and refuses inserts when blocked", async () => {
     evaluateRunPreflightSnapshotMock.mockResolvedValue(
       makeSnapshot({
         maxEndDate: "2026-03-12",
       })
-    )
+    );
 
     const result = await createRun({
       name: "Blocked create",
@@ -678,19 +683,19 @@ describe("run actions preflight gating", () => {
       apply_costs: true,
       slippage_bps: 0,
       acknowledge_warnings: false,
-    })
+    });
 
-    expect(result.ok).toBe(false)
-    expect(result.preflight?.status).toBe("block")
-    expect(createAdminClientMock).not.toHaveBeenCalled()
-  })
+    expect(result.ok).toBe(false);
+    expect(result.preflight?.status).toBe("block");
+    expect(createAdminClientMock).not.toHaveBeenCalled();
+  });
 
   it("allows clean runs for every strategy to be created and queued", async () => {
-    const serverClient = makeAuthenticatedClient()
-    const admin = makeAdminStub()
-    createClientMock.mockResolvedValue(serverClient)
-    createAdminClientMock.mockReturnValue(admin)
-    evaluateRunPreflightSnapshotMock.mockResolvedValue(makeSnapshot())
+    const serverClient = makeAuthenticatedClient();
+    const admin = makeAdminStub();
+    createClientMock.mockResolvedValue(serverClient);
+    createAdminClientMock.mockReturnValue(admin);
+    evaluateRunPreflightSnapshotMock.mockResolvedValue(makeSnapshot());
 
     const strategies = [
       "equal_weight",
@@ -699,7 +704,7 @@ describe("run actions preflight gating", () => {
       "trend_filter",
       "ml_ridge",
       "ml_lightgbm",
-    ] as const
+    ] as const;
 
     for (const strategy of strategies) {
       const result = await createRun({
@@ -715,29 +720,29 @@ describe("run actions preflight gating", () => {
         apply_costs: true,
         slippage_bps: 0,
         acknowledge_warnings: false,
-      })
+      });
 
-      expect(result.ok).toBe(true)
+      expect(result.ok).toBe(true);
     }
 
-    expect(serverClient.runInsertPayloads).toHaveLength(strategies.length)
-    expect(serverClient.jobInsertPayloads).toHaveLength(strategies.length)
+    expect(serverClient.runInsertPayloads).toHaveLength(strategies.length);
+    expect(serverClient.jobInsertPayloads).toHaveLength(strategies.length);
     expect(serverClient.runInsertPayloads[0]).toMatchObject({
       user_id: "user-1",
       status: "queued",
-    })
-  })
+    });
+  });
 
   it("warn acknowledgement gates creation and marks executed_with_missing_data", async () => {
-    const serverClient = makeAuthenticatedClient()
-    const admin = makeAdminStub()
-    createClientMock.mockResolvedValue(serverClient)
-    createAdminClientMock.mockReturnValue(admin)
+    const serverClient = makeAuthenticatedClient();
+    const admin = makeAdminStub();
+    createClientMock.mockResolvedValue(serverClient);
+    createAdminClientMock.mockReturnValue(admin);
     evaluateRunPreflightSnapshotMock.mockResolvedValue(
       makeSnapshot({
         benchmarkMissingRate: 0.04,
       })
-    )
+    );
 
     const blockedWithoutAck = await createRun({
       name: "Warn no ack",
@@ -752,11 +757,11 @@ describe("run actions preflight gating", () => {
       apply_costs: true,
       slippage_bps: 0,
       acknowledge_warnings: false,
-    })
+    });
 
-    expect(blockedWithoutAck.ok).toBe(false)
-    expect(blockedWithoutAck.preflight?.status).toBe("warn")
-    expect(serverClient.runInsertPayloads).toHaveLength(0)
+    expect(blockedWithoutAck.ok).toBe(false);
+    expect(blockedWithoutAck.preflight?.status).toBe("warn");
+    expect(serverClient.runInsertPayloads).toHaveLength(0);
 
     const createdWithAck = await createRun({
       name: "Warn acked",
@@ -771,61 +776,59 @@ describe("run actions preflight gating", () => {
       apply_costs: true,
       slippage_bps: 0,
       acknowledge_warnings: true,
-    })
+    });
 
-    expect(createdWithAck.ok).toBe(true)
-    expect(serverClient.runInsertPayloads).toHaveLength(1)
+    expect(createdWithAck.ok).toBe(true);
+    expect(serverClient.runInsertPayloads).toHaveLength(1);
     expect(serverClient.runInsertPayloads[0]).toMatchObject({
       status: "queued",
       executed_with_missing_data: true,
       user_id: "user-1",
-    })
-    expect(serverClient.jobInsertPayloads).toHaveLength(1)
-  })
-})
+    });
+    expect(serverClient.jobInsertPayloads).toHaveLength(1);
+  });
+});
 
 describe("deleteRunAction", () => {
   beforeEach(() => {
-    vi.clearAllMocks()
-  })
+    vi.clearAllMocks();
+  });
 
   it("lets an owner delete a run and removes it from the visible runs set", async () => {
-    const runId = "22222222-2222-4222-8222-222222222222"
+    const runId = "22222222-2222-4222-8222-222222222222";
     const serverClient = makeDeleteServerClient({
-      visibleRuns: [
-        { id: runId, status: "completed", user_id: "user-1" },
-      ],
-    })
+      visibleRuns: [{ id: runId, status: "completed", user_id: "user-1" }],
+    });
     const admin = makeDeleteAdminStub({
       storagePath: `${runId}/tearsheet.html`,
-    })
+    });
 
-    createClientMock.mockResolvedValue(serverClient)
-    createAdminClientMock.mockReturnValue(admin)
+    createClientMock.mockResolvedValue(serverClient);
+    createAdminClientMock.mockReturnValue(admin);
 
-    await expect(deleteRunAction(runId)).rejects.toThrow("REDIRECT:/runs?deleted=1")
+    await expect(deleteRunAction(runId)).rejects.toThrow("REDIRECT:/runs?deleted=1");
 
-    expect(serverClient.deletedRunIds).toEqual([runId])
-    expect(serverClient.getVisibleRunIds()).toEqual([])
-    expect(admin.deletedIngestRunIds).toEqual([runId])
-    expect(admin.deletedStoragePaths).toEqual([`${runId}/tearsheet.html`])
-    expect(revalidatePathMock).toHaveBeenCalledWith("/runs")
-  })
+    expect(serverClient.deletedRunIds).toEqual([runId]);
+    expect(serverClient.getVisibleRunIds()).toEqual([]);
+    expect(admin.deletedIngestRunIds).toEqual([runId]);
+    expect(admin.deletedStoragePaths).toEqual([`${runId}/tearsheet.html`]);
+    expect(revalidatePathMock).toHaveBeenCalledWith("/runs");
+  });
 
   it("rejects deletes for runs the current user does not own", async () => {
-    const runId = "33333333-3333-4333-8333-333333333333"
+    const runId = "33333333-3333-4333-8333-333333333333";
     const serverClient = makeDeleteServerClient({
       visibleRuns: [],
-    })
+    });
 
-    createClientMock.mockResolvedValue(serverClient)
-    createAdminClientMock.mockReturnValue(makeDeleteAdminStub())
+    createClientMock.mockResolvedValue(serverClient);
+    createAdminClientMock.mockReturnValue(makeDeleteAdminStub());
 
     await expect(deleteRunAction(runId)).resolves.toEqual({
       error: "You can only delete your own runs.",
-    })
+    });
 
-    expect(serverClient.deletedRunIds).toEqual([])
-    expect(redirectMock).not.toHaveBeenCalled()
-  })
-})
+    expect(serverClient.deletedRunIds).toEqual([]);
+    expect(redirectMock).not.toHaveBeenCalled();
+  });
+});

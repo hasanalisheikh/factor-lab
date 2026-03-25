@@ -9,15 +9,15 @@ import {
   BookOpen,
   BookMarked,
   type LucideIcon,
-} from "lucide-react"
+} from "lucide-react";
 
 export type NavItem = {
-  name: string
-  href: string
-  icon: LucideIcon
+  name: string;
+  href: string;
+  icon: LucideIcon;
   /** When true, also match any sub-paths (e.g. /runs/abc123) */
-  matchChildren?: boolean
-}
+  matchChildren?: boolean;
+};
 
 export const mainNavItems: NavItem[] = [
   { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
@@ -29,9 +29,9 @@ export const mainNavItems: NavItem[] = [
   { name: "Strategies", href: "/strategies", icon: BookOpen },
   { name: "Guide", href: "/guide", icon: BookMarked },
   { name: "Settings", href: "/settings", icon: Settings },
-]
+];
 
-export const bottomNavItems: NavItem[] = []
+export const bottomNavItems: NavItem[] = [];
 
 /**
  * Determines whether a nav item is "active" given the current pathname.
@@ -42,22 +42,18 @@ export const bottomNavItems: NavItem[] = []
  *   UNLESS a *sibling* nav item has an exact match on that sub-path
  *   (e.g. /runs/new should activate "New Run", not "Runs").
  */
-export function isNavItemActive(
-  item: NavItem,
-  pathname: string,
-  allItems: NavItem[]
-): boolean {
+export function isNavItemActive(item: NavItem, pathname: string, allItems: NavItem[]): boolean {
   // Exact match is always active
-  if (pathname === item.href) return true
+  if (pathname === item.href) return true;
 
   // For matchChildren items, check if the pathname is a child route
   if (item.matchChildren && pathname.startsWith(item.href + "/")) {
     // But yield to any sibling that has an exact match on this pathname
     const siblingExactMatch = allItems.some(
       (sibling) => sibling !== item && sibling.href === pathname
-    )
-    return !siblingExactMatch
+    );
+    return !siblingExactMatch;
   }
 
-  return false
+  return false;
 }

@@ -1,8 +1,8 @@
-import Link from "next/link"
-import { AppShell } from "@/components/layout/app-shell"
-import { PageContainer } from "@/components/layout/page-container"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Separator } from "@/components/ui/separator"
+import Link from "next/link";
+import { AppShell } from "@/components/layout/app-shell";
+import { PageContainer } from "@/components/layout/page-container";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Separator } from "@/components/ui/separator";
 
 // ── Sections ──────────────────────────────────────────────────────────────────
 
@@ -11,16 +11,15 @@ const sections = [
     id: "overview",
     title: "What is FactorLab?",
     content: (
-      <div className="space-y-3 text-[13px] text-muted-foreground leading-relaxed">
+      <div className="text-muted-foreground space-y-3 text-[13px] leading-relaxed">
         <p>
-          FactorLab is a quant research dashboard for running and comparing historical
-          backtests on systematic investment strategies. You define the strategy, universe,
-          and date range; the engine simulates monthly rebalancing and reports performance
-          metrics and tear sheets.
+          FactorLab is a quant research dashboard for running and comparing historical backtests on
+          systematic investment strategies. You define the strategy, universe, and date range; the
+          engine simulates monthly rebalancing and reports performance metrics and tear sheets.
         </p>
         <p>
-          It is a <span className="text-foreground font-medium">research tool</span>, not a
-          trading platform. All results are hypothetical and do not constitute financial advice.
+          It is a <span className="text-foreground font-medium">research tool</span>, not a trading
+          platform. All results are hypothetical and do not constitute financial advice.
         </p>
       </div>
     ),
@@ -29,12 +28,12 @@ const sections = [
     id: "create-run",
     title: "Creating a Run",
     content: (
-      <div className="space-y-4 text-[13px] text-muted-foreground leading-relaxed">
+      <div className="text-muted-foreground space-y-4 text-[13px] leading-relaxed">
         <p>
           Navigate to{" "}
           <Link
             href="/runs/new"
-            className="font-medium text-foreground underline underline-offset-2 transition-colors hover:text-primary"
+            className="text-foreground hover:text-primary font-medium underline underline-offset-2 transition-colors"
           >
             New Run
           </Link>{" "}
@@ -72,17 +71,17 @@ const sections = [
             },
           ].map(({ label, desc }) => (
             <div key={label} className="flex gap-2">
-              <span className="shrink-0 font-medium text-foreground w-[110px]">{label}</span>
+              <span className="text-foreground w-[110px] shrink-0 font-medium">{label}</span>
               <span>{desc}</span>
             </div>
           ))}
         </div>
-        <div className="rounded-lg border border-border bg-secondary/30 px-3 py-2.5 text-[12px]">
-          <span className="font-medium text-foreground">Tip:</span> Your default settings are
-          saved in{" "}
+        <div className="border-border bg-secondary/30 rounded-lg border px-3 py-2.5 text-[12px]">
+          <span className="text-foreground font-medium">Tip:</span> Your default settings are saved
+          in{" "}
           <Link
             href="/settings?tab=backtest"
-            className="font-medium text-foreground underline underline-offset-2 transition-colors hover:text-primary"
+            className="text-foreground hover:text-primary font-medium underline underline-offset-2 transition-colors"
           >
             Settings → Backtest
           </Link>{" "}
@@ -95,19 +94,33 @@ const sections = [
     id: "job-lifecycle",
     title: "Job Lifecycle",
     content: (
-      <div className="space-y-3 text-[13px] text-muted-foreground leading-relaxed">
-        <p>
-          When you submit a run, a background job is created. It moves through these stages:
-        </p>
+      <div className="text-muted-foreground space-y-3 text-[13px] leading-relaxed">
+        <p>When you submit a run, a background job is created. It moves through these stages:</p>
         <div className="space-y-2">
           {[
-            { status: "Queued", color: "text-muted-foreground", desc: "Job is waiting for a worker to pick it up." },
-            { status: "Running", color: "text-warning", desc: "Worker is executing: price ingest → backtest → metrics → report. A progress bar shows the current stage and percentage." },
-            { status: "Completed", color: "text-success", desc: "All stages finished. Equity curve, KPIs, holdings, and trades are available." },
-            { status: "Failed", color: "text-destructive", desc: "An error occurred. The error message is shown in the job status panel. Common causes: insufficient price data, too-short date range for ML warmup." },
+            {
+              status: "Queued",
+              color: "text-muted-foreground",
+              desc: "Job is waiting for a worker to pick it up.",
+            },
+            {
+              status: "Running",
+              color: "text-warning",
+              desc: "Worker is executing: price ingest → backtest → metrics → report. A progress bar shows the current stage and percentage.",
+            },
+            {
+              status: "Completed",
+              color: "text-success",
+              desc: "All stages finished. Equity curve, KPIs, holdings, and trades are available.",
+            },
+            {
+              status: "Failed",
+              color: "text-destructive",
+              desc: "An error occurred. The error message is shown in the job status panel. Common causes: insufficient price data, too-short date range for ML warmup.",
+            },
           ].map(({ status, color, desc }) => (
             <div key={status} className="flex gap-2">
-              <span className={`shrink-0 font-medium w-[90px] ${color}`}>{status}</span>
+              <span className={`w-[90px] shrink-0 font-medium ${color}`}>{status}</span>
               <span>{desc}</span>
             </div>
           ))}
@@ -116,7 +129,7 @@ const sections = [
           You can monitor all active jobs on the{" "}
           <Link
             href="/jobs"
-            className="font-medium text-foreground underline underline-offset-2 transition-colors hover:text-primary"
+            className="text-foreground hover:text-primary font-medium underline underline-offset-2 transition-colors"
           >
             Jobs
           </Link>{" "}
@@ -130,33 +143,54 @@ const sections = [
     id: "results",
     title: "Interpreting Results",
     content: (
-      <div className="space-y-4 text-[13px] text-muted-foreground leading-relaxed">
+      <div className="text-muted-foreground space-y-4 text-[13px] leading-relaxed">
         <p>
-          The <span className="font-medium text-foreground">Overview</span> tab on a completed
-          run contains the equity curve, drawdown chart, and KPI grid.
+          The <span className="text-foreground font-medium">Overview</span> tab on a completed run
+          contains the equity curve, drawdown chart, and KPI grid.
         </p>
 
-        <p className="font-medium text-foreground">Key metrics:</p>
+        <p className="text-foreground font-medium">Key metrics:</p>
         <div className="space-y-2">
           {[
-            { label: "CAGR", desc: "Compound annual growth rate — the annualised geometric return of the portfolio." },
-            { label: "Sharpe Ratio", desc: "Annualised excess return divided by volatility. Higher is better; >1 is generally considered good." },
-            { label: "Max Drawdown", desc: "Largest peak-to-trough decline in portfolio value. A measure of downside risk." },
+            {
+              label: "CAGR",
+              desc: "Compound annual growth rate — the annualised geometric return of the portfolio.",
+            },
+            {
+              label: "Sharpe Ratio",
+              desc: "Annualised excess return divided by volatility. Higher is better; >1 is generally considered good.",
+            },
+            {
+              label: "Max Drawdown",
+              desc: "Largest peak-to-trough decline in portfolio value. A measure of downside risk.",
+            },
             { label: "Volatility", desc: "Annualised standard deviation of monthly returns." },
-            { label: "Win Rate", desc: "Fraction of monthly periods where the portfolio had a positive return." },
-            { label: "Profit Factor", desc: "Sum of winning months' returns divided by sum of losing months' returns. >1 means more gains than losses." },
-            { label: "Turnover", desc: "Average one-way turnover per rebalance — what fraction of the portfolio was traded." },
-            { label: "Calmar Ratio", desc: "CAGR divided by the absolute max drawdown. Rewards strategies that grow fast relative to their worst decline." },
+            {
+              label: "Win Rate",
+              desc: "Fraction of monthly periods where the portfolio had a positive return.",
+            },
+            {
+              label: "Profit Factor",
+              desc: "Sum of winning months' returns divided by sum of losing months' returns. >1 means more gains than losses.",
+            },
+            {
+              label: "Turnover",
+              desc: "Average one-way turnover per rebalance — what fraction of the portfolio was traded.",
+            },
+            {
+              label: "Calmar Ratio",
+              desc: "CAGR divided by the absolute max drawdown. Rewards strategies that grow fast relative to their worst decline.",
+            },
           ].map(({ label, desc }) => (
             <div key={label} className="flex gap-2">
-              <span className="shrink-0 font-medium text-foreground w-[120px]">{label}</span>
+              <span className="text-foreground w-[120px] shrink-0 font-medium">{label}</span>
               <span>{desc}</span>
             </div>
           ))}
         </div>
 
-        <div className="rounded-lg border border-border bg-secondary/30 px-3 py-2.5 text-[12px]">
-          <span className="font-medium text-foreground">Delta columns</span> show how each metric
+        <div className="border-border bg-secondary/30 rounded-lg border px-3 py-2.5 text-[12px]">
+          <span className="text-foreground font-medium">Delta columns</span> show how each metric
           compares to the benchmark over the same period (e.g. portfolio CAGR − benchmark CAGR).
           Green means outperformance, red means underperformance.
         </div>
@@ -167,23 +201,22 @@ const sections = [
     id: "holdings-trades",
     title: "Holdings & Trades Tabs",
     content: (
-      <div className="space-y-3 text-[13px] text-muted-foreground leading-relaxed">
-        <p className="font-medium text-foreground">Holdings</p>
+      <div className="text-muted-foreground space-y-3 text-[13px] leading-relaxed">
+        <p className="text-foreground font-medium">Holdings</p>
         <p>
-          Shows the portfolio weights at each monthly rebalance date. Each row is a
-          symbol; each column is a period. For ML strategies, the predicted return and rank
-          are also shown.
+          Shows the portfolio weights at each monthly rebalance date. Each row is a symbol; each
+          column is a period. For ML strategies, the predicted return and rank are also shown.
         </p>
-        <p className="font-medium text-foreground">Trades</p>
+        <p className="text-foreground font-medium">Trades</p>
         <p>
-          Shows the buy/sell activity implied by the weight changes between rebalances.
-          A positive trade value means the position was increased; negative means reduced or
-          exited. This tab helps you understand turnover and which assets drive it.
+          Shows the buy/sell activity implied by the weight changes between rebalances. A positive
+          trade value means the position was increased; negative means reduced or exited. This tab
+          helps you understand turnover and which assets drive it.
         </p>
-        <p className="font-medium text-foreground">ML Insights (ML strategies only)</p>
+        <p className="text-foreground font-medium">ML Insights (ML strategies only)</p>
         <p>
-          Walk-forward model performance — how well the predicted returns correlated with
-          realised returns over time. Useful for diagnosing overfitting or regime breaks.
+          Walk-forward model performance — how well the predicted returns correlated with realised
+          returns over time. Useful for diagnosing overfitting or regime breaks.
         </p>
       </div>
     ),
@@ -192,21 +225,21 @@ const sections = [
     id: "reports",
     title: "Reports",
     content: (
-      <div className="space-y-3 text-[13px] text-muted-foreground leading-relaxed">
+      <div className="text-muted-foreground space-y-3 text-[13px] leading-relaxed">
         <p>
-          For completed runs, FactorLab auto-generates an HTML tear sheet on your first
-          visit to the run detail page. You can also trigger it manually by clicking{" "}
-          <span className="font-medium text-foreground">Generate Report</span>.
+          For completed runs, FactorLab auto-generates an HTML tear sheet on your first visit to the
+          run detail page. You can also trigger it manually by clicking{" "}
+          <span className="text-foreground font-medium">Generate Report</span>.
         </p>
         <p>
-          The tear sheet includes the equity curve, drawdown chart, full KPI grid, universe
-          summary, cost assumptions, and methodology notes. Click{" "}
-          <span className="font-medium text-foreground">Download Report</span> to save it
-          locally or share it.
+          The tear sheet includes the equity curve, drawdown chart, full KPI grid, universe summary,
+          cost assumptions, and methodology notes. Click{" "}
+          <span className="text-foreground font-medium">Download Report</span> to save it locally or
+          share it.
         </p>
-        <div className="rounded-lg border border-border bg-secondary/30 px-3 py-2.5 text-[12px]">
-          Reports are stored as public HTML files in Supabase Storage and regenerated on
-          demand if you re-run or update a backtest.
+        <div className="border-border bg-secondary/30 rounded-lg border px-3 py-2.5 text-[12px]">
+          Reports are stored as public HTML files in Supabase Storage and regenerated on demand if
+          you re-run or update a backtest.
         </div>
       </div>
     ),
@@ -215,21 +248,21 @@ const sections = [
     id: "compare",
     title: "Comparing Runs",
     content: (
-      <div className="space-y-3 text-[13px] text-muted-foreground leading-relaxed">
+      <div className="text-muted-foreground space-y-3 text-[13px] leading-relaxed">
         <p>
           The{" "}
           <Link
             href="/compare"
-            className="font-medium text-foreground underline underline-offset-2 transition-colors hover:text-primary"
+            className="text-foreground hover:text-primary font-medium underline underline-offset-2 transition-colors"
           >
             Compare
           </Link>{" "}
-          page lets you overlay two completed runs on the same equity curve and KPI table.
-          Select Run A and Run B using the dropdowns, then review the side-by-side metrics.
+          page lets you overlay two completed runs on the same equity curve and KPI table. Select
+          Run A and Run B using the dropdowns, then review the side-by-side metrics.
         </p>
         <p>
-          Use Compare to evaluate strategy variants (e.g. different Top N or cost
-          assumptions), or to benchmark a factor strategy against Equal Weight.
+          Use Compare to evaluate strategy variants (e.g. different Top N or cost assumptions), or
+          to benchmark a factor strategy against Equal Weight.
         </p>
       </div>
     ),
@@ -238,7 +271,7 @@ const sections = [
     id: "common-issues",
     title: "Common Issues",
     content: (
-      <div className="space-y-3 text-[13px] text-muted-foreground leading-relaxed">
+      <div className="text-muted-foreground space-y-3 text-[13px] leading-relaxed">
         <div className="space-y-2.5">
           {[
             {
@@ -262,8 +295,8 @@ const sections = [
               fix: "The UI polls for status automatically every few seconds. If it appears stuck, try a hard refresh (Cmd+Shift+R / Ctrl+Shift+R). If the job is still showing 'running' after several minutes, check the Jobs page for an error message.",
             },
           ].map(({ problem, fix }) => (
-            <div key={problem} className="rounded-lg border border-border bg-card px-3 py-2.5">
-              <p className="font-medium text-foreground mb-1">{problem}</p>
+            <div key={problem} className="border-border bg-card rounded-lg border px-3 py-2.5">
+              <p className="text-foreground mb-1 font-medium">{problem}</p>
               <p>{fix}</p>
             </div>
           ))}
@@ -271,7 +304,7 @@ const sections = [
       </div>
     ),
   },
-]
+];
 
 // ── Page ───────────────────────────────────────────────────────────────────────
 
@@ -279,9 +312,9 @@ export default function GuidePage() {
   return (
     <AppShell title="Guide">
       <PageContainer size="medium">
-        <div className="space-y-2 mb-6">
-          <h1 className="text-xl font-semibold text-foreground">How to Use FactorLab</h1>
-          <p className="text-[13px] text-muted-foreground">
+        <div className="mb-6 space-y-2">
+          <h1 className="text-foreground text-xl font-semibold">How to Use FactorLab</h1>
+          <p className="text-muted-foreground text-[13px]">
             A quick reference for creating runs, reading results, and understanding the tools.
           </p>
         </div>
@@ -289,12 +322,12 @@ export default function GuidePage() {
         <div className="space-y-4">
           {sections.map((section, i) => (
             <Card key={section.id} className="bg-card border-border">
-              <CardHeader className="pb-2 px-5 pt-4">
+              <CardHeader className="px-5 pt-4 pb-2">
                 <div className="flex items-center gap-2.5">
-                  <span className="text-[11px] font-mono text-muted-foreground tabular-nums w-5">
+                  <span className="text-muted-foreground w-5 font-mono text-[11px] tabular-nums">
                     {String(i + 1).padStart(2, "0")}
                   </span>
-                  <CardTitle className="text-[14px] font-semibold text-card-foreground">
+                  <CardTitle className="text-card-foreground text-[14px] font-semibold">
                     {section.title}
                   </CardTitle>
                 </div>
@@ -305,11 +338,11 @@ export default function GuidePage() {
           ))}
         </div>
 
-        <p className="mt-6 text-[11px] text-muted-foreground text-center">
+        <p className="text-muted-foreground mt-6 text-center text-[11px]">
           FactorLab is for research purposes only. Results are hypothetical and past performance
           does not guarantee future results. Not financial advice.
         </p>
       </PageContainer>
     </AppShell>
-  )
+  );
 }

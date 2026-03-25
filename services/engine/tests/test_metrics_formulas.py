@@ -237,9 +237,9 @@ class TestSharpe:
 
         m = 0.005
         std_sample = math.sqrt(0.0017 / 3)  # ddof=1 (TypeScript convention)
-        std_pop = math.sqrt(0.0017 / 4)     # ddof=0 (Python convention)
+        std_pop = math.sqrt(0.0017 / 4)  # ddof=0 (Python convention)
         sharpe_sample = (m / std_sample) * math.sqrt(252)  # ≈ 3.334
-        sharpe_pop = (m / std_pop) * math.sqrt(252)        # ≈ 3.850
+        sharpe_pop = (m / std_pop) * math.sqrt(252)  # ≈ 3.850
 
         # Must match population, not sample
         assert abs(result["sharpe"] - sharpe_pop) < 1e-9
@@ -305,7 +305,7 @@ class TestVolatility:
         rets = make_returns(0.02, -0.02, 0.02, -0.02)
         result = _compute_metrics(rets, turnover=0.0)
 
-        std_pop = math.sqrt(0.0004)              # ddof=0
+        std_pop = math.sqrt(0.0004)  # ddof=0
         std_sample = math.sqrt(0.0004 * 4 / 3)  # ddof=1
         vol_pop = std_pop * math.sqrt(252)
         vol_sample = std_sample * math.sqrt(252)
@@ -642,10 +642,10 @@ class TestMetricConventions:
         rets = make_returns(*([r] * 252))
         result = _compute_metrics(rets, turnover=0.08)
 
-        assert abs(result["cagr"]) < 2.0     # not in pct (would be ~10, not 10%)
+        assert abs(result["cagr"]) < 2.0  # not in pct (would be ~10, not 10%)
         assert abs(result["volatility"]) < 2.0
-        assert 0 <= result["win_rate"] <= 1   # fraction [0,1], not [0,100]
-        assert result["turnover"] == 0.08     # passed through as-is
+        assert 0 <= result["win_rate"] <= 1  # fraction [0,1], not [0,100]
+        assert result["turnover"] == 0.08  # passed through as-is
 
     def test_win_rate_is_fraction_between_0_and_1(self):
         """win_rate must always be in [0, 1], not [0, 100]."""

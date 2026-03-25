@@ -1,6 +1,6 @@
-import { render, screen } from "@testing-library/react"
-import { describe, expect, it, vi } from "vitest"
-import { RunForm } from "@/components/run-form"
+import { render, screen } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
+import { RunForm } from "@/components/run-form";
 
 vi.mock("@/app/actions/runs", () => ({
   createRun: vi.fn(),
@@ -8,7 +8,7 @@ vi.mock("@/app/actions/runs", () => ({
   getUniverseBatchStatusAction: vi.fn(),
   preflightRun: vi.fn(),
   retryPreflightRepairs: vi.fn(),
-}))
+}));
 
 describe("RunForm", () => {
   it("shows the earliest valid start when the universe is ready", () => {
@@ -35,13 +35,11 @@ describe("RunForm", () => {
           },
         }}
       />
-    )
+    );
 
-    expect(
-      screen.getByText(/Earliest valid start for this universe:/)
-    ).toBeInTheDocument()
-    expect(screen.getByText("2004-11-18")).toBeInTheDocument()
-  })
+    expect(screen.getByText(/Earliest valid start for this universe:/)).toBeInTheDocument();
+    expect(screen.getByText("2004-11-18")).toBeInTheDocument();
+  });
 
   it("disables queueing while the universe still has missing tickers", () => {
     render(
@@ -67,10 +65,10 @@ describe("RunForm", () => {
           },
         }}
       />
-    )
+    );
 
-    expect(screen.getByText(/Missing tickers: GLD/)).toBeInTheDocument()
-    const queueButtons = screen.getAllByRole("button", { name: /Queue Backtest/i })
-    expect(queueButtons[0]).toBeDisabled()
-  })
-})
+    expect(screen.getByText(/Missing tickers: GLD/)).toBeInTheDocument();
+    const queueButtons = screen.getAllByRole("button", { name: /Queue Backtest/i });
+    expect(queueButtons[0]).toBeDisabled();
+  });
+});

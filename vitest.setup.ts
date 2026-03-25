@@ -1,6 +1,6 @@
-import "@testing-library/jest-dom/vitest"
-import React from "react"
-import { vi } from "vitest"
+import "@testing-library/jest-dom/vitest";
+import React from "react";
+import { vi } from "vitest";
 
 vi.mock("next/link", () => {
   return {
@@ -9,12 +9,12 @@ vi.mock("next/link", () => {
       children,
       ...props
     }: {
-      href: string
-      children: React.ReactNode
-      [key: string]: unknown
+      href: string;
+      children: React.ReactNode;
+      [key: string]: unknown;
     }) => React.createElement("a", { href, ...props }, children),
-  }
-})
+  };
+});
 
 vi.mock("next/navigation", () => {
   return {
@@ -24,8 +24,8 @@ vi.mock("next/navigation", () => {
       replace: vi.fn(),
       refresh: vi.fn(),
     }),
-  }
-})
+  };
+});
 
 class ResizeObserverMock {
   observe() {}
@@ -33,4 +33,4 @@ class ResizeObserverMock {
   disconnect() {}
 }
 
-vi.stubGlobal("ResizeObserver", ResizeObserverMock)
+vi.stubGlobal("ResizeObserver", ResizeObserverMock);

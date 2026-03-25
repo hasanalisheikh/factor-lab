@@ -1,29 +1,29 @@
-"use client"
+"use client";
 
-import type { SyntheticEvent } from "react"
-import { useState } from "react"
-import Link from "next/link"
-import { MoreHorizontal } from "lucide-react"
-import { DeleteRunDialog } from "@/components/delete-run-dialog"
-import { Button } from "@/components/ui/button"
+import type { SyntheticEvent } from "react";
+import { useState } from "react";
+import Link from "next/link";
+import { MoreHorizontal } from "lucide-react";
+import { DeleteRunDialog } from "@/components/delete-run-dialog";
+import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu"
-import type { RunStatus } from "@/lib/types"
+} from "@/components/ui/dropdown-menu";
+import type { RunStatus } from "@/lib/types";
 
-const RUN_DELETE_BLOCKED_STATUSES = new Set<RunStatus>(["queued", "running", "waiting_for_data"])
+const RUN_DELETE_BLOCKED_STATUSES = new Set<RunStatus>(["queued", "running", "waiting_for_data"]);
 
 type RunActionsMenuProps = {
-  runId: string
-  runName: string
-  status: RunStatus
-  reportUrl?: string | null
-  showReportAction?: boolean
-}
+  runId: string;
+  runName: string;
+  status: RunStatus;
+  reportUrl?: string | null;
+  showReportAction?: boolean;
+};
 
 export function RunActionsMenu({
   runId,
@@ -32,11 +32,11 @@ export function RunActionsMenu({
   reportUrl = null,
   showReportAction = false,
 }: RunActionsMenuProps) {
-  const [deleteOpen, setDeleteOpen] = useState(false)
-  const deleteDisabled = RUN_DELETE_BLOCKED_STATUSES.has(status)
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const deleteDisabled = RUN_DELETE_BLOCKED_STATUSES.has(status);
   const stopRowNavigation = (event: SyntheticEvent) => {
-    event.stopPropagation()
-  }
+    event.stopPropagation();
+  };
 
   return (
     <>
@@ -46,13 +46,13 @@ export function RunActionsMenu({
             type="button"
             variant="ghost"
             size="icon-sm"
-            className="h-8 w-8 text-muted-foreground hover:text-foreground"
+            className="text-muted-foreground hover:text-foreground h-8 w-8"
             aria-label={`Open actions for ${runName}`}
             onClick={stopRowNavigation}
             onKeyDown={stopRowNavigation}
             onPointerDown={stopRowNavigation}
           >
-            <MoreHorizontal className="w-4 h-4" />
+            <MoreHorizontal className="h-4 w-4" />
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end">
@@ -70,11 +70,15 @@ export function RunActionsMenu({
           <DropdownMenuItem
             variant="destructive"
             disabled={deleteDisabled}
-            title={deleteDisabled ? "Delete is unavailable while this run is queued, running, or waiting for data." : undefined}
+            title={
+              deleteDisabled
+                ? "Delete is unavailable while this run is queued, running, or waiting for data."
+                : undefined
+            }
             onSelect={(event) => {
-              event.preventDefault()
-              event.stopPropagation()
-              setDeleteOpen(true)
+              event.preventDefault();
+              event.stopPropagation();
+              setDeleteOpen(true);
             }}
           >
             Delete
@@ -83,5 +87,5 @@ export function RunActionsMenu({
       </DropdownMenu>
       <DeleteRunDialog open={deleteOpen} onOpenChange={setDeleteOpen} runId={runId} />
     </>
-  )
+  );
 }

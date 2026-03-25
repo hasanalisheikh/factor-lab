@@ -6,16 +6,17 @@ FactorLab ships six strategies. All share a common framework, then diverge in th
 
 ## Common Framework
 
-| Dimension | Value |
-|-----------|-------|
-| **Rebalance frequency** | Monthly (calendar month boundaries), except ML strategies which trade daily |
-| **Portfolio construction** | Equal weight — each selected asset receives 1/k |
-| **Transaction cost model** | `cost = (costs_bps / 10,000) × turnover` deducted at each rebalance |
-| **Default costs** | 10 bps per rebalance (configurable per run) |
-| **Starting NAV** | $100,000 for portfolio and benchmark |
-| **Benchmark** | User-selected; rebased to $100,000 |
+| Dimension                  | Value                                                                       |
+| -------------------------- | --------------------------------------------------------------------------- |
+| **Rebalance frequency**    | Monthly (calendar month boundaries), except ML strategies which trade daily |
+| **Portfolio construction** | Equal weight — each selected asset receives 1/k                             |
+| **Transaction cost model** | `cost = (costs_bps / 10,000) × turnover` deducted at each rebalance         |
+| **Default costs**          | 10 bps per rebalance (configurable per run)                                 |
+| **Starting NAV**           | $100,000 for portfolio and benchmark                                        |
+| **Benchmark**              | User-selected; rebased to $100,000                                          |
 
 **Universe resolution** (priority order):
+
 1. `runs.universe_symbols` snapshot — the source of truth once a run is created
 2. Named preset: ETF8, SP100, or NASDAQ100
 3. Env var `FACTORLAB_UNIVERSE`
@@ -67,6 +68,7 @@ None. Can start from the first available trading day.
 ### Selection Logic
 
 At each monthly rebalance:
+
 1. Score each asset: `score = price(t−21) / price(t−252) − 1`
 2. Keep only assets with `score > 0`
 3. Select the top 50% by score
@@ -104,6 +106,7 @@ The 1-month skip (`price(t−21)` rather than `price(t)`) avoids the well-docume
 ### Selection Logic
 
 At each monthly rebalance:
+
 1. Compute 60-day rolling realized volatility for each asset: `std(daily_returns, window=60)`
 2. Sort ascending (lowest vol first)
 3. Select the top-N least volatile assets
@@ -139,6 +142,7 @@ At each monthly rebalance:
 ### Selection Logic
 
 At each monthly rebalance:
+
 1. Compare benchmark price to its 200-day simple moving average (SMA-200)
 2. **Risk-on** (benchmark > SMA-200): apply Momentum 12-1 logic — select top-N assets from the universe with positive momentum scores, equal-weighted
 3. **Risk-off** (benchmark ≤ SMA-200): allocate 100% to TLT (long-dated Treasury ETF)
@@ -180,6 +184,7 @@ At each monthly rebalance:
 ### Selection Logic
 
 Daily walk-forward:
+
 1. Build a feature matrix: one row per (date, symbol) using 8 leakage-safe features (see below)
 2. At each weekly refit boundary, train a Ridge regression model on all available history
 3. Each day, predict next-day returns for all universe assets using the current model
@@ -187,32 +192,33 @@ Daily walk-forward:
 
 ### Features (8 total)
 
-| Feature | Definition |
-|---------|-----------|
-| `mom_5d` | 5-day trailing return |
-| `mom_20d` | 20-day trailing return |
-| `mom_60d` | 60-day trailing return |
-| `mom_252d` | 252-day trailing return |
-| `vol_20d` | Annualized 20-day rolling volatility |
-| `vol_60d` | Annualized 60-day rolling volatility |
+| Feature         | Definition                              |
+| --------------- | --------------------------------------- |
+| `mom_5d`        | 5-day trailing return                   |
+| `mom_20d`       | 20-day trailing return                  |
+| `mom_60d`       | 60-day trailing return                  |
+| `mom_252d`      | 252-day trailing return                 |
+| `vol_20d`       | Annualized 20-day rolling volatility    |
+| `vol_60d`       | Annualized 60-day rolling volatility    |
 | `drawdown_252d` | Max drawdown over the trailing 252 days |
-| `beta_60d` | Rolling 60-day beta to the benchmark |
+| `beta_60d`      | Rolling 60-day beta to the benchmark    |
 
 All features are computed from prices available up to date `t` only — no look-ahead.
 
 ### Model Specification
 
-| Parameter | Value |
-|-----------|-------|
-| Model | `Ridge(α=1.0)` with `StandardScaler` |
-| Training window | Rolling 504-day minimum (expanding after 504 days) |
-| Minimum training days | 252 days of history before first prediction |
-| Refit frequency | Weekly (every 5 trading days, `ML_REFIT_FREQ_DAYS=5`) |
-| Annualization | √252 (daily) |
+| Parameter             | Value                                                 |
+| --------------------- | ----------------------------------------------------- |
+| Model                 | `Ridge(α=1.0)` with `StandardScaler`                  |
+| Training window       | Rolling 504-day minimum (expanding after 504 days)    |
+| Minimum training days | 252 days of history before first prediction           |
+| Refit frequency       | Weekly (every 5 trading days, `ML_REFIT_FREQ_DAYS=5`) |
+| Annualization         | √252 (daily)                                          |
 
 ### ML Insights Tab
 
 For ML runs, the run detail page shows an **ML Insights** tab with:
+
 - Feature importance (model coefficients scaled as % contribution)
 - Most recent predicted picks with rank and predicted return
 - Realized vs. predicted return comparison
@@ -220,6 +226,7 @@ For ML runs, the run detail page shows an **ML Insights** tab with:
 ### Trainability Constraints
 
 The model refuses to run (and the job fails with a diagnostic message) if:
+
 - Fewer than 252 training days available at the first refit
 - Average number of symbols per trading day is less than `max(top_n, 2)`
 - Total training rows fall below `252 × top_n`
@@ -248,12 +255,12 @@ The model refuses to run (and the job fails with a diagnostic message) if:
 
 ### Differences from ML Ridge
 
-| Aspect | ml_ridge | ml_lightgbm |
-|--------|----------|-------------|
-| Model | Ridge regression | LightGBM gradient-boosted trees |
-| Parameters | `α=1.0`, StandardScaler | `n_estimators=200`, `learning_rate=0.05`, `num_leaves=31`, `min_child_samples=20` |
-| Failure mode | Fails if minimum data not met | Fails loudly if LightGBM not installed — no fallback to Ridge |
-| Job timeout | 15 min default | 30 min default (configurable via `JOB_TIMEOUT_SECONDS_ML_LIGHTGBM`) |
+| Aspect       | ml_ridge                      | ml_lightgbm                                                                       |
+| ------------ | ----------------------------- | --------------------------------------------------------------------------------- |
+| Model        | Ridge regression              | LightGBM gradient-boosted trees                                                   |
+| Parameters   | `α=1.0`, StandardScaler       | `n_estimators=200`, `learning_rate=0.05`, `num_leaves=31`, `min_child_samples=20` |
+| Failure mode | Fails if minimum data not met | Fails loudly if LightGBM not installed — no fallback to Ridge                     |
+| Job timeout  | 15 min default                | 30 min default (configurable via `JOB_TIMEOUT_SECONDS_ML_LIGHTGBM`)               |
 
 All other aspects (features, walk-forward schedule, refit frequency, warmup, ML Insights tab, trainability constraints) are identical to ML Ridge.
 
@@ -278,16 +285,16 @@ When the selected benchmark ticker (e.g., SPY) is also a member of the investabl
 
 ## Metrics Glossary
 
-| Metric | Definition |
-|--------|-----------|
-| **CAGR** | `(final_NAV / 100,000)^(252/n_days) − 1`. Compound annual growth rate. |
-| **Sharpe** | `(mean_daily_return / std_daily_return) × √252`. Risk-adjusted return; >1.0 is considered strong. |
-| **Max Drawdown** | Largest peak-to-trough NAV decline (%). Lower magnitude is better. |
+| Metric              | Definition                                                                                                           |
+| ------------------- | -------------------------------------------------------------------------------------------------------------------- | ------------ | -------------------------------------------- |
+| **CAGR**            | `(final_NAV / 100,000)^(252/n_days) − 1`. Compound annual growth rate.                                               |
+| **Sharpe**          | `(mean_daily_return / std_daily_return) × √252`. Risk-adjusted return; >1.0 is considered strong.                    |
+| **Max Drawdown**    | Largest peak-to-trough NAV decline (%). Lower magnitude is better.                                                   |
 | **Turnover (Ann.)** | `mean(rebalance_turnover) × periods/year`. Annual portfolio replacement rate. 100% = full book replaced once a year. |
-| **Volatility** | `std(daily_returns) × √252`. Annualized total risk. |
-| **Win Rate** | Fraction of trading days with a positive return. >50% means more up days than down. |
-| **Profit Factor** | Total gains ÷ total losses. >1.0 means gains exceed losses in aggregate. |
-| **Calmar** | `CAGR / |Max Drawdown|`. Return per unit of maximum drawdown risk. |
+| **Volatility**      | `std(daily_returns) × √252`. Annualized total risk.                                                                  |
+| **Win Rate**        | Fraction of trading days with a positive return. >50% means more up days than down.                                  |
+| **Profit Factor**   | Total gains ÷ total losses. >1.0 means gains exceed losses in aggregate.                                             |
+| **Calmar**          | `CAGR /                                                                                                              | Max Drawdown | `. Return per unit of maximum drawdown risk. |
 
 > **Annualization note:** Monthly strategies annualize turnover by multiplying by 12; ML strategies (daily) use 252. All volatility and Sharpe calculations use √252 regardless of strategy.
 
@@ -296,6 +303,7 @@ When the selected benchmark ticker (e.g., SPY) is also a member of the investabl
 ## Research Disclaimer
 
 All strategies are historical simulations using adjusted closing prices from Yahoo Finance. Results do not account for:
+
 - **Survivorship bias** — universe presets are static and do not remove assets delisted during the backtest window
 - **Market impact** — the cost model applies a flat `bps × turnover` rate; it does not model bid-ask spread, slippage, or short-selling costs
 - **Tax drag** — no tax considerations are modeled

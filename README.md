@@ -21,14 +21,14 @@ FactorLab is a quantitative research platform for backtesting systematic equity 
 
 ## Strategies
 
-| ID | Display Name | Rebalance | Signal |
-|----|--------------|-----------|--------|
-| `equal_weight` | Equal Weight | Monthly | None — holds all assets at 1/N |
-| `momentum_12_1` | Momentum 12-1 | Monthly | 12-month return skipping most recent month |
-| `low_vol` | Low Volatility | Monthly | 60-day realized volatility (lowest wins) |
-| `trend_filter` | Trend Filter | Monthly | 200-day benchmark SMA — risk-on/off regime switch |
-| `ml_ridge` | ML Ridge | Daily | Walk-forward Ridge regression on 8 daily features |
-| `ml_lightgbm` | ML LightGBM | Daily | Walk-forward LightGBM on same 8 features |
+| ID              | Display Name   | Rebalance | Signal                                            |
+| --------------- | -------------- | --------- | ------------------------------------------------- |
+| `equal_weight`  | Equal Weight   | Monthly   | None — holds all assets at 1/N                    |
+| `momentum_12_1` | Momentum 12-1  | Monthly   | 12-month return skipping most recent month        |
+| `low_vol`       | Low Volatility | Monthly   | 60-day realized volatility (lowest wins)          |
+| `trend_filter`  | Trend Filter   | Monthly   | 200-day benchmark SMA — risk-on/off regime switch |
+| `ml_ridge`      | ML Ridge       | Daily     | Walk-forward Ridge regression on 8 daily features |
+| `ml_lightgbm`   | ML LightGBM    | Daily     | Walk-forward LightGBM on same 8 features          |
 
 See [docs/strategies.md](docs/strategies.md) for full methodology, warmup requirements, strengths, and limitations.
 
@@ -36,11 +36,11 @@ See [docs/strategies.md](docs/strategies.md) for full methodology, warmup requir
 
 ## Universes
 
-| Preset | Assets | Description |
-|--------|--------|-------------|
-| **ETF8** | 8 ETFs | SPY, QQQ, IWM, EFA, EEM, TLT, GLD, VNQ — cross-asset coverage |
-| **SP100** | 20 stocks | Large-cap S&P 500 members: AAPL, MSFT, AMZN, GOOGL, META, NVDA, JPM… |
-| **NASDAQ100** | 20 stocks | Nasdaq-100 leaders: AAPL, MSFT, NVDA, AMZN, META, TSLA, NFLX, AMD… |
+| Preset        | Assets    | Description                                                          |
+| ------------- | --------- | -------------------------------------------------------------------- |
+| **ETF8**      | 8 ETFs    | SPY, QQQ, IWM, EFA, EEM, TLT, GLD, VNQ — cross-asset coverage        |
+| **SP100**     | 20 stocks | Large-cap S&P 500 members: AAPL, MSFT, AMZN, GOOGL, META, NVDA, JPM… |
+| **NASDAQ100** | 20 stocks | Nasdaq-100 leaders: AAPL, MSFT, NVDA, AMZN, META, TSLA, NFLX, AMD…   |
 
 ---
 
@@ -92,13 +92,13 @@ graph TB
 
 ### Run statuses
 
-| Status | Meaning |
-|--------|---------|
-| `queued` | Backtest job waiting for the worker |
+| Status             | Meaning                                                         |
+| ------------------ | --------------------------------------------------------------- |
+| `queued`           | Backtest job waiting for the worker                             |
 | `waiting_for_data` | Price data is being ingested; backtest will chain automatically |
-| `running` | Worker is executing the backtest |
-| `completed` | Results are available |
-| `failed` | Unrecoverable error; see Jobs page for the error message |
+| `running`          | Worker is executing the backtest                                |
+| `completed`        | Results are available                                           |
+| `failed`           | Unrecoverable error; see Jobs page for the error message        |
 
 ### Job stages (backtest)
 
@@ -125,11 +125,11 @@ Worker claims jobs with an atomic `queued → running` transition to prevent dou
 
 FactorLab uses a singleton `data_state` row to define the effective dataset boundary:
 
-| Field | Description |
-|-------|-------------|
+| Field              | Description                                                                    |
+| ------------------ | ------------------------------------------------------------------------------ |
 | `data_cutoff_date` | Global "Current through" date — all coverage checks and run end dates cap here |
-| `update_mode` | `monthly` (Backtest-ready) or `daily` (Advanced) |
-| `last_update_at` | When the cutoff was last advanced |
+| `update_mode`      | `monthly` (Backtest-ready) or `daily` (Advanced)                               |
+| `last_update_at`   | When the cutoff was last advanced                                              |
 
 **Backtest-ready (monthly):** Updated once per month via Vercel Cron at `0 0 1 * *`. Stable; recommended for most users.
 
@@ -145,6 +145,7 @@ FactorLab uses a singleton `data_state` row to define the effective dataset boun
 ### How Run Gating Works
 
 On `createRun()`:
+
 1. Preflight check queries coverage for all universe symbols + benchmark over the warmup-adjusted window.
 2. **All healthy** → run is `queued` immediately.
 3. **Missing data** → run is `waiting_for_data`; data ingest jobs are auto-queued with `preflight_run_id` linking them to the run.
@@ -181,6 +182,7 @@ At execution time the worker snapshots the resolved universe to `runs.universe_s
 ## Authentication
 
 All routes require authentication. `/login` offers:
+
 - **Sign in** — email + password
 - **Create account** — email + password (rate-limited: 10 per IP per hour via Upstash Redis)
 - **Continue as Guest** — one-click guest account (`guest_<uuid>@factorlab.local`); rate-limited
@@ -205,29 +207,29 @@ Sign Up → signUpAction → Supabase signUp (emailRedirectTo: /auth/callback)
 
 ### Required
 
-| Variable | Where Used | Description |
-|----------|-----------|-------------|
-| `NEXT_PUBLIC_SUPABASE_URL` | Client + Server | Supabase project URL |
-| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Client + Server | Supabase anon key (public) |
-| `SUPABASE_SERVICE_ROLE_KEY` | Server only — **never expose to browser** | Service role key for admin operations |
-| `SUPABASE_REPORTS_BUCKET` | Server only | Storage bucket name for HTML tearsheets (default: `reports`) |
-| `CRON_SECRET` | Server only | Secret to authenticate Vercel Cron requests |
+| Variable                        | Where Used                                | Description                                                  |
+| ------------------------------- | ----------------------------------------- | ------------------------------------------------------------ |
+| `NEXT_PUBLIC_SUPABASE_URL`      | Client + Server                           | Supabase project URL                                         |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Client + Server                           | Supabase anon key (public)                                   |
+| `SUPABASE_SERVICE_ROLE_KEY`     | Server only — **never expose to browser** | Service role key for admin operations                        |
+| `SUPABASE_REPORTS_BUCKET`       | Server only                               | Storage bucket name for HTML tearsheets (default: `reports`) |
+| `CRON_SECRET`                   | Server only                               | Secret to authenticate Vercel Cron requests                  |
 
 ### Optional
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `NEXT_PUBLIC_SITE_URL` | Derived from request `origin` | Canonical site URL; set for production Vercel deployments |
-| `WORKER_TRIGGER_URL` | — | Worker webhook URL (if using trigger-based invocation) |
-| `WORKER_TRIGGER_SECRET` | — | Secret for worker trigger |
-| `ENABLE_DAILY_UPDATES` | `false` | Set to `true` to enable the nightly data patch |
-| `UPSTASH_REDIS_REST_URL` | — | Upstash Redis REST endpoint (rate limiting) |
-| `UPSTASH_REDIS_REST_TOKEN` | — | Upstash Redis REST token |
-| `SKIP_FACTORLAB_WORKER` | — | Set to `1` to skip starting the local worker alongside the dev server |
-| `JOB_TIMEOUT_SECONDS` | `600` | Per-job wall-clock timeout for baseline strategies |
-| `JOB_TIMEOUT_SECONDS_ML_RIDGE` | `900` | Per-job timeout for ml_ridge |
-| `JOB_TIMEOUT_SECONDS_ML_LIGHTGBM` | `1800` | Per-job timeout for ml_lightgbm |
-| `FACTORLAB_FALLBACK_PROVIDER` | — | Set to `stooq` to enable the Stooq.com fallback data provider |
+| Variable                          | Default                       | Description                                                           |
+| --------------------------------- | ----------------------------- | --------------------------------------------------------------------- |
+| `NEXT_PUBLIC_SITE_URL`            | Derived from request `origin` | Canonical site URL; set for production Vercel deployments             |
+| `WORKER_TRIGGER_URL`              | —                             | Worker webhook URL (if using trigger-based invocation)                |
+| `WORKER_TRIGGER_SECRET`           | —                             | Secret for worker trigger                                             |
+| `ENABLE_DAILY_UPDATES`            | `false`                       | Set to `true` to enable the nightly data patch                        |
+| `UPSTASH_REDIS_REST_URL`          | —                             | Upstash Redis REST endpoint (rate limiting)                           |
+| `UPSTASH_REDIS_REST_TOKEN`        | —                             | Upstash Redis REST token                                              |
+| `SKIP_FACTORLAB_WORKER`           | —                             | Set to `1` to skip starting the local worker alongside the dev server |
+| `JOB_TIMEOUT_SECONDS`             | `600`                         | Per-job wall-clock timeout for baseline strategies                    |
+| `JOB_TIMEOUT_SECONDS_ML_RIDGE`    | `900`                         | Per-job timeout for ml_ridge                                          |
+| `JOB_TIMEOUT_SECONDS_ML_LIGHTGBM` | `1800`                        | Per-job timeout for ml_lightgbm                                       |
+| `FACTORLAB_FALLBACK_PROVIDER`     | —                             | Set to `stooq` to enable the Stooq.com fallback data provider         |
 
 Rate limiting is **skipped gracefully** if Upstash env vars are not set (useful for local dev). Create a free Redis database at [upstash.com](https://upstash.com) for production.
 
@@ -248,6 +250,7 @@ cp .env.example .env.local
 ```
 
 Minimum required:
+
 ```
 NEXT_PUBLIC_SUPABASE_URL=https://xxx.supabase.co
 NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJ...
@@ -260,6 +263,7 @@ ENABLE_DAILY_UPDATES=false
 ### 3. Apply database schema
 
 Run in Supabase SQL Editor, in order:
+
 1. `supabase/schema.sql`
 2. All files in `supabase/migrations/` in filename order
 
@@ -267,14 +271,15 @@ Run in Supabase SQL Editor, in order:
 
 In your Supabase project → **Authentication → URL Configuration**:
 
-| Setting | Local dev | Production |
-|---------|-----------|------------|
-| **Site URL** | `http://localhost:3000` | `https://your-domain.com` |
+| Setting           | Local dev                  | Production                   |
+| ----------------- | -------------------------- | ---------------------------- |
+| **Site URL**      | `http://localhost:3000`    | `https://your-domain.com`    |
 | **Redirect URLs** | `http://localhost:3000/**` | `https://your-domain.com/**` |
 
 Add both environments to **Redirect URLs** so verification links work in both.
 
 Under **Email** provider:
+
 - **Dev**: disable "Confirm email" for instant sign-in
 - **Prod**: enable "Confirm email" for email verification flow
 
@@ -334,9 +339,9 @@ A [`render.yaml`](render.yaml) at the repo root defines a Render background work
 2. Render creates a **Background Worker** (`factorlab-engine-worker`)
 3. Set these environment variables in the Render dashboard (`sync: false` — not committed):
 
-   | Variable | Description |
-   |----------|-------------|
-   | `NEXT_PUBLIC_SUPABASE_URL` | Supabase project URL |
+   | Variable                    | Description                                              |
+   | --------------------------- | -------------------------------------------------------- |
+   | `NEXT_PUBLIC_SUPABASE_URL`  | Supabase project URL                                     |
    | `SUPABASE_SERVICE_ROLE_KEY` | Service role key — bypasses RLS, never expose in browser |
 
 4. Click **Deploy** — the worker starts polling the `jobs` table on a 5-second loop
@@ -370,6 +375,7 @@ cd services/engine && pip install -e ".[dev]" && pytest -q
 ## Playwright QA Audit Suite
 
 A browser-based QA harness in `playwright-audit/` executes every strategy × universe × benchmark combination (162 total) and verifies:
+
 - Identity consistency across runs list → detail page → tearsheet
 - Preflight correctness — blocks are truthful and actionable
 - KPI sanity and UI/tearsheet agreement

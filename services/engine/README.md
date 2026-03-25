@@ -3,11 +3,12 @@
 Python worker that polls queued jobs from Supabase, computes backtest outputs,
 and writes `equity_curve` + `run_metrics` rows back to the database.
 For ML strategies (`ml_ridge`, `ml_lightgbm`), it also writes:
+
 - `features_monthly`
 - `model_metadata`
 - `model_predictions`
-The worker also stores per-run execution evidence in `runs.run_metadata`
-(`model_impl`, `feature_set`, `training_window`, `positions_digest`, `equity_digest`).
+  The worker also stores per-run execution evidence in `runs.run_metadata`
+  (`model_impl`, `feature_set`, `training_window`, `positions_digest`, `equity_digest`).
 
 ## Quick start
 
@@ -32,6 +33,7 @@ in `data_last_updated`.
   - `factorlab-engine-ingest --tickers "SPY,QQQ,IWM"`
 
 Optional settings:
+
 - `POLL_INTERVAL_SECONDS` (default: `5`)
 - `JOB_BATCH_SIZE` (default: `3`)
 - `FACTORLAB_UNIVERSE` comma-separated tickers for baseline strategies

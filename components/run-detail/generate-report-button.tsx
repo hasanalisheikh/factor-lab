@@ -1,24 +1,24 @@
-"use client"
+"use client";
 
-import { useActionState, useEffect } from "react"
-import { useRouter } from "next/navigation"
-import { Download, Loader2 } from "lucide-react"
-import { Button } from "@/components/ui/button"
-import { generateRunReport } from "@/app/actions/reports"
+import { useActionState, useEffect } from "react";
+import { useRouter } from "next/navigation";
+import { Download, Loader2 } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { generateRunReport } from "@/app/actions/reports";
 
 interface GenerateReportButtonProps {
-  runId: string
+  runId: string;
 }
 
 export function GenerateReportButton({ runId }: GenerateReportButtonProps) {
-  const router = useRouter()
-  const [state, formAction, isPending] = useActionState(generateRunReport, null)
+  const router = useRouter();
+  const [state, formAction, isPending] = useActionState(generateRunReport, null);
 
   useEffect(() => {
     if (state && "success" in state) {
-      router.refresh()
+      router.refresh();
     }
-  }, [state, router])
+  }, [state, router]);
 
   return (
     <div className="flex flex-col items-end gap-1">
@@ -29,21 +29,21 @@ export function GenerateReportButton({ runId }: GenerateReportButtonProps) {
           variant="outline"
           size="sm"
           disabled={isPending}
-          className="h-8 text-[12px] font-medium border-border text-muted-foreground hover:text-foreground shrink-0"
+          className="border-border text-muted-foreground hover:text-foreground h-8 shrink-0 text-[12px] font-medium"
         >
           {isPending ? (
-            <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
+            <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
           ) : (
-            <Download className="w-3.5 h-3.5 mr-1.5" />
+            <Download className="mr-1.5 h-3.5 w-3.5" />
           )}
           {isPending ? "Generating…" : "Generate Report"}
         </Button>
       </form>
       {state && "error" in state && (
-        <p className="text-[11px] text-destructive max-w-[220px] text-right leading-snug">
+        <p className="text-destructive max-w-[220px] text-right text-[11px] leading-snug">
           {state.error}
         </p>
       )}
     </div>
-  )
+  );
 }

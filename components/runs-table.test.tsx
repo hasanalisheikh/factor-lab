@@ -1,7 +1,7 @@
-import { render, screen } from "@testing-library/react"
-import { describe, expect, it } from "vitest"
-import { RunsTable } from "@/components/runs-table"
-import type { RunWithMetrics } from "@/lib/supabase/types"
+import { render, screen } from "@testing-library/react";
+import { describe, expect, it } from "vitest";
+import { RunsTable } from "@/components/runs-table";
+import type { RunWithMetrics } from "@/lib/supabase/types";
 
 const mockRuns: RunWithMetrics[] = [
   {
@@ -35,15 +35,17 @@ const mockRuns: RunWithMetrics[] = [
       calmar: 1.3,
     },
   },
-]
+];
 
 describe("RunsTable", () => {
   it("renders the desktop table and mobile cards with run actions", () => {
-    render(<RunsTable runs={mockRuns} />)
-    expect(screen.getAllByText("Momentum Test")).not.toHaveLength(0)
-    const link = screen.getByRole("link", { name: "Momentum Test" })
-    expect(link).toHaveAttribute("href", "/runs/11111111-1111-1111-1111-111111111111")
-    expect(screen.getAllByRole("button", { name: "Open actions for Momentum Test" })).toHaveLength(2)
-    expect(screen.getByRole("combobox", { name: "Sort runs" })).toBeInTheDocument()
-  })
-})
+    render(<RunsTable runs={mockRuns} />);
+    expect(screen.getAllByText("Momentum Test")).not.toHaveLength(0);
+    const link = screen.getByRole("link", { name: "Momentum Test" });
+    expect(link).toHaveAttribute("href", "/runs/11111111-1111-1111-1111-111111111111");
+    expect(screen.getAllByRole("button", { name: "Open actions for Momentum Test" })).toHaveLength(
+      2
+    );
+    expect(screen.getByRole("combobox", { name: "Sort runs" })).toBeInTheDocument();
+  });
+});
