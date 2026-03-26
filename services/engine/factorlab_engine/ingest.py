@@ -140,11 +140,11 @@ def _get_current_data_state_cutoff(io: SupabaseIO) -> str | None:
             io.client.table("data_state")
             .select("data_cutoff_date")
             .eq("id", _DATA_STATE_ID)
-            .maybeSingle()
             .execute()
         )
-        if result.data:
-            return result.data.get("data_cutoff_date")
+        rows = result.data or []
+        if rows:
+            return rows[0].get("data_cutoff_date")
     except Exception as exc:
         print(f"[ingest] warning: could not read data_state: {exc}")
     return None

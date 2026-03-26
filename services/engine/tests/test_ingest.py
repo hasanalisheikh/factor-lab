@@ -90,34 +90,12 @@ def _make_close_df(start: str = "2026-03-01", end: str = "2026-03-25") -> pd.Dat
     return pd.DataFrame({"SPY": [500.0] * len(dates), "QQQ": [450.0] * len(dates)}, index=dates)
 
 
-def _make_fake_supabase(current_cutoff: str | None = None) -> MagicMock:
-    """Build a minimal mock of the Supabase client.
-
-    - table("data_state").select(...).eq(...).maybeSingle().execute() → current_cutoff
-    - table("data_state").upsert(...).execute() → records the call
-    - table("prices").upsert(...).execute() → no-op
-    - table("data_last_updated").upsert(...).execute() → no-op
-    - table("data_ingestion_log").insert(...).execute() → no-op
-    - rpc("upsert_ticker_stats", ...).execute() → no-op
-    """
+def _make_fake_supabase() -> MagicMock:
+    """Build a minimal mock Supabase client that records upsert/insert/rpc calls."""
     client = MagicMock()
-
-    # data_state read
-    read_result = MagicMock()
-    read_result.data = {"data_cutoff_date": current_cutoff} if current_cutoff else None
-    (
-        client.table("data_state")
-        .select("data_cutoff_date")
-        .eq("id", 1)
-        .maybeSingle()
-        .execute.return_value
-    ) = read_result
-
-    # All upsert/insert/rpc calls return a generic success mock
     client.table.return_value.upsert.return_value.execute.return_value = MagicMock()
     client.table.return_value.insert.return_value.execute.return_value = MagicMock()
     client.rpc.return_value.execute.return_value = MagicMock()
-
     return client
 
 
@@ -133,12 +111,14 @@ def _run_main(
     mode: str = "daily",
     extra_args: list[str] | None = None,
 ) -> MagicMock:
-    """Invoke main() with mocked yfinance, SupabaseIO, and _utcnow.
+    """Invoke main() with mocked Supabase, yfinance, and _utcnow.
 
-    Returns the fake Supabase client so callers can assert on it.
+    Patches _get_current_data_state_cutoff directly so the test does not need
+    to replicate the full Supabase select call chain.
+
+    Returns the fake Supabase client so callers can assert on upsert/rpc calls.
     """
-    fake_client = _make_fake_supabase(current_cutoff)
-
+    fake_client = _make_fake_supabase()
     fake_io = MagicMock()
     fake_io.client = fake_client
 
@@ -149,6 +129,9 @@ def _run_main(
     with (
         patch("factorlab_engine.ingest.SupabaseIO", return_value=fake_io),
         patch("factorlab_engine.ingest._download_prices", return_value=close_df),
+        patch(
+            "factorlab_engine.ingest._get_current_data_state_cutoff", return_value=current_cutoff
+        ),
         patch(
             "factorlab_engine.ingest._utcnow",
             return_value=_make_utc(2026, 3, 26, 21),  # Wednesday 21:00 UTC → target=2026-03-25
