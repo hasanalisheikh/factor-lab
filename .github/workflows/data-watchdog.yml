@@ -1,0 +1,32 @@
+name: Data Staleness Watchdog
+
+on:
+  schedule:
+    # Mon–Fri at 22:00 UTC — 1 hour after the nightly ingest job.
+    # Fails loudly (→ GitHub failure email) if data_state.data_cutoff_date
+    # is more than 1 trading day stale.
+    - cron: "0 22 * * 1-5"
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install engine
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e "services/engine"
+
+      - name: Check data freshness
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: python -m factorlab_engine.watchdog
