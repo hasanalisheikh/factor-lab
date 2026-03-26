@@ -109,13 +109,69 @@ SP100_TICKERS = [
     "XOM",
 ]
 
-# Common benchmarks always ingested regardless of --tickers, so the /data page
-# benchmark coverage section always shows real data.
-BENCHMARK_TICKERS = ["SPY", "QQQ", "IWM"]
+# All benchmarks available in the app (mirrors BENCHMARK_OPTIONS in lib/benchmark.ts).
+# Must be ingested so the /data page benchmark coverage section always shows real data.
+BENCHMARK_TICKERS = ["SPY", "QQQ", "IWM", "VTI", "EFA", "EEM", "TLT", "GLD", "VNQ"]
+
+# Singleton row ID in data_state table
+_DATA_STATE_ID = 1
 
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _get_last_complete_trading_day_utc() -> str:
+    """Return the most recent complete weekday at least 1 calendar day in the past (UTC).
+
+    Mirrors getLastCompleteTradingDayUtc() in lib/data-cutoff.ts.
+    """
+    cursor = _utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+    cursor -= timedelta(days=1)
+    while cursor.weekday() >= 5:  # 5=Saturday, 6=Sunday
+        cursor -= timedelta(days=1)
+    return cursor.strftime("%Y-%m-%d")
+
+
+def _get_current_data_state_cutoff(io: SupabaseIO) -> str | None:
+    """Read current data_state.data_cutoff_date from DB; returns None on error or missing row."""
+    try:
+        result = (
+            io.client.table("data_state")
+            .select("data_cutoff_date")
+            .eq("id", _DATA_STATE_ID)
+            .maybeSingle()
+            .execute()
+        )
+        if result.data:
+            return result.data.get("data_cutoff_date")
+    except Exception as exc:
+        print(f"[ingest] warning: could not read data_state: {exc}")
+    return None
+
+
+def _update_data_state(io: SupabaseIO, cutoff_date: str, mode: str, tickers: list[str]) -> None:
+    """Upsert data_state.data_cutoff_date and refresh ticker_stats for all ingested tickers.
+
+    Raises on data_state write failure so the caller can surface the error.
+    ticker_stats failures are non-fatal (best-effort).
+    """
+    now = _utcnow().isoformat()
+    io.client.table("data_state").upsert(
+        {
+            "id": _DATA_STATE_ID,
+            "data_cutoff_date": cutoff_date,
+            "last_update_at": now,
+            "update_mode": mode,
+            "updated_by": f"github-actions:ingest:{mode}",
+        }
+    ).execute()
+
+    for ticker in tickers:
+        try:
+            io.client.rpc("upsert_ticker_stats", {"p_ticker": ticker}).execute()
+        except Exception as exc:
+            print(f"[ingest] warning: could not upsert ticker_stats for {ticker}: {exc}")
 
 
 def _normalize_close_frame(raw: pd.DataFrame, tickers: list[str]) -> pd.DataFrame:
@@ -227,6 +283,12 @@ def parse_args() -> argparse.Namespace:
         default=",".join(SP100_TICKERS),
         help="Comma-separated tickers list.",
     )
+    parser.add_argument(
+        "--mode",
+        default="daily",
+        choices=["daily", "monthly", "manual"],
+        help="Update mode recorded in data_state (daily|monthly|manual).",
+    )
     return parser.parse_args()
 
 
@@ -236,8 +298,17 @@ def main() -> None:
     if not tickers:
         raise RuntimeError("No tickers provided for ingestion")
 
-    # Always include benchmark tickers so /data benchmark coverage is populated
+    # Always include all benchmark tickers so /data benchmark coverage is populated
     tickers = list(dict.fromkeys(tickers + BENCHMARK_TICKERS))
+
+    last_complete_day = _get_last_complete_trading_day_utc()
+    io = SupabaseIO()
+    current_cutoff = _get_current_data_state_cutoff(io)
+
+    print(
+        f"[ingest] scheduler fired mode={args.mode} "
+        f"target_cutoff={last_complete_day} current_cutoff={current_cutoff or 'none'}"
+    )
 
     print(f"[ingest] downloading {len(tickers)} tickers from {args.start_date} to {args.end_date}")
     close = _download_prices(tickers, args.start_date, args.end_date)
@@ -245,10 +316,14 @@ def main() -> None:
         raise RuntimeError("No price data returned")
 
     rows = _to_price_rows(close)
-    io = SupabaseIO()
     rows_upserted = _upsert_prices(io, rows)
     start_date = close.index.min().strftime("%Y-%m-%d")
     end_date = close.index.max().strftime("%Y-%m-%d")
+
+    # Cap effective cutoff at the last confirmed complete trading day to avoid
+    # treating a partial (intra-day) session as finalized.
+    effective_cutoff = min(end_date, last_complete_day)
+
     _upsert_data_log(
         io=io,
         tickers_ingested=len(close.columns),
@@ -263,10 +338,24 @@ def main() -> None:
         start_date=start_date,
         end_date=end_date,
     )
+
     print(
         f"[ingest] upserted {rows_upserted} rows for {len(close.columns)} tickers "
-        f"({close.index.min().date()} to {close.index.max().date()})"
+        f"({start_date} to {end_date})"
     )
+
+    # Advance data_state and refresh ticker_stats only when there is genuinely new data.
+    # Prices are always upserted above (idempotent gap repair), but the bookkeeping
+    # cutoff must only move forward, never backward.
+    if not current_cutoff or effective_cutoff > current_cutoff:
+        try:
+            _update_data_state(io, effective_cutoff, args.mode, list(close.columns))
+            print(f"[ingest] cutoff advanced: {current_cutoff or 'none'} -> {effective_cutoff}")
+        except Exception as exc:
+            print(f"[ingest] ERROR: could not update data_state: {exc}")
+            raise
+    else:
+        print(f"[ingest] cutoff unchanged at {current_cutoff} (target={effective_cutoff})")
 
 
 if __name__ == "__main__":

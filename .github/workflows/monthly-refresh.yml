@@ -1,0 +1,45 @@
+name: Monthly Refresh
+
+on:
+  schedule:
+    # 01:00 UTC on the 1st of each month — 1 hour after Vercel Cron (backup)
+    - cron: "0 1 1 * *"
+  workflow_dispatch:
+    inputs:
+      start_date:
+        description: "Start date (YYYY-MM-DD). Leave blank for default."
+        required: false
+        default: ""
+
+jobs:
+  monthly-refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install engine
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e "services/engine"
+
+      - name: Run ingestion (monthly window)
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          if [ -n "${{ inputs.start_date }}" ]; then
+            ARGS="--start-date ${{ inputs.start_date }}"
+          else
+            # 45 calendar days covers the 30-trading-day monthly gap-repair window
+            START=$(date -u -d "45 days ago" +%Y-%m-%d)
+            ARGS="--start-date $START"
+          fi
+
+          echo "[monthly-refresh] args: $ARGS"
+          python -m factorlab_engine.ingest $ARGS --mode monthly
