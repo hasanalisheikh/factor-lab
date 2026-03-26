@@ -126,6 +126,19 @@ export default async function RunDetailPage({ params }: { params: Promise<{ id: 
   const metrics = getMetrics(run.run_metrics);
   const status = run.status as RunStatus;
   const strategyLabel = STRATEGY_LABELS[run.strategy_id as StrategyId] ?? run.strategy_id;
+
+  const STALE_DAYS_THRESHOLD = 14;
+  const equityLastDate = equityCurve.length > 0 ? equityCurve[equityCurve.length - 1].date : null;
+  const isEquityStale =
+    status === "completed" &&
+    equityLastDate != null &&
+    run.end_date != null &&
+    equityLastDate < run.end_date &&
+    Math.round(
+      (new Date(`${run.end_date}T00:00:00Z`).getTime() -
+        new Date(`${equityLastDate}T00:00:00Z`).getTime()) /
+        86_400_000
+    ) > STALE_DAYS_THRESHOLD;
   const universePreset = getUniversePreset(run);
   const universeCount = Array.isArray(run.universe_symbols) ? run.universe_symbols.length : null;
   const canGenerateReport = status === "completed" && equityCurve.length > 0 && metrics != null;
@@ -274,6 +287,9 @@ export default async function RunDetailPage({ params }: { params: Promise<{ id: 
             equityCurve={equityCurve}
             benchmarkTicker={benchmarkTicker}
             runConfig={runConfig}
+            isEquityStale={isEquityStale}
+            equityLastDate={equityLastDate}
+            runId={id}
           />
         </TabsContent>
         <TabsContent value="holdings" className="mt-4">

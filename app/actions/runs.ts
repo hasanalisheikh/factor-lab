@@ -1517,3 +1517,61 @@ export async function deleteRunAction(runId: string): Promise<DeleteRunActionRes
   revalidatePath("/dashboard");
   redirect("/runs?deleted=1");
 }
+
+export type CloneRunResult = { ok: true; newRunId: string } | { ok: false; error: string };
+
+export async function cloneRunAction(sourceRunId: string): Promise<CloneRunResult> {
+  const parsedRunId = z.string().uuid().safeParse(sourceRunId);
+  if (!parsedRunId.success) {
+    return { ok: false, error: "Invalid run ID." };
+  }
+
+  const serverClient = await createClient();
+  const {
+    data: { user },
+    error: userError,
+  } = await serverClient.auth.getUser();
+  if (userError || !user) {
+    return { ok: false, error: "Authentication required. Please sign in." };
+  }
+
+  const { data: source, error: sourceError } = await serverClient
+    .from("runs")
+    .select(
+      "id, name, strategy_id, start_date, end_date, benchmark_ticker, universe, costs_bps, top_n, user_id"
+    )
+    .eq("id", parsedRunId.data)
+    .maybeSingle();
+
+  if (sourceError || !source) {
+    return { ok: false, error: "Source run not found." };
+  }
+  if (source.user_id !== user.id) {
+    return { ok: false, error: "You can only clone your own runs." };
+  }
+
+  const { getDataState } = await import("@/lib/supabase/queries");
+  const dataState = await getDataState();
+  const newEndDate = dataState.dataCutoffDate ?? getLastCompleteTradingDayUtc();
+
+  const result = await createRun({
+    name: `${source.name} (updated)`,
+    strategy_id: source.strategy_id as z.input<typeof createRunSchema>["strategy_id"],
+    start_date: source.start_date ?? "",
+    end_date: newEndDate,
+    benchmark: (source.benchmark_ticker ?? "SPY") as z.input<typeof createRunSchema>["benchmark"],
+    universe: (source.universe ?? "ETF8") as z.input<typeof createRunSchema>["universe"],
+    costs_bps: source.costs_bps ?? 10,
+    top_n: source.top_n ?? 10,
+    initial_capital: 100000,
+    apply_costs: (source.costs_bps ?? 10) > 0,
+    slippage_bps: 0,
+    acknowledge_warnings: false,
+  });
+
+  if (!result.ok) {
+    return { ok: false, error: result.error };
+  }
+
+  return { ok: true, newRunId: result.runId };
+}
