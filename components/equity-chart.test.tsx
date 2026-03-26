@@ -25,6 +25,17 @@ function makeTradingDaySeries(startDate: string, endDate: string) {
 }
 
 describe("EquityChart", () => {
+  it("renders the actual equity-curve last date, not a later run.end_date", () => {
+    // Equity curve ends 2025-11-22; a run.end_date of 2026-03-13 is never passed to the chart
+    const data = makeTradingDaySeries("2021-03-13", "2025-11-22");
+    const lastDate = data[data.length - 1].date;
+
+    render(<EquityChart data={data} benchmarkTicker="SPY" timeframe="ALL" />);
+
+    expect(screen.getByTestId("chart-end-date")).toHaveTextContent(lastDate);
+    expect(screen.queryByText("2026-03-13")).not.toBeInTheDocument();
+  });
+
   it("renders the exact plotted start, mid, and end dates for ALL on long runs", () => {
     const data = makeTradingDaySeries("2021-03-01", "2026-03-13");
     const plotted = downsampleEquityCurve(data, DEFAULT_EQUITY_CHART_MAX_POINTS);

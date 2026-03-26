@@ -30,7 +30,10 @@ export function RunStatusPoller({ status }: { status: RunStatus }) {
 
     function schedule() {
       const elapsed = Date.now() - (startedAtRef.current ?? 0);
-      const delay = elapsed < FAST_PHASE_MS ? FAST_INTERVAL_MS : SLOW_INTERVAL_MS;
+      // Queued runs don't benefit from fast polling — nothing changes until worker pickup.
+      // Only running/waiting_for_data use the 1.5 s fast phase.
+      const inFastPhase = status !== "queued" && elapsed < FAST_PHASE_MS;
+      const delay = inFastPhase ? FAST_INTERVAL_MS : SLOW_INTERVAL_MS;
       timerRef.current = setTimeout(() => {
         router.refresh();
         schedule();

@@ -815,7 +815,12 @@ def _build_baseline_result(
     if on_progress:
         on_progress("load_data", 20)
     prices = io.fetch_prices_frame(tickers, warmup_start, run_end)
-    if prices.empty or prices.shape[0] < 40:
+    _prices_stale = (
+        prices.empty
+        or prices.shape[0] < 40
+        or prices.index.max() < pd.Timestamp(run_end) - pd.Timedelta(days=5)
+    )
+    if _prices_stale:
         prices = _download_prices(warmup_start, run_end, tickers)
 
     # For trend_filter: if defensive ticker still missing, try BIL fallback
@@ -935,6 +940,7 @@ def _build_ml_result(
         or not has_benchmark
         or not has_non_benchmark
         or bool(missing_tickers)
+        or prices.index.max() < pd.Timestamp(run["end_date"]) - pd.Timedelta(days=5)
     )
     if needs_download:
         prices = _download_prices(warmup_start, run["end_date"], tickers)

@@ -14,8 +14,9 @@
  */
 export function computeEtaSeconds(progressPct: number, startedAt: string | null): number | null {
   if (!startedAt || progressPct <= 0 || progressPct >= 100) return null;
+  if (progressPct < 20) return null; // too little progress — extrapolation is unreliable
   const elapsedMs = Date.now() - new Date(startedAt).getTime();
-  if (elapsedMs < 3000) return null; // too early — avoid wild initial estimates
+  if (elapsedMs < 20000) return null; // too early — extrapolation unreliable below 20s elapsed
   const etaMs = (elapsedMs * (100 - progressPct)) / progressPct;
   return Math.round(etaMs / 1000);
 }
@@ -31,7 +32,7 @@ export function computeEtaSeconds(progressPct: number, startedAt: string | null)
  */
 export function formatEtaSeconds(seconds: number | null): string {
   if (seconds === null) return "";
-  if (seconds < 60) return "< 1m remaining";
+  if (seconds < 60) return "finishing up…";
   const mins = Math.round(seconds / 60);
   if (mins < 60) return `~${mins}m remaining`;
   const hrs = Math.floor(mins / 60);

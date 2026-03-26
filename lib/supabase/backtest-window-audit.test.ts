@@ -45,6 +45,28 @@ function makeRunsClient(runs: RunRow[]) {
   };
 }
 
+/**
+ * Generates synthetic equity_curve rows for the batch `.in()` query.
+ * Each run gets `count` rows with the correct min/max dates in position 0 and count-1.
+ */
+function makeEquityCurveRows(
+  statsByRunId: Record<string, { count: number; minDate: string | null; maxDate: string | null }>
+) {
+  const rows: Array<{ run_id: string; date: string }> = [];
+  for (const [runId, stats] of Object.entries(statsByRunId)) {
+    if (stats.count === 0 || stats.minDate === null || stats.maxDate === null) continue;
+    rows.push({ run_id: runId, date: stats.minDate });
+    for (let i = 1; i < stats.count - 1; i++) {
+      // Middle rows — date value is not meaningful for the test, just needs to sort between min/max.
+      rows.push({ run_id: runId, date: "2023-06-01" });
+    }
+    if (stats.count > 1) {
+      rows.push({ run_id: runId, date: stats.maxDate });
+    }
+  }
+  return rows;
+}
+
 function makeAuditAdminClient(
   statsByRunId: Record<
     string,
@@ -55,6 +77,8 @@ function makeAuditAdminClient(
     }
   >
 ) {
+  const allRows = makeEquityCurveRows(statsByRunId);
+
   return {
     from(table: string) {
       if (table !== "equity_curve") {
@@ -62,45 +86,13 @@ function makeAuditAdminClient(
       }
 
       return {
-        select(_columns: string, options?: { count?: string; head?: boolean }) {
-          if (options?.head) {
-            return {
-              eq: async (_column: string, runId: string) => ({
-                count: statsByRunId[runId]?.count ?? 0,
-                error: null,
-              }),
-            };
-          }
-
-          const state = {
-            runId: "",
-            ascending: true,
+        select(_columns: string) {
+          return {
+            in: async (_column: string, _runIds: string[]) => ({
+              data: allRows,
+              error: null,
+            }),
           };
-
-          const builder = {
-            eq(_column: string, runId: string) {
-              state.runId = runId;
-              return builder;
-            },
-            order(_column: string, options: { ascending: boolean }) {
-              state.ascending = options.ascending;
-              return builder;
-            },
-            async limit(_limit: number) {
-              const stats = statsByRunId[state.runId] ?? {
-                count: 0,
-                minDate: null,
-                maxDate: null,
-              };
-              const date = state.ascending ? stats.minDate : stats.maxDate;
-              return {
-                data: date ? [{ date }] : [],
-                error: null,
-              };
-            },
-          };
-
-          return builder;
         },
       };
     },

@@ -100,28 +100,24 @@ export default async function RunDetailPage({ params }: { params: Promise<{ id: 
     notFound();
   }
 
-  const run = await getRunById(id);
+  // Round 1: fire getRunById in parallel with the 6 run-id-only queries.
+  const [run, equityCurve, job, report, modelMetadata, modelPredictions, positions] =
+    await Promise.all([
+      getRunById(id),
+      getEquityCurve(id),
+      getJobByRunId(id),
+      getReportByRunId(id),
+      getModelMetadataByRunId(id),
+      getModelPredictionsByRunId(id),
+      getPositionsByRunId(id),
+    ]);
 
   if (!run) {
     notFound();
   }
 
-  const [
-    equityCurve,
-    job,
-    report,
-    modelMetadata,
-    modelPredictions,
-    positions,
-    benchmarkOverlap,
-    ingestProgress,
-  ] = await Promise.all([
-    getEquityCurve(id),
-    getJobByRunId(id),
-    getReportByRunId(id),
-    getModelMetadataByRunId(id),
-    getModelPredictionsByRunId(id),
-    getPositionsByRunId(id),
+  // Round 2: queries that require the run object.
+  const [benchmarkOverlap, ingestProgress] = await Promise.all([
     getBenchmarkOverlapStateForRun(run),
     // Only needed while waiting for data ingestion to complete.
     run.status === "waiting_for_data" ? getIngestProgressForRun(id) : Promise.resolve(null),

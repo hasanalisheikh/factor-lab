@@ -620,7 +620,9 @@ class SupabaseIO:
             return pd.DataFrame()
 
         rows: list[dict[str, Any]] = []
-        page_size = 1000
+        # 5000 rows/page keeps round-trips low; ordering by (ticker, date) matches the
+        # idx_prices_ticker_date index so pagination doesn't degrade at large offsets.
+        page_size = 5000
         offset = 0
         while True:
             result = (
@@ -629,8 +631,8 @@ class SupabaseIO:
                 .in_("ticker", tickers)
                 .gte("date", start_date)
                 .lte("date", end_date)
-                .order("date")
                 .order("ticker")
+                .order("date")
                 .range(offset, offset + page_size - 1)
                 .execute()
             )

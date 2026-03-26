@@ -27,14 +27,15 @@ export default async function DashboardPage({
   searchParams: Promise<{ run?: string }>;
 }) {
   const { run: runParam } = await searchParams;
-  const [allRuns, totalRuns, defaultRun] = await Promise.all([
+  const [allRuns, totalRuns, defaultRun, paramRun] = await Promise.all([
     getRuns({ limit: 20 }),
     getRunsCount(),
     getMostRecentCompletedRun(),
+    runParam ? getRunById(runParam) : Promise.resolve(null),
   ]);
 
   // If a specific run is selected via ?run=<id>, use it; otherwise fall back to most recent.
-  const featuredRun = runParam ? ((await getRunById(runParam)) ?? defaultRun) : defaultRun;
+  const featuredRun = paramRun ?? defaultRun;
 
   let equityCurve: Awaited<ReturnType<typeof getEquityCurve>> = [];
   let benchmark = "SPY";

@@ -17,13 +17,13 @@ const STAGE_LABELS: Record<string, string> = {
   rebalance: "Rebalancing portfolio",
   metrics: "Calculating performance",
   persist: "Saving results",
-  report: "Finalizing",
+  report: "Generating report",
   features: "Building ML features",
   train: "Training models",
   download: "Downloading data",
   transform: "Processing data",
   upsert_prices: "Storing prices",
-  finalize: "Finalizing",
+  finalize: "Completing",
 };
 
 const STAGE_DESCRIPTIONS: Record<string, string> = {
@@ -33,13 +33,13 @@ const STAGE_DESCRIPTIONS: Record<string, string> = {
   rebalance: "Building portfolio weights and applying transaction costs…",
   metrics: "Computing Sharpe ratio, CAGR, drawdown, and more…",
   persist: "Writing results to the database…",
-  report: "Wrapping up…",
+  report: "Building the HTML performance report…",
   features: "Generating momentum, volatility, and factor features…",
   train: "Running walk-forward model training…",
   download: "Downloading price history…",
   transform: "Processing and normalizing price data…",
   upsert_prices: "Storing price data in the database…",
-  finalize: "Wrapping up…",
+  finalize: "Completing data processing…",
 };
 
 function FailedErrorMessage({ message }: { message: string }) {
@@ -79,6 +79,7 @@ function formatElapsed(seconds: number): string {
 export function JobStatusPanel({ job, runStatus, ingestProgress }: JobStatusPanelProps) {
   const isQueued = runStatus === "queued";
   const isRunning = runStatus === "running";
+  const isWaiting = runStatus === "waiting_for_data";
 
   // Elapsed-time counter shown while the run is waiting for a worker to pick it up.
   const [elapsed, setElapsed] = useState(0);
@@ -91,6 +92,28 @@ export function JobStatusPanel({ job, runStatus, ingestProgress }: JobStatusPane
     return () => clearInterval(id);
   }, [isQueued, job?.created_at]);
 
+  // Elapsed-time counter shown while the backtest is actively running.
+  const [runElapsed, setRunElapsed] = useState(0);
+  useEffect(() => {
+    if (!isRunning) return;
+    const startMs = job?.started_at ? new Date(job.started_at).getTime() : Date.now();
+    const tick = () => setRunElapsed(Math.floor((Date.now() - startMs) / 1000));
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [isRunning, job?.started_at]);
+
+  // Elapsed-time counter for data ingestion (tracks how long we've been waiting for data).
+  const [ingestElapsed, setIngestElapsed] = useState(0);
+  useEffect(() => {
+    if (!isWaiting || !ingestProgress?.minStartedAt) return;
+    const startMs = new Date(ingestProgress.minStartedAt).getTime();
+    const tick = () => setIngestElapsed(Math.floor((Date.now() - startMs) / 1000));
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [isWaiting, ingestProgress?.minStartedAt]);
+
   if (
     runStatus !== "queued" &&
     runStatus !== "running" &&
@@ -102,7 +125,6 @@ export function JobStatusPanel({ job, runStatus, ingestProgress }: JobStatusPane
 
   const isFailed = runStatus === "failed";
   const isBlocked = runStatus === "blocked";
-  const isWaiting = runStatus === "waiting_for_data";
   const progress = job?.progress ?? 0;
   const stage = job?.stage ?? "ingest";
   const stageLabel = STAGE_LABELS[stage] ?? stage;
@@ -120,10 +142,19 @@ export function JobStatusPanel({ job, runStatus, ingestProgress }: JobStatusPane
       ? formatEtaSeconds(computeEtaSeconds(ingestAvg, ingestProgress.minStartedAt))
       : "";
 
+  // Dynamic queued copy — avoids the false promise of "usually starts in seconds".
+  function queuedSubtext(): string {
+    if (elapsed < 30) return `Waiting for worker pickup… (${formatElapsed(elapsed)} elapsed)`;
+    if (elapsed < 120)
+      return `Still in queue — the worker will pick this up soon. (${formatElapsed(elapsed)} elapsed)`;
+    return `Queued for ${formatElapsed(elapsed)} — the worker may be processing other jobs.`;
+  }
+
   // Summary line for the waiting-for-data state.
+  const ingestElapsedStr = ingestProgress?.minStartedAt ? formatElapsed(ingestElapsed) : null;
   const ingestSummary =
     ingestProgress && ingestProgress.totalJobs > 0
-      ? `Downloading data for ${ingestProgress.totalJobs} ticker${ingestProgress.totalJobs !== 1 ? "s" : ""} (${ingestProgress.completedJobs}/${ingestProgress.totalJobs} done)`
+      ? `Downloading data for ${ingestProgress.totalJobs} ticker${ingestProgress.totalJobs !== 1 ? "s" : ""} (${ingestProgress.completedJobs}/${ingestProgress.totalJobs} done)${ingestElapsedStr ? ` — ${ingestElapsedStr} elapsed` : ""}`
       : "Ingesting required price history — the backtest will start automatically when done.";
 
   return (
@@ -160,11 +191,11 @@ export function JobStatusPanel({ job, runStatus, ingestProgress }: JobStatusPane
             </p>
             <p className="text-muted-foreground mt-0.5 text-[12px]">
               {isQueued ? (
-                `Waiting for worker — usually starts in seconds. (${formatElapsed(elapsed)} elapsed)`
+                queuedSubtext()
               ) : isWaiting ? (
                 ingestSummary
               ) : isRunning ? (
-                (STAGE_DESCRIPTIONS[stage] ?? "Processing…")
+                `${STAGE_DESCRIPTIONS[stage] ?? "Processing…"} (${formatElapsed(runElapsed)} elapsed)`
               ) : (isFailed || isBlocked) && errorText ? (
                 <FailedErrorMessage message={errorText} />
               ) : isBlocked ? (

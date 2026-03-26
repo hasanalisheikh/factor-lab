@@ -102,6 +102,13 @@ export function OverviewTab({
 }: OverviewTabProps) {
   const [selectedTf, setSelectedTf] = useState(() => getDefaultTimeframe(equityCurve));
 
+  // Derive effective window from actual equity-curve data, not requested run params.
+  // These are used for the Period card so it stays consistent with the chart x-axis.
+  const effectiveStart = equityCurve[0]?.date ?? runConfig?.startDate;
+  const effectiveEnd = equityCurve[equityCurve.length - 1]?.date ?? runConfig?.endDate;
+  const periodEndMismatch =
+    effectiveEnd != null && runConfig?.endDate != null && effectiveEnd < runConfig.endDate;
+
   const chartState = useMemo(
     () => prepareTimeframeEquityCurve(equityCurve, selectedTf),
     [equityCurve, selectedTf]
@@ -238,8 +245,12 @@ export function OverviewTab({
                 {
                   label: "Period",
                   value:
-                    runConfig.startDate && runConfig.endDate
-                      ? `${runConfig.startDate.slice(0, 7)} – ${runConfig.endDate.slice(0, 7)}`
+                    effectiveStart && effectiveEnd
+                      ? `${effectiveStart.slice(0, 7)} – ${effectiveEnd.slice(0, 7)}${
+                          periodEndMismatch
+                            ? ` (requested: ${runConfig!.endDate!.slice(0, 7)})`
+                            : ""
+                        }`
                       : "—",
                 },
                 { label: "Costs", value: `${runConfig.costsBps} bps per rebalance` },

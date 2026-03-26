@@ -430,7 +430,7 @@ export async function fetchAllEquityCurve(runId: string): Promise<EquityCurveRow
   while (true) {
     const { data, error } = await supabase
       .from("equity_curve")
-      .select("*")
+      .select("run_id,date,portfolio,benchmark") // id column intentionally excluded — not used by any consumer
       .eq("run_id", runId)
       .order("date", { ascending: true })
       .range(offset, offset + EQUITY_CURVE_PAGE_SIZE - 1);
@@ -1217,7 +1217,10 @@ function summarizeTickerAgainstCalendar(params: {
   };
 }
 
-export async function getDataHealthSummary(): Promise<DataHealthSummary> {
+export async function getDataHealthSummary(
+  prefetchedRanges?: TickerDateRange[],
+  prefetchedDataState?: DataStateSummary
+): Promise<DataHealthSummary> {
   const empty: DataHealthSummary = {
     tickersCount: 0,
     dateStart: null,
@@ -1232,51 +1235,63 @@ export async function getDataHealthSummary(): Promise<DataHealthSummary> {
 
   try {
     const supabase = await createClient();
-    type StatsRow = {
-      symbol: string;
-      first_date: string;
-      distinct_days: string | number;
-    };
-    const [dataState, statsRes] = await Promise.all([
-      getDataState(),
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (supabase as any)
-        .from("ticker_stats")
-        .select("symbol, first_date, distinct_days") as Promise<{
-        data: StatsRow[] | null;
-        error: { message: string } | null;
-      }>,
-    ]);
 
     let tickersCount = 0;
     let dateStart: string | null = null;
-    const dateEnd = dataState.dataCutoffDate;
     let actualTickerDays = 0;
 
-    if (!statsRes.error && statsRes.data) {
-      tickersCount = statsRes.data.length;
-      dateStart = statsRes.data.reduce<string | null>(
-        (min, row) => (!min || row.first_date < min ? row.first_date : min),
+    // If caller provides cached ranges, compute directly without a DB round-trip.
+    if (prefetchedRanges && prefetchedRanges.length > 0) {
+      tickersCount = prefetchedRanges.length;
+      dateStart = prefetchedRanges.reduce<string | null>(
+        (min, r) => (!min || r.firstDate < min ? r.firstDate : min),
         null
       );
-      actualTickerDays = statsRes.data.reduce(
-        (sum, row) => sum + Number(row.distinct_days ?? 0),
-        0
-      );
-    } else if (dateEnd) {
-      type AggRow = {
-        ticker_count: number;
-        min_date: string | null;
-        max_date: string | null;
-        actual_rows: number;
+      actualTickerDays = prefetchedRanges.reduce((sum, r) => sum + (r.actualDays ?? 0), 0);
+    }
+
+    const dataState = prefetchedDataState ?? (await getDataState());
+    const dateEnd = dataState.dataCutoffDate;
+
+    if (tickersCount === 0) {
+      type StatsRow = {
+        symbol: string;
+        first_date: string;
+        distinct_days: string | number;
       };
-      const { data: aggData } = (await supabase.rpc("get_data_health_agg")) as unknown as {
-        data: AggRow | null;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const statsRes = (await (supabase as any)
+        .from("ticker_stats")
+        .select("symbol, first_date, distinct_days")) as {
+        data: StatsRow[] | null;
         error: { message: string } | null;
       };
-      tickersCount = aggData?.ticker_count ?? 0;
-      dateStart = aggData?.min_date ?? null;
-      actualTickerDays = aggData?.actual_rows ?? 0;
+
+      if (!statsRes.error && statsRes.data) {
+        tickersCount = statsRes.data.length;
+        dateStart = statsRes.data.reduce<string | null>(
+          (min, row) => (!min || row.first_date < min ? row.first_date : min),
+          null
+        );
+        actualTickerDays = statsRes.data.reduce(
+          (sum, row) => sum + Number(row.distinct_days ?? 0),
+          0
+        );
+      } else if (dateEnd) {
+        type AggRow = {
+          ticker_count: number;
+          min_date: string | null;
+          max_date: string | null;
+          actual_rows: number;
+        };
+        const { data: aggData } = (await supabase.rpc("get_data_health_agg")) as unknown as {
+          data: AggRow | null;
+          error: { message: string } | null;
+        };
+        tickersCount = aggData?.ticker_count ?? 0;
+        dateStart = aggData?.min_date ?? null;
+        actualTickerDays = aggData?.actual_rows ?? 0;
+      }
     }
 
     let businessDaysInWindow = 0;
@@ -2121,56 +2136,54 @@ function getTradingDayGap(dateA: string | null, dateB: string | null): number | 
   return Math.max(countBusinessDays(startDate, endDate) - 1, 0);
 }
 
-async function getEquityCurveAuditStats(
+/**
+ * Fetches equity_curve audit stats for multiple runs in a single DB round-trip.
+ * Returns a Map keyed by run_id. Missing run_ids get { data_points: 0, ... }.
+ */
+async function getEquityCurveAuditStatsBatch(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   admin: any,
-  runId: string
-): Promise<EquityCurveAuditStats> {
-  const { count, error: countError } = await admin
+  runIds: string[]
+): Promise<Map<string, EquityCurveAuditStats>> {
+  const result = new Map<string, EquityCurveAuditStats>();
+  for (const id of runIds) {
+    result.set(id, { data_points: 0, equity_start_date: null, equity_end_date: null });
+  }
+  if (runIds.length === 0) return result;
+
+  const { data, error } = await admin
     .from("equity_curve")
-    .select("date", { count: "exact", head: true })
-    .eq("run_id", runId);
+    .select("run_id, date")
+    .in("run_id", runIds);
 
-  if (countError) {
-    throw new Error(`count failed for run ${runId}: ${countError.message}`);
+  if (error) {
+    throw new Error(`equity_curve batch query failed: ${error.message}`);
   }
 
-  const dataPoints = count ?? 0;
-  if (dataPoints === 0) {
-    return {
-      data_points: 0,
-      equity_start_date: null,
-      equity_end_date: null,
-    };
+  for (const row of data ?? []) {
+    const id = String(row.run_id);
+    const date = String(row.date);
+    const existing = result.get(id);
+    if (!existing) {
+      result.set(id, { data_points: 1, equity_start_date: date, equity_end_date: date });
+    } else {
+      const startDate =
+        existing.equity_start_date === null || date < existing.equity_start_date
+          ? date
+          : existing.equity_start_date;
+      const endDate =
+        existing.equity_end_date === null || date > existing.equity_end_date
+          ? date
+          : existing.equity_end_date;
+      result.set(id, {
+        data_points: existing.data_points + 1,
+        equity_start_date: startDate,
+        equity_end_date: endDate,
+      });
+    }
   }
 
-  const [minResult, maxResult] = await Promise.all([
-    admin
-      .from("equity_curve")
-      .select("date")
-      .eq("run_id", runId)
-      .order("date", { ascending: true })
-      .limit(1),
-    admin
-      .from("equity_curve")
-      .select("date")
-      .eq("run_id", runId)
-      .order("date", { ascending: false })
-      .limit(1),
-  ]);
-
-  if (minResult.error) {
-    throw new Error(`min(date) failed for run ${runId}: ${minResult.error.message}`);
-  }
-  if (maxResult.error) {
-    throw new Error(`max(date) failed for run ${runId}: ${maxResult.error.message}`);
-  }
-
-  return {
-    data_points: dataPoints,
-    equity_start_date: minResult.data?.[0]?.date ?? null,
-    equity_end_date: maxResult.data?.[0]?.date ?? null,
-  };
+  return result;
 }
 
 /**
@@ -2195,51 +2208,54 @@ export async function getRunsBacktestWindowSummary(): Promise<BacktestWindowSumm
     if (!runs?.length) return [];
 
     const admin = createAdminClient();
-    const summary: BacktestWindowSummaryRow[] = await Promise.all(
-      (runs as BacktestAuditRunRow[]).map(async (run) => {
-        const stats = await getEquityCurveAuditStats(admin, run.id);
-        const requestedSpanDays = getCalendarDaySpan(run.start_date, run.end_date);
-        const equitySpanDays =
-          stats.equity_start_date && stats.equity_end_date
-            ? getCalendarDaySpan(stats.equity_start_date, stats.equity_end_date)
-            : null;
-        const spanDays = Math.max(requestedSpanDays, equitySpanDays ?? 0);
-        const endGapTradingDays = getTradingDayGap(stats.equity_end_date, run.end_date);
-        const meetsMinPoints = stats.data_points >= BACKTEST_MIN_DATA_POINTS;
-        const meetsMinSpan = spanDays >= BACKTEST_MIN_SPAN_DAYS;
-        const meetsEndTolerance =
-          endGapTradingDays != null &&
-          endGapTradingDays <= BACKTEST_END_DATE_TOLERANCE_TRADING_DAYS;
+    const runIds = (runs as BacktestAuditRunRow[]).map((r) => r.id);
+    const statsMap = await getEquityCurveAuditStatsBatch(admin, runIds);
+    const summary: BacktestWindowSummaryRow[] = (runs as BacktestAuditRunRow[]).map((run) => {
+      const stats = statsMap.get(run.id) ?? {
+        data_points: 0,
+        equity_start_date: null,
+        equity_end_date: null,
+      };
+      const requestedSpanDays = getCalendarDaySpan(run.start_date, run.end_date);
+      const equitySpanDays =
+        stats.equity_start_date && stats.equity_end_date
+          ? getCalendarDaySpan(stats.equity_start_date, stats.equity_end_date)
+          : null;
+      const spanDays = Math.max(requestedSpanDays, equitySpanDays ?? 0);
+      const endGapTradingDays = getTradingDayGap(stats.equity_end_date, run.end_date);
+      const meetsMinPoints = stats.data_points >= BACKTEST_MIN_DATA_POINTS;
+      const meetsMinSpan = spanDays >= BACKTEST_MIN_SPAN_DAYS;
+      const meetsEndTolerance =
+        endGapTradingDays != null && endGapTradingDays <= BACKTEST_END_DATE_TOLERANCE_TRADING_DAYS;
 
-        let auditOutcome: BacktestAuditOutcome = "skip";
-        if (run.status === "completed") {
-          auditOutcome =
-            stats.data_points > 0 && meetsMinPoints && meetsMinSpan && meetsEndTolerance
-              ? "pass"
-              : "fail";
-        }
+      let auditOutcome: BacktestAuditOutcome = "skip";
+      if (run.status === "completed") {
+        auditOutcome =
+          stats.data_points > 0 && meetsMinPoints && meetsMinSpan && meetsEndTolerance
+            ? "pass"
+            : "fail";
+      }
 
-        return {
-          run_id: run.id,
-          name: run.name,
-          strategy_id: run.strategy_id,
-          status: run.status,
-          start_date: run.start_date,
-          end_date: run.end_date,
-          span_days: spanDays,
-          requested_span_days: requestedSpanDays,
-          equity_start_date: stats.equity_start_date,
-          equity_end_date: stats.equity_end_date,
-          equity_span_days: equitySpanDays,
-          end_gap_trading_days: endGapTradingDays,
-          data_points: stats.data_points,
-          meets_min_span: meetsMinSpan,
-          meets_min_points: meetsMinPoints,
-          meets_end_tolerance: meetsEndTolerance,
-          audit_outcome: auditOutcome,
-        };
-      })
-    );
+      return {
+        run_id: run.id,
+        name: run.name,
+        strategy_id: run.strategy_id,
+        status: run.status,
+        start_date: run.start_date,
+        end_date: run.end_date,
+        span_days: spanDays,
+        requested_span_days: requestedSpanDays,
+        equity_start_date: stats.equity_start_date,
+        equity_end_date: stats.equity_end_date,
+        equity_span_days: equitySpanDays,
+        end_gap_trading_days: endGapTradingDays,
+        data_points: stats.data_points,
+        meets_min_span: meetsMinSpan,
+        meets_min_points: meetsMinPoints,
+        meets_end_tolerance: meetsEndTolerance,
+        audit_outcome: auditOutcome,
+      };
+    });
 
     // Console-log summary for server-side audit visibility.
     console.log(

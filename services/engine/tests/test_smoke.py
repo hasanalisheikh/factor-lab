@@ -212,6 +212,54 @@ def test_baseline_fetches_warmup_history_and_trims_output(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# Staleness check: engine downloads fresh prices when DB prices are stale
+# ---------------------------------------------------------------------------
+
+
+def test_baseline_downloads_when_prices_stale(monkeypatch):
+    """If DB prices end >5 calendar days before run_end, the engine must fall
+    back to _download_prices so the equity curve spans the full run window."""
+    tickers = ["A", "B", "C", "D", "BENCH"]
+    run_end = _SMOKE_END  # "2020-12-31"
+
+    # Stale prices: generated with the default period count, which ends ~10
+    # business days before run_end.  _make_prices uses pd.bdate_range(start,
+    # periods=…), so the actual last date depends on the seed/count.  We
+    # truncate explicitly to guarantee the last date is at least 10 days before
+    # run_end.
+    full_prices = _make_prices(tickers, seed=99)
+    cutoff = pd.Timestamp(run_end) - pd.Timedelta(days=10)
+    stale_prices = full_prices[full_prices.index <= cutoff]
+
+    # Fresh prices cover all of full_prices (past run_end)
+    fresh_prices = full_prices
+
+    download_calls: list[tuple] = []
+
+    import factorlab_engine.worker as w
+
+    def fake_download(start: str, end: str, tkrs: list) -> pd.DataFrame:  # noqa: ARG001
+        download_calls.append((start, end))
+        return fresh_prices
+
+    monkeypatch.setattr(w, "_download_prices", fake_download)
+
+    run = _fake_run("equal_weight", ["A", "B", "C", "D"])
+    io = _FakeIO(stale_prices)
+    result = _build_baseline_result(io, run)
+
+    assert download_calls, (
+        "Expected _download_prices to be called when DB prices are stale "
+        f"(last DB date: {stale_prices.index.max().date()}, run_end: {run_end})"
+    )
+    # The equity curve must end close to run_end (within 5 business days)
+    last_equity_date = result.equity_rows[-1]["date"]
+    assert last_equity_date >= "2020-12-21", (
+        f"Expected equity curve to reach near {run_end}, got {last_equity_date}"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Smoke: low_vol
 # ---------------------------------------------------------------------------
 

@@ -42,7 +42,7 @@ export default async function RunsPage({ searchParams }: PageProps) {
     .map((r) => r.id);
   const [progressMapRaw, reportUrls] = await Promise.all([
     getActiveRunsProgress(activeRunIds),
-    getReportUrlsByRunIds(runs.map((r) => r.id)),
+    getReportUrlsByRunIds(runs.filter((r) => r.status === "completed").map((r) => r.id)),
   ]);
   // Convert Map to plain object for client component serialisation.
   const progressMap: Record<string, number> = Object.fromEntries(progressMapRaw);

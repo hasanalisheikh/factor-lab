@@ -249,12 +249,13 @@ export default async function DataPage({
     : BENCHMARK_OPTIONS[0];
   const hasExplicitBenchmark = Boolean(params.benchmark && benchmarkOptions.has(benchmarkParam));
 
-  const [health, dataState, tickerRanges, scheduledActivity] = await Promise.all([
-    getDataHealthSummary(),
+  const [dataState, tickerRanges, scheduledActivity] = await Promise.all([
     getDataState(),
     getAllTickerStats(),
     getActiveScheduledRefreshActivity(),
   ]);
+  // Pass both prefetched values so getDataHealthSummary skips redundant DB queries.
+  const health = await getDataHealthSummary(tickerRanges, dataState);
 
   const currentThrough = dataState.dataCutoffDate ?? health.dateEnd;
   const [requiredResearch, monitoredBenchmarkCoverage, universeNotIngested] = await Promise.all([
