@@ -4,8 +4,8 @@
 -- NULL for non-completed runs, or pre-migration runs that have not been backfilled.
 
 ALTER TABLE runs
-  ADD COLUMN executed_start_date DATE,
-  ADD COLUMN executed_end_date   DATE;
+  ADD COLUMN IF NOT EXISTS executed_start_date DATE,
+  ADD COLUMN IF NOT EXISTS executed_end_date   DATE;
 
 -- Backfill from equity_curve for all existing completed runs.
 UPDATE runs r
