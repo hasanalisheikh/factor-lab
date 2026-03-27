@@ -573,10 +573,8 @@ describe("buildReportHtml - CAGR truthfulness", () => {
 
 describe("buildReportHtml - Window header vs chart range", () => {
   /**
-   * Regression: when the equity curve ends before the requested run end date
-   * (e.g. benchmark data only available to 2025-03-06 when run end was 2026-03-13),
-   * the Window header must show the effective equity-curve end, not the requested end.
-   * The chart x-axis end label must also match that effective end.
+   * The Window header always shows the effective equity-curve date range.
+   * No "(requested: ...)" annotation — the stored equity curve is the authoritative record.
    */
   it("Window header shows effective equity-curve end when curve ends before run endDate", () => {
     const curve = makeTradingDayCurve("2021-03-01", "2025-03-06");
@@ -593,10 +591,8 @@ describe("buildReportHtml - Window header vs chart range", () => {
 
     // Window must contain the effective end date
     expect(html).toContain(`to ${effectiveEnd}`);
-    // Window must note the requested end date as a parenthetical
-    expect(html).toContain(`(requested: ${requestedEnd})`);
-    // The effective end must NOT appear as the bare run end in a "to 2026-03-13" pattern
-    expect(html).not.toContain(`to ${requestedEnd}</p>`);
+    // No parenthetical — the stored curve IS the complete record
+    expect(html).not.toContain("(requested:");
   });
 
   it("chart x-axis end label, Window end, and equity curve last date all agree", () => {
@@ -629,7 +625,7 @@ describe("buildReportHtml - Window header vs chart range", () => {
       endDate: "2026-03-13",
     });
 
-    // No parenthetical "(requested: ...)" when effective and requested dates agree
+    // No parenthetical "(requested: ...)" — never appears regardless of date alignment
     expect(html).not.toContain("(requested:");
     // Window contains the last date
     expect(html).toContain(`to ${lastDate}`);

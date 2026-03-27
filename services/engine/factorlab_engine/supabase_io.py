@@ -620,29 +620,33 @@ class SupabaseIO:
             return pd.DataFrame()
 
         rows: list[dict[str, Any]] = []
-        # 5000 rows/page keeps round-trips low; ordering by (ticker, date) matches the
-        # idx_prices_ticker_date index so pagination doesn't degrade at large offsets.
-        page_size = 5000
-        offset = 0
-        while True:
-            result = (
-                self.client.table("prices")
-                .select("ticker,date,adj_close")
-                .in_("ticker", tickers)
-                .gte("date", start_date)
-                .lte("date", end_date)
-                .order("ticker")
-                .order("date")
-                .range(offset, offset + page_size - 1)
-                .execute()
-            )
-            chunk = result.data or []
-            if not chunk:
-                break
-            rows.extend(chunk)
-            if len(chunk) < page_size:
-                break
-            offset += page_size
+        # Fetch one ticker at a time so every query is a tight single-column
+        # index scan on idx_prices_ticker_date with no large OFFSET.  The
+        # multi-ticker IN(…)+ORDER BY approach requires Postgres to merge N
+        # sorted streams and skip potentially 10 000–20 000 rows on later pages,
+        # which reliably hits Supabase's statement timeout for long date windows
+        # (ML warmup = 5 years → ~2 500 rows per ticker → 5+ pages multi-ticker).
+        page_size = 3000
+        for ticker in tickers:
+            offset = 0
+            while True:
+                result = (
+                    self.client.table("prices")
+                    .select("ticker,date,adj_close")
+                    .eq("ticker", ticker)
+                    .gte("date", start_date)
+                    .lte("date", end_date)
+                    .order("date")
+                    .range(offset, offset + page_size - 1)
+                    .execute()
+                )
+                chunk = result.data or []
+                if not chunk:
+                    break
+                rows.extend(chunk)
+                if len(chunk) < page_size:
+                    break
+                offset += page_size
 
         if not rows:
             return pd.DataFrame()
@@ -688,7 +692,14 @@ class SupabaseIO:
             },
             fallback_stage="report",
         )
-        (self.client.table("runs").update({"status": "completed"}).eq("id", job.run_id).execute())
+        # Persist the true executed window (first/last equity_curve date) so that
+        # the runs list can display accurate dates without joining equity_curve.
+        runs_update: dict[str, Any] = {"status": "completed"}
+        if rows:
+            dates = [row["date"] for row in rows]
+            runs_update["executed_start_date"] = min(dates)
+            runs_update["executed_end_date"] = max(dates)
+        (self.client.table("runs").update(runs_update).eq("id", job.run_id).execute())
 
     def save_failure(
         self,

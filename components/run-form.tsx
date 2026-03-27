@@ -59,6 +59,7 @@ import {
   STRATEGY_WARMUP_DESCRIPTIONS,
   computeStrategyEarliestStart,
 } from "@/lib/strategy-warmup";
+import { getLastCompleteTradingDayUtc } from "@/lib/data-cutoff";
 
 const STRATEGIES = Object.entries(STRATEGY_LABELS) as [StrategyId, string][];
 const CAPITAL_MIN = 1_000;
@@ -280,8 +281,14 @@ export function RunForm({
   const formRef = useRef<HTMLFormElement>(null);
   const lastLoadedUniverseRef = useRef(initialUniverseState.constraints.universe);
   const coverageMin = dataCoverage ? parseLocalDate(dataCoverage.minDateStr) : null;
-  const initialMaxEndDate =
-    initialUniverseState.constraints.dataCutoffDate ?? dataCoverage?.maxDateStr ?? null;
+  // Always allow runs up to today. The preflight system queues data-ingest jobs
+  // for any coverage gap and advances the run through waiting_for_data.
+  const todayStr = getLastCompleteTradingDayUtc();
+  // initialMaxEndDate drives the default end-date value shown in the form.
+  // Do NOT use dataCutoffDate here — it may be stale (e.g. March 2025) and would
+  // cause every new run to silently default to the old cutoff. todayStr is the
+  // correct default; dataCutoffDate is only shown in the informational label below.
+  const initialMaxEndDate = todayStr;
   const initialMinStartDate = resolveMinStartDate(
     initialUniverseState.constraints.universeEarliestStart,
     initialUniverseState.constraints.universeValidFrom
@@ -346,7 +353,10 @@ export function RunForm({
     universeState.constraints.universeEarliestStart,
     universeState.constraints.universeValidFrom
   );
-  const maxEndDateStr =
+  // maxEndDateStr: hard cap for the date picker — never allow selecting the future.
+  const maxEndDateStr = todayStr;
+  // dataCurrencyStr: what data is actually available in the DB (shown in the info label).
+  const dataCurrencyStr =
     universeState.constraints.dataCutoffDate ?? dataCoverage?.maxDateStr ?? null;
   const startDateStr = startDate ? format(startDate, "yyyy-MM-dd") : null;
   const endDateStr = endDate ? format(endDate, "yyyy-MM-dd") : null;
@@ -450,7 +460,7 @@ export function RunForm({
 
     if (maxEndDateStr && endDateStr && endDateStr > maxEndDateStr) {
       nextEnd = parseLocalDate(maxEndDateStr);
-      snappedMessage = `End date snapped to ${maxEndDateStr} because backtests stop at the current data cutoff.`;
+      snappedMessage = `End date snapped to ${maxEndDateStr} (last complete trading day).`;
     }
 
     const nextStartStr = nextStart ? format(nextStart, "yyyy-MM-dd") : null;
@@ -856,11 +866,16 @@ export function RunForm({
                 </div>
               </div>
               <div className="space-y-0.5">
-                {maxEndDateStr && (
+                {dataCurrencyStr && (
                   <p className="text-muted-foreground text-[11px]">
                     Data current through{" "}
-                    <span className="text-foreground font-mono font-medium">{maxEndDateStr}</span>{" "}
-                    <span className="text-emerald-400">(Backtest-ready)</span>.
+                    <span className="text-foreground font-mono font-medium">{dataCurrencyStr}</span>
+                    {dataCurrencyStr < maxEndDateStr ? (
+                      <span className="text-amber-400"> (missing data will be auto-ingested)</span>
+                    ) : (
+                      <span className="text-emerald-400"> (Backtest-ready)</span>
+                    )}
+                    .
                   </p>
                 )}
                 {dataCoverage?.minDateStr && (

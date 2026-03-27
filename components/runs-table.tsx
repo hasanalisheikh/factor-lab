@@ -374,8 +374,9 @@ export function RunsTable({
                   status === "running" || status === "waiting_for_data"
                     ? (progressMap[run.id] ?? null)
                     : null;
-                const startPeriod = run.start_date ? run.start_date.slice(0, 7) : "--";
-                const endPeriod = run.end_date ? run.end_date.slice(0, 7) : "--";
+                const startPeriod =
+                  (run.executed_start_date ?? run.start_date)?.slice(0, 7) ?? "--";
+                const endPeriod = (run.executed_end_date ?? run.end_date)?.slice(0, 7) ?? "--";
 
                 return (
                   <TableRow

@@ -244,3 +244,56 @@ describe("getDefaultTimeframe", () => {
     expect(getDefaultTimeframe([])).toBe("1Y");
   });
 });
+
+// ---------------------------------------------------------------------------
+// Regression: stored run history renders fully — no truncation by live-data
+// cutoff, run.end_date, or "today". The stored equity_curve is authoritative.
+// ---------------------------------------------------------------------------
+
+describe("regression: stored run history renders fully without truncation", () => {
+  it("ALL: chart end date equals the last stored date, not run.end_date", () => {
+    // Equity curve stored through 2025-03-06; run.end_date is 2026-03-13 (never passed here)
+    const stored = makeTradingDaySeries("2021-03-13", "2025-03-06");
+    const { plotted, dateLabels } = prepareTimeframeEquityCurve(stored, "ALL");
+    expect(dateLabels.end).toBe("2025-03-06");
+    expect(plotted[plotted.length - 1].date).toBe("2025-03-06");
+    // The requested end_date is never injected into the pure chart functions
+    expect(plotted.some((p) => p.date === "2026-03-13")).toBe(false);
+  });
+
+  it("ALL: chart start date equals the first stored date", () => {
+    const stored = makeTradingDaySeries("2021-03-13", "2025-03-06");
+    const { plotted, dateLabels } = prepareTimeframeEquityCurve(stored, "ALL");
+    // Use the actual first element (2021-03-13 is Saturday, so first weekday is 2021-03-15)
+    expect(dateLabels.start).toBe(stored[0].date);
+    expect(plotted[0].date).toBe(stored[0].date);
+  });
+
+  it("stored data beyond today renders fully without any date clamping", () => {
+    // Future dates pass through unchanged — no comparison against "today"
+    const stored = makeTradingDaySeries("2021-01-04", "2099-12-28");
+    const { plotted, dateLabels } = prepareTimeframeEquityCurve(stored, "ALL");
+    expect(dateLabels.end).toBe("2099-12-28");
+    expect(plotted[plotted.length - 1].date).toBe("2099-12-28");
+    // 2021-01-04 is a Monday so it is the first element
+    expect(dateLabels.start).toBe(stored[0].date);
+  });
+
+  it("benchmark forward-fill preserves all trailing portfolio dates (benchmark not truncated)", () => {
+    const data = makeTradingDaySeries("2022-01-03", "2025-03-14");
+    // Null out benchmark for the last 30 rows (simulates benchmark lagging portfolio)
+    const withLag = data.map((pt, i) => (i >= data.length - 30 ? { ...pt, benchmark: NaN } : pt));
+    const aligned = alignEquityCurveByDate(withLag);
+    // All rows must be present — benchmark lag must not drop trailing portfolio dates
+    expect(aligned.length).toBe(data.length);
+    expect(aligned[aligned.length - 1].date).toBe(data[data.length - 1].date);
+  });
+
+  it("ALL range spans exactly first→last stored point with no extra filtering", () => {
+    const stored = makeTradingDaySeries("2021-03-13", "2026-03-13");
+    const sliced = sliceEquityCurveByTimeframe(stored, "ALL");
+    expect(sliced.length).toBe(stored.length);
+    expect(sliced[0].date).toBe(stored[0].date);
+    expect(sliced[sliced.length - 1].date).toBe(stored[stored.length - 1].date);
+  });
+});

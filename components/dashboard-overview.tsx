@@ -14,6 +14,7 @@ import {
   formatDrawdown,
 } from "@/lib/format";
 import type { DashboardMetric } from "@/lib/types";
+import type { RunMetricsRow } from "@/lib/supabase/types";
 import { BenchmarkOverlapWarning } from "@/components/benchmark-overlap-warning";
 
 interface EquityPoint {
@@ -27,6 +28,13 @@ interface DashboardOverviewProps {
   benchmark: string;
   benchmarkOverlapConfirmed: boolean;
   storedTurnover: number | null;
+  /**
+   * Full run_metrics row for the featured run.
+   * When the timeframe is "ALL", stored values are used for portfolio KPIs
+   * so the dashboard displays the exact same figures as the Runs list and
+   * Run detail pages (no formula divergence between calendar vs count-based CAGR).
+   */
+  storedMetrics: RunMetricsRow | null;
   children?: ReactNode;
 }
 
@@ -35,6 +43,7 @@ export function DashboardOverview({
   benchmark,
   benchmarkOverlapConfirmed,
   storedTurnover,
+  storedMetrics,
   children,
 }: DashboardOverviewProps) {
   const [selectedTf, setSelectedTf] = useState(() => getDefaultTimeframe(equityCurve));
@@ -43,17 +52,36 @@ export function DashboardOverview({
     return getAlignedTimeframeEquityCurve(equityCurve, selectedTf);
   }, [equityCurve, selectedTf]);
 
-  // Compute all metrics from the same slice shown in the chart.
+  // Compute metrics from the slice (always needed for benchmark and sparklines).
   const computed = useMemo(() => {
     if (sliced.length < 3) return null;
     const dates = sliced.map((p) => p.date);
     const portfolio = sliced.map((p) => p.portfolio);
-    const benchmark = sliced.map((p) => p.benchmark);
-    return computeMetrics(dates, portfolio, benchmark);
+    const benchmarkSeries = sliced.map((p) => p.benchmark);
+    return computeMetrics(dates, portfolio, benchmarkSeries);
   }, [sliced]);
 
+  // On ALL timeframe, use stored run_metrics so the dashboard shows the exact
+  // same figures as the Runs list and Run detail pages.
+  // On sliced timeframes, use the equity-curve-computed slice metrics.
+  const pm = useMemo(() => {
+    if (selectedTf === "ALL" && storedMetrics) {
+      return {
+        cagr: storedMetrics.cagr,
+        sharpe: storedMetrics.sharpe,
+        // run_metrics.max_drawdown is stored as a negative fraction; normalize to positive.
+        maxDrawdown:
+          storedMetrics.max_drawdown !== null ? Math.abs(storedMetrics.max_drawdown) : null,
+        annualizedVol: storedMetrics.volatility,
+      };
+    }
+    return computed?.portfolio ?? null;
+  }, [selectedTf, storedMetrics, computed]);
+
+  // Timeframe label appended to metric names when not on the full-run view.
+  const tfSuffix = selectedTf === "ALL" ? "" : ` (${selectedTf})`;
+
   const dashboardMetrics: DashboardMetric[] = useMemo(() => {
-    const pm = computed?.portfolio ?? null;
     const bm = computed?.benchmark ?? null;
     const sp = computed?.sparklines;
 
@@ -71,7 +99,7 @@ export function DashboardOverview({
 
     return [
       {
-        label: "CAGR",
+        label: `CAGR${tfSuffix}`,
         value: pm?.cagr != null ? formatSignedPct(pm.cagr) : "—",
         deltaRaw: cagrDelta,
         deltaFormatted: cagrDelta != null ? formatSignedPctPoints(cagrDelta) : null,
@@ -81,7 +109,7 @@ export function DashboardOverview({
         sparkline: sp?.equity ?? [],
       },
       {
-        label: "Sharpe Ratio",
+        label: `Sharpe Ratio${tfSuffix}`,
         value: pm?.sharpe != null ? formatNum(pm.sharpe) : "—",
         deltaRaw: sharpeDelta,
         deltaFormatted: sharpeDelta != null ? formatSignedNum(sharpeDelta) : null,
@@ -91,7 +119,7 @@ export function DashboardOverview({
         sparkline: sp?.rollingSharpe ?? [],
       },
       {
-        label: "Max Drawdown",
+        label: `Max Drawdown${tfSuffix}`,
         value: pm?.maxDrawdown != null ? formatDrawdown(pm.maxDrawdown) : "—",
         deltaRaw: maxDDDelta,
         deltaFormatted: maxDDDelta != null ? formatSignedPctPoints(maxDDDelta) : null,
@@ -113,7 +141,7 @@ export function DashboardOverview({
         sparkline: sp?.equity ?? [],
       },
     ];
-  }, [benchmark, computed, storedTurnover]);
+  }, [benchmark, computed, pm, storedTurnover, tfSuffix]);
 
   return (
     <>

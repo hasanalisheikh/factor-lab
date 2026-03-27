@@ -17,7 +17,6 @@ import {
   prepareTimeframeEquityCurve,
 } from "@/lib/equity-curve";
 import type { RunMetricsRow, EquityCurveRow } from "@/lib/supabase/types";
-import { RerunButton } from "@/components/run-detail/rerun-button";
 
 function DisclaimerFooter() {
   const [open, setOpen] = useState(false);
@@ -93,9 +92,6 @@ interface OverviewTabProps {
   equityCurve: EquityCurveRow[];
   benchmarkTicker: string;
   runConfig?: RunConfig;
-  isEquityStale?: boolean;
-  equityLastDate?: string | null;
-  runId?: string;
 }
 
 export function OverviewTab({
@@ -103,9 +99,6 @@ export function OverviewTab({
   equityCurve,
   benchmarkTicker,
   runConfig,
-  isEquityStale,
-  equityLastDate,
-  runId,
 }: OverviewTabProps) {
   const [selectedTf, setSelectedTf] = useState(() => getDefaultTimeframe(equityCurve));
 
@@ -113,8 +106,6 @@ export function OverviewTab({
   // These are used for the Period card so it stays consistent with the chart x-axis.
   const effectiveStart = equityCurve[0]?.date ?? runConfig?.startDate;
   const effectiveEnd = equityCurve[equityCurve.length - 1]?.date ?? runConfig?.endDate;
-  const periodEndMismatch =
-    effectiveEnd != null && runConfig?.endDate != null && effectiveEnd < runConfig.endDate;
 
   const chartState = useMemo(
     () => prepareTimeframeEquityCurve(equityCurve, selectedTf),
@@ -157,18 +148,6 @@ export function OverviewTab({
           </Card>
         ))}
       </div>
-
-      {/* Stale equity curve banner */}
-      {isEquityStale && equityLastDate && runId && (
-        <div className="flex items-center justify-between gap-3 rounded-lg border border-amber-800/40 bg-amber-950/30 px-4 py-3 text-[12px] text-amber-300">
-          <span>
-            Chart data ends <strong>{equityLastDate.slice(0, 7)}</strong> — the requested end date
-            was <strong>{runConfig?.endDate?.slice(0, 7)}</strong>. Prices have been updated since
-            this run executed.
-          </span>
-          <RerunButton runId={runId} />
-        </div>
-      )}
 
       {/* Equity curve */}
       <EquityChart
@@ -265,11 +244,7 @@ export function OverviewTab({
                   label: "Period",
                   value:
                     effectiveStart && effectiveEnd
-                      ? `${effectiveStart.slice(0, 7)} – ${effectiveEnd.slice(0, 7)}${
-                          periodEndMismatch
-                            ? ` (requested: ${runConfig!.endDate!.slice(0, 7)})`
-                            : ""
-                        }`
+                      ? `${effectiveStart.slice(0, 7)} – ${effectiveEnd.slice(0, 7)}`
                       : "—",
                 },
                 { label: "Costs", value: `${runConfig.costsBps} bps per rebalance` },

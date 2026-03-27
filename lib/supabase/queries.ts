@@ -296,6 +296,8 @@ export async function getRuns(options: GetRunsOptions = {}): Promise<RunWithMetr
         benchmark_ticker,
         start_date,
         end_date,
+        executed_start_date,
+        executed_end_date,
         created_at,
         run_metrics(run_id, cagr, sharpe, max_drawdown, turnover)
       `
@@ -332,6 +334,8 @@ export async function getRuns(options: GetRunsOptions = {}): Promise<RunWithMetr
           benchmark_ticker,
           start_date,
           end_date,
+          executed_start_date,
+          executed_end_date,
           created_at,
           run_metrics(run_id, cagr, sharpe, max_drawdown, turnover)
         `

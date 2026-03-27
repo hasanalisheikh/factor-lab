@@ -223,10 +223,7 @@ export function buildReportHtml(params: {
   // Effective window: use actual equity-curve dates, not the run-param request dates
   const effectiveStart = chartRawSeries[0]?.date ?? startDate;
   const effectiveEnd = chartRawSeries[chartRawSeries.length - 1]?.date ?? endDate;
-  const windowDisplay =
-    effectiveEnd !== endDate
-      ? `${effectiveStart} to ${effectiveEnd} (requested: ${endDate})`
-      : `${effectiveStart} to ${effectiveEnd}`;
+  const windowDisplay = `${effectiveStart} to ${effectiveEnd}`;
   const plottedIndices = getDownsampleIndices(
     chartRawSeries.length,
     DEFAULT_EQUITY_CHART_MAX_POINTS

@@ -12,6 +12,7 @@ import {
 import { getLastCompleteTradingDayUtc } from "@/lib/data-cutoff";
 import { createClient } from "@/lib/supabase/server";
 import {
+  getDataState,
   getUniverseBatchStatus,
   getUniverseConstraintsSnapshot,
   type UniverseBatchStatusSummary,
@@ -1518,7 +1519,9 @@ export async function deleteRunAction(runId: string): Promise<DeleteRunActionRes
   redirect("/runs?deleted=1");
 }
 
-export type CloneRunResult = { ok: true; newRunId: string } | { ok: false; error: string };
+export type CloneRunResult =
+  | { ok: true; newRunId: string }
+  | { ok: false; error: string; alreadyCurrent?: boolean };
 
 export async function cloneRunAction(sourceRunId: string): Promise<CloneRunResult> {
   const parsedRunId = z.string().uuid().safeParse(sourceRunId);
@@ -1538,7 +1541,7 @@ export async function cloneRunAction(sourceRunId: string): Promise<CloneRunResul
   const { data: source, error: sourceError } = await serverClient
     .from("runs")
     .select(
-      "id, name, strategy_id, start_date, end_date, benchmark_ticker, universe, costs_bps, top_n, user_id"
+      "id, name, strategy_id, start_date, end_date, executed_end_date, benchmark_ticker, universe, costs_bps, top_n, user_id"
     )
     .eq("id", parsedRunId.data)
     .maybeSingle();
@@ -1550,9 +1553,20 @@ export async function cloneRunAction(sourceRunId: string): Promise<CloneRunResul
     return { ok: false, error: "You can only clone your own runs." };
   }
 
-  const { getDataState } = await import("@/lib/supabase/queries");
+  // Target the actual data cutoff so the preflight check never fires end_after_cutoff.
+  // Fall back to the last complete calendar trading day only when data_state is unavailable.
   const dataState = await getDataState();
   const newEndDate = dataState.dataCutoffDate ?? getLastCompleteTradingDayUtc();
+
+  // If the run already covers through the current cutoff, there is nothing to update.
+  const effectiveEndDate = source.executed_end_date ?? source.end_date ?? "";
+  if (effectiveEndDate >= newEndDate) {
+    return {
+      ok: false,
+      error: `This run is already up to date — data runs through ${newEndDate}.`,
+      alreadyCurrent: true,
+    };
+  }
 
   const result = await createRun({
     name: `${source.name} (updated)`,

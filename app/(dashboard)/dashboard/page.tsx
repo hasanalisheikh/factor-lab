@@ -61,12 +61,13 @@ export default async function DashboardPage({
       <ActiveRunsPoller hasActiveRuns={hasActiveRuns} />
       {/*
         DashboardOverview is a client component that owns the timeframe toggle.
-        It computes KPIs from the same sliced equity curve shown in the chart,
-        and renders <RecentRuns> (server component, passed as children) in its sidebar slot.
+        On ALL timeframe it uses stored run_metrics values (exact match with runs/detail pages).
+        On sliced timeframes it recomputes from the equity curve slice.
       */}
       <DashboardOverview
         equityCurve={equityCurve}
         storedTurnover={storedTurnover}
+        storedMetrics={featuredMetrics}
         benchmark={benchmark}
         benchmarkOverlapConfirmed={benchmarkOverlapConfirmed}
       >

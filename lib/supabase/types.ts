@@ -19,6 +19,8 @@ export type Database = {
           run_metadata: Json;
           start_date: string;
           end_date: string;
+          executed_start_date: string | null;
+          executed_end_date: string | null;
           created_at: string;
           user_id: string | null;
           executed_with_missing_data: boolean;
@@ -38,6 +40,8 @@ export type Database = {
           run_metadata?: Json;
           start_date: string;
           end_date: string;
+          executed_start_date?: string | null;
+          executed_end_date?: string | null;
           created_at?: string;
           user_id?: string | null;
           executed_with_missing_data?: boolean;

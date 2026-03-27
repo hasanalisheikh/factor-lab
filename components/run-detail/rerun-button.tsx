@@ -13,16 +13,24 @@ interface RerunButtonProps {
 export function RerunButton({ runId }: RerunButtonProps) {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [message, setMessage] = useState<{ text: string; kind: "error" | "info" } | null>(null);
 
   async function handleClick() {
     setLoading(true);
-    setError(null);
-    const result = await cloneRunAction(runId);
-    if (result.ok) {
-      router.push(`/runs/${result.newRunId}`);
-    } else {
-      setError(result.error);
+    setMessage(null);
+    try {
+      const result = await cloneRunAction(runId);
+      if (result.ok) {
+        router.push(`/runs/${result.newRunId}`);
+      } else {
+        setMessage({
+          text: result.error,
+          kind: result.alreadyCurrent ? "info" : "error",
+        });
+        setLoading(false);
+      }
+    } catch {
+      setMessage({ text: "Something went wrong. Please try again.", kind: "error" });
       setLoading(false);
     }
   }
@@ -32,14 +40,20 @@ export function RerunButton({ runId }: RerunButtonProps) {
       <Button
         size="sm"
         variant="outline"
-        className="h-7 shrink-0 border-amber-700/50 bg-amber-950/40 text-[11px] font-medium text-amber-300 hover:bg-amber-900/50 hover:text-amber-200"
+        className="border-border text-muted-foreground hover:text-foreground h-8 shrink-0 text-[12px] font-medium"
         onClick={handleClick}
         disabled={loading}
       >
-        <RefreshCw className={`mr-1.5 h-3 w-3 ${loading ? "animate-spin" : ""}`} />
+        <RefreshCw className={`mr-1.5 h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
         {loading ? "Creating…" : "Re-run to Latest"}
       </Button>
-      {error && <p className="text-[10px] text-red-400">{error}</p>}
+      {message && (
+        <p
+          className={`text-[10px] ${message.kind === "info" ? "text-muted-foreground" : "text-red-400"}`}
+        >
+          {message.text}
+        </p>
+      )}
     </div>
   );
 }
