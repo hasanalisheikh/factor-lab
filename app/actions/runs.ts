@@ -12,7 +12,6 @@ import {
 import { getLastCompleteTradingDayUtc } from "@/lib/data-cutoff";
 import { createClient } from "@/lib/supabase/server";
 import {
-  getDataState,
   getUniverseBatchStatus,
   getUniverseConstraintsSnapshot,
   type UniverseBatchStatusSummary,
@@ -1562,10 +1561,7 @@ export async function cloneRunAction(sourceRunId: string): Promise<CloneRunResul
     return { ok: false, error: "You can only clone your own runs." };
   }
 
-  // Target the actual data cutoff so the preflight check never fires end_after_cutoff.
-  // Fall back to the last complete calendar trading day only when data_state is unavailable.
-  const dataState = await getDataState();
-  const newEndDate = dataState.dataCutoffDate ?? getLastCompleteTradingDayUtc();
+  const newEndDate = getLastCompleteTradingDayUtc();
 
   // If the run already covers through the current cutoff, there is nothing to update.
   const effectiveEndDate = source.executed_end_date ?? source.end_date ?? "";
