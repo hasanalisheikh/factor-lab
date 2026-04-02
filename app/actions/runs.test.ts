@@ -53,6 +53,7 @@ vi.mock("@/lib/coverage-check", async () => {
 });
 
 import { createRun, deleteRunAction, preflightRun } from "@/app/actions/runs";
+import { getLastCompleteTradingDayUtc } from "@/lib/data-cutoff";
 
 const BASE_CONSTRAINTS: UniverseConstraintsSnapshot = {
   universe: "ETF8",
@@ -565,7 +566,7 @@ describe("run actions preflight gating", () => {
     expect(repairAdmin.dataIngestRows[0]).toMatchObject({
       symbol: "QQQ",
       status: "queued",
-      end_date: "2026-03-12",
+      end_date: getLastCompleteTradingDayUtc(),
     });
   });
 

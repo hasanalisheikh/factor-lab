@@ -275,7 +275,7 @@ function buildErrorPreflightResult(
   message: string,
   constraints: UniverseConstraintsSnapshot
 ): RunPreflightResult {
-  const maxEndDate = constraints.dataCutoffDate ?? getLastCompleteTradingDayUtc();
+  const maxEndDate = getLastCompleteTradingDayUtc();
   return finalizeRunPreflightResult({
     constraints: {
       dataCutoffDate: maxEndDate,
@@ -585,7 +585,7 @@ async function ensureUniverseDataReadyInternal(
     };
   }
 
-  const cutoffDate = constraints.dataCutoffDate ?? getLastCompleteTradingDayUtc();
+  const cutoffDate = getLastCompleteTradingDayUtc();
   const missingTickers = constraints.missingTickers.map((symbol) => symbol.toUpperCase());
   const repairBatch = await ensureSymbolRepairsInternal({
     plans: missingTickers.map((symbol) => ({
@@ -1164,7 +1164,7 @@ async function preflightRunInternal(
     return buildErrorPreflightResult(parsed.error.issues[0].message, constraints);
   }
 
-  const cutoffDate = constraints.dataCutoffDate ?? getLastCompleteTradingDayUtc();
+  const cutoffDate = getLastCompleteTradingDayUtc();
   const snapshot = await evaluateRunPreflightSnapshot({
     strategyId: parsed.data.strategy_id,
     startDate: parsed.data.start_date,
@@ -1334,10 +1334,19 @@ export async function createRun(input: z.input<typeof createRunSchema>): Promise
     userId
   );
 
-  if (preflight.status === "block") {
+  const REPAIR_ISSUE_CODES = new Set([
+    "universe_missing_data_repair_started",
+    "universe_stale_data_repair_started",
+    "benchmark_repair_started",
+    "trend_defensive_repair_started",
+  ]);
+  const hardBlocks = preflight.issues.filter(
+    (issue) => issue.severity === "blocked" && !REPAIR_ISSUE_CODES.has(issue.code)
+  );
+  if (hardBlocks.length > 0) {
     return {
       ok: false,
-      error: preflight.reasons.join(" "),
+      error: hardBlocks.map((i) => i.reason).join(" "),
       preflight,
     };
   }

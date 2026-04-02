@@ -1,7 +1,7 @@
 import "server-only";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { BENCHMARK_OPTIONS } from "@/lib/benchmark";
-import { subtractTradingDays } from "@/lib/data-cutoff";
+import { getLastCompleteTradingDayUtc, subtractTradingDays } from "@/lib/data-cutoff";
 import { isActiveDataIngestStatus } from "@/lib/data-ingest-jobs";
 import { STRATEGY_WARMUP_CALENDAR_DAYS } from "@/lib/strategy-warmup";
 import { COVERAGE_WINDOW_START, TICKER_INCEPTION_DATES } from "@/lib/supabase/types";
@@ -114,7 +114,6 @@ export function resolveRunPreflightWindow(params: {
   strategyId: StrategyId;
   startDate: string;
   endDate: string;
-  dataCutoffDate: string;
   minStartDate: string | null;
 }): {
   warmupStart: string;
@@ -125,8 +124,7 @@ export function resolveRunPreflightWindow(params: {
     params.minStartDate && params.minStartDate > params.startDate
       ? params.minStartDate
       : params.startDate;
-  const requiredEnd =
-    params.endDate > params.dataCutoffDate ? params.dataCutoffDate : params.endDate;
+  const requiredEnd = params.endDate;
   const warmupStart = subtractTradingDays(
     requiredStart,
     getStrategyWarmupTradingDays(params.strategyId)
@@ -1228,7 +1226,6 @@ export async function evaluateRunPreflightSnapshot(params: {
     strategyId,
     startDate: params.startDate,
     endDate: params.endDate,
-    dataCutoffDate,
     minStartDate,
   });
 
@@ -1237,7 +1234,7 @@ export async function evaluateRunPreflightSnapshot(params: {
     universeEarliestStart,
     universeValidFrom,
     minStartDate,
-    maxEndDate: dataCutoffDate,
+    maxEndDate: getLastCompleteTradingDayUtc(),
     missingTickers,
     warmupStart,
     requiredStart,
@@ -1269,7 +1266,7 @@ export async function evaluateRunPreflightSnapshot(params: {
     benchmarkTicker: benchmark,
     windowStart: metricWindowStart,
     windowEnd: requiredEnd,
-    cutoffDate: dataCutoffDate,
+    cutoffDate: requiredEnd,
     metricSourceUsed,
     stats: statsBySymbol.get(benchmark),
     benchmarkDates,

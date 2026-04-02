@@ -12,7 +12,9 @@ import {
   buildRunPreflightResult,
   countBusinessDays,
   evaluateRunPreflightSnapshot,
+  resolveRunPreflightWindow,
 } from "@/lib/coverage-check";
+import { getLastCompleteTradingDayUtc } from "@/lib/data-cutoff";
 
 function weekdayCalendar(startDate: string, endDate: string): string[] {
   const dates: string[] = [];
@@ -272,5 +274,143 @@ describe("evaluateRunPreflightSnapshot windowing", () => {
       false
     );
     expect(result.coverage.benchmark.status).toBe("good");
+  });
+});
+
+describe("stale dataCutoffDate isolation", () => {
+  const STALE_CUTOFF = "2025-03-15";
+  const TODAY = "2026-03-28";
+  const RECENT_BENCHMARK_DATES = weekdayCalendar("1993-01-29", TODAY);
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("resolveRunPreflightWindow: requiredEnd equals endDate with no external cap", () => {
+    const result = resolveRunPreflightWindow({
+      strategyId: "equal_weight",
+      startDate: "2020-01-02",
+      endDate: TODAY,
+      minStartDate: null,
+    });
+    expect(result.requiredEnd).toBe(TODAY);
+  });
+
+  it("resolveRunPreflightWindow: requiredEnd equals endDate even when endDate is far in the future relative to any historical cutoff", () => {
+    const result = resolveRunPreflightWindow({
+      strategyId: "momentum_12_1",
+      startDate: "2021-01-04",
+      endDate: "2030-12-31",
+      minStartDate: null,
+    });
+    expect(result.requiredEnd).toBe("2030-12-31");
+  });
+
+  it("evaluateRunPreflightSnapshot: maxEndDate is today's last complete trading day, not the stale DB cutoff", async () => {
+    createAdminClientMock.mockReturnValue(
+      makeCoverageAdminStub({
+        statsRows: [
+          { symbol: "SPY", first_date: "1993-01-29", last_date: STALE_CUTOFF },
+          { symbol: "QQQ", first_date: "1999-03-10", last_date: STALE_CUTOFF },
+        ],
+        priceRows: RECENT_BENCHMARK_DATES.map((date) => ({ ticker: "SPY", date })).concat(
+          weekdayCalendar("1999-03-10", TODAY).map((date) => ({ ticker: "QQQ", date }))
+        ),
+      })
+    );
+
+    const snapshot = await evaluateRunPreflightSnapshot({
+      strategyId: "equal_weight",
+      startDate: "2020-01-02",
+      endDate: TODAY,
+      universeSymbols: ["QQQ"],
+      benchmark: "SPY",
+      dataCutoffDate: STALE_CUTOFF,
+      universeEarliestStart: "1993-01-29",
+      universeValidFrom: "1993-01-29",
+      missingTickers: [],
+    });
+
+    const expectedToday = getLastCompleteTradingDayUtc();
+    expect(snapshot.constraints.maxEndDate).toBe(expectedToday);
+    expect(snapshot.constraints.maxEndDate).not.toBe(STALE_CUTOFF);
+  });
+
+  it("evaluateRunPreflightSnapshot: requiredEnd equals the run's endDate even with a stale cutoff", async () => {
+    createAdminClientMock.mockReturnValue(
+      makeCoverageAdminStub({
+        statsRows: [
+          { symbol: "SPY", first_date: "1993-01-29", last_date: STALE_CUTOFF },
+          { symbol: "QQQ", first_date: "1999-03-10", last_date: STALE_CUTOFF },
+        ],
+        priceRows: RECENT_BENCHMARK_DATES.map((date) => ({ ticker: "SPY", date })),
+      })
+    );
+
+    const snapshot = await evaluateRunPreflightSnapshot({
+      strategyId: "equal_weight",
+      startDate: "2020-01-02",
+      endDate: TODAY,
+      universeSymbols: ["QQQ"],
+      benchmark: "SPY",
+      dataCutoffDate: STALE_CUTOFF,
+      universeEarliestStart: "1993-01-29",
+      universeValidFrom: "1993-01-29",
+      missingTickers: [],
+    });
+
+    expect(snapshot.requiredEnd).toBe(TODAY);
+    expect(snapshot.constraints.requiredEnd).toBe(TODAY);
+  });
+
+  it("buildRunPreflightResult: end_after_cutoff not fired when endDate equals today and maxEndDate is today", () => {
+    const today = getLastCompleteTradingDayUtc();
+    const result = buildRunPreflightResult({
+      strategyId: "equal_weight",
+      startDate: "2020-01-02",
+      endDate: today,
+      benchmark: "SPY",
+      constraints: {
+        dataCutoffDate: STALE_CUTOFF,
+        universeEarliestStart: "1993-01-29",
+        universeValidFrom: "1993-01-29",
+        minStartDate: null,
+        maxEndDate: today,
+        missingTickers: [],
+        warmupStart: "2020-01-02",
+        requiredStart: "2020-01-02",
+        requiredEnd: today,
+      },
+      symbolRows: [],
+    });
+
+    expect(result.issues.some((issue) => issue.code === "end_after_cutoff")).toBe(false);
+  });
+
+  it("buildRunPreflightResult: end_after_cutoff fires for genuinely future dates", () => {
+    const today = getLastCompleteTradingDayUtc();
+    const result = buildRunPreflightResult({
+      strategyId: "equal_weight",
+      startDate: "2020-01-02",
+      endDate: "2099-12-31",
+      benchmark: "SPY",
+      constraints: {
+        dataCutoffDate: STALE_CUTOFF,
+        universeEarliestStart: "1993-01-29",
+        universeValidFrom: "1993-01-29",
+        minStartDate: null,
+        maxEndDate: today,
+        missingTickers: [],
+        warmupStart: "2020-01-02",
+        requiredStart: "2020-01-02",
+        requiredEnd: today,
+      },
+      symbolRows: [],
+    });
+
+    expect(result.issues.some((issue) => issue.code === "end_after_cutoff")).toBe(true);
+    const issue = result.issues.find((i) => i.code === "end_after_cutoff");
+    expect(issue?.severity).toBe("blocked");
+    expect(issue?.action?.kind).toBe("clamp_end_date");
   });
 });
