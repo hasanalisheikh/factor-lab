@@ -4,7 +4,7 @@ on:
   schedule:
     # Mon–Fri at 22:00 UTC — 1 hour after the nightly ingest job.
     # Fails loudly (→ GitHub failure email) if data_state.data_cutoff_date
-    # is more than 1 trading day stale.
+    # is more than 1 trading day stale AND the auto-backfill cannot fix it.
     - cron: "0 22 * * 1-5"
   workflow_dispatch:
 
@@ -26,6 +26,29 @@ jobs:
           pip install -e "services/engine"
 
       - name: Check data freshness
+        id: freshness
+        continue-on-error: true
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: python -m factorlab_engine.watchdog
+
+      # Staleness detected — run ingest immediately as a self-healing backfill.
+      - name: Auto-backfill (data stale)
+        if: steps.freshness.outcome == 'failure'
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          START=$(date -u -d "7 days ago" +%Y-%m-%d)
+          echo "[watchdog] data stale — running auto-backfill from $START"
+          python -m factorlab_engine.ingest --start-date $START
+
+      # Re-run the check after the backfill.  If the data is now fresh the job
+      # passes silently.  If still stale (persistent failure) the job fails and
+      # GitHub sends the usual failure email.
+      - name: Re-check freshness after backfill
+        if: steps.freshness.outcome == 'failure'
         env:
           NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}

@@ -4,6 +4,8 @@ on:
   schedule:
     # Monday–Friday at 21:00 UTC (after 4 PM ET market close)
     - cron: "0 21 * * 1-5"
+    # Saturday at 12:00 UTC — catch-up run for any Friday failure or holiday gap
+    - cron: "0 12 * * 6"
   workflow_dispatch:
     inputs:
       start_date:

@@ -307,7 +307,7 @@ def main() -> None:
 
     print(
         f"[ingest] scheduler fired mode={args.mode} "
-        f"target_cutoff={last_complete_day} current_cutoff={current_cutoff or 'none'}"
+        f"last_complete_day(conservative)={last_complete_day} current_cutoff={current_cutoff or 'none'}"
     )
 
     print(f"[ingest] downloading {len(tickers)} tickers from {args.start_date} to {args.end_date}")
@@ -320,9 +320,15 @@ def main() -> None:
     start_date = close.index.min().strftime("%Y-%m-%d")
     end_date = close.index.max().strftime("%Y-%m-%d")
 
-    # Cap effective cutoff at the last confirmed complete trading day to avoid
-    # treating a partial (intra-day) session as finalized.
-    effective_cutoff = min(end_date, last_complete_day)
+    # The ingest script is scheduled to run after market close (21:00 UTC).
+    # Trust the last date actually returned by yfinance — it only returns
+    # complete sessions, so this is already conservative.  Capping at
+    # last_complete_day (= yesterday) would permanently keep the cutoff one
+    # trading day behind, because by run-time today's session IS complete.
+    # We still cap at today (UTC) to guard against yfinance returning a
+    # future date due to timezone quirks.
+    today_utc = _utcnow().strftime("%Y-%m-%d")
+    effective_cutoff = min(end_date, today_utc)
 
     _upsert_data_log(
         io=io,
