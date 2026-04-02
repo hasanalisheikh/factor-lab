@@ -217,13 +217,12 @@ def test_mode_arg_propagated_to_data_state():
     assert "github-actions:ingest:monthly" in upsert_calls[0].args[0]["updated_by"]
 
 
-def test_main_caps_effective_cutoff_to_last_trading_day():
-    """Even if yfinance returns today's date, cutoff is capped at last_complete_trading_day.
+def test_main_advances_cutoff_to_today_when_run_after_close():
+    """Ingest running after market close (21:00 UTC) advances cutoff to today.
 
-    Wednesday 21:00 UTC → last_complete = 2026-03-25.
-    If close.index.max() were somehow 2026-03-26 (today), effective_cutoff must be 2026-03-25.
+    Wednesday 21:00 UTC: market closed at 20:00 UTC, so today's session (2026-03-26)
+    is complete. cutoff must advance to 2026-03-26, not be capped at yesterday (2026-03-25).
     """
-    # Fabricate a close frame whose index max is 2026-03-26 (today, not yet complete)
     dates = pd.bdate_range("2026-03-01", "2026-03-26")
     close = pd.DataFrame({"SPY": [500.0] * len(dates)}, index=dates)
 
@@ -235,8 +234,8 @@ def test_main_caps_effective_cutoff_to_last_trading_day():
         if c.args and isinstance(c.args[0], dict) and c.args[0].get("id") == 1
     ]
     assert len(upsert_calls) == 1
-    # Must be capped at 2026-03-25, not 2026-03-26
-    assert upsert_calls[0].args[0]["data_cutoff_date"] == "2026-03-25"
+    # Cutoff must reach today (2026-03-26), not be stuck at yesterday (2026-03-25)
+    assert upsert_calls[0].args[0]["data_cutoff_date"] == "2026-03-26"
 
 
 def test_main_calls_upsert_ticker_stats_for_ingested_tickers():
