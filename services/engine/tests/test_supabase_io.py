@@ -74,6 +74,10 @@ class _PricesTable:
     def select(self, _fields: str) -> "_PricesTable":
         return self
 
+    def eq(self, column: str, value: str) -> "_PricesTable":
+        filtered = [r for r in self._rows if r.get(column) == value]
+        return _PricesTable(filtered)
+
     def in_(self, _column: str, _values: list[str]) -> "_PricesTable":
         return self
 
