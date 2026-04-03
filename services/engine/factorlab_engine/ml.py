@@ -160,6 +160,7 @@ def _build_model(strategy: str):
             learning_rate=0.05,
             num_leaves=31,
             min_child_samples=10,
+            n_jobs=1,  # single-threaded: parallel FP accumulation is non-deterministic
             random_state=0,
             verbose=-1,
         )
@@ -378,9 +379,9 @@ def run_walk_forward(
 
         test_slice = test_slice.copy()
         test_slice["predicted_return"] = preds
-        test_slice = test_slice.sort_values("predicted_return", ascending=False).reset_index(
-            drop=True
-        )
+        test_slice = test_slice.sort_values(
+            ["predicted_return", "ticker"], ascending=[False, True]
+        ).reset_index(drop=True)
         test_slice["rank"] = np.arange(1, len(test_slice) + 1)
         test_slice["selected"] = test_slice["rank"] <= top_n_eff
         selected_count = int(test_slice["selected"].sum())
