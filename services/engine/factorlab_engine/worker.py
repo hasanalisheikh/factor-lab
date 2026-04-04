@@ -366,6 +366,28 @@ def _download_prices(start: str, end: str, tickers: list[str]) -> pd.DataFrame:
     return close
 
 
+def _persist_prices_to_db(io: SupabaseIO, prices: pd.DataFrame) -> None:
+    """Persist a wide prices DataFrame to the DB so subsequent runs use consistent data."""
+    price_rows: list[dict[str, Any]] = []
+    for ticker in prices.columns:
+        for dt, val in prices[ticker].items():
+            if pd.isna(val):
+                continue
+            price_rows.append(
+                {
+                    "ticker": str(ticker),
+                    "date": pd.Timestamp(dt).strftime("%Y-%m-%d"),
+                    "adj_close": float(val),
+                }
+            )
+    chunk_size = 5000
+    for i in range(0, len(price_rows), chunk_size):
+        io.client.table("prices").upsert(
+            price_rows[i : i + chunk_size], on_conflict="ticker,date"
+        ).execute()
+    print(f"[engine] persisted {len(price_rows)} yfinance fallback price rows to DB")
+
+
 def _ensure_min_history(prices: pd.DataFrame, *, context: str) -> None:
     if prices.empty:
         raise ValueError(f"No price history available for {context}")
@@ -822,6 +844,7 @@ def _build_baseline_result(
     )
     if _prices_stale:
         prices = _download_prices(warmup_start, run_end, tickers)
+        _persist_prices_to_db(io, prices)
 
     # For trend_filter: if defensive ticker still missing, try BIL fallback
     if (
@@ -836,6 +859,7 @@ def _build_baseline_result(
             if fallback in prices_fb.columns:
                 defensive_ticker = fallback
                 prices = prices_fb
+                _persist_prices_to_db(io, prices)
             else:
                 raise ValueError(
                     f"Trend Filter requires a defensive asset for risk-off allocation. "
@@ -944,6 +968,7 @@ def _build_ml_result(
     )
     if needs_download:
         prices = _download_prices(warmup_start, run["end_date"], tickers)
+        _persist_prices_to_db(io, prices)
 
     # Hard guard: ML requires at least one investable (non-benchmark) symbol.
     investable = [

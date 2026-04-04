@@ -89,6 +89,21 @@ def _fake_run(
     }
 
 
+class _FakeSupabaseTable:
+    """No-op Supabase table stub for upsert calls in tests."""
+
+    def upsert(self, *_args, **_kwargs):
+        return self
+
+    def execute(self):
+        return self
+
+
+class _FakeSupabaseClient:
+    def table(self, _name: str) -> _FakeSupabaseTable:
+        return _FakeSupabaseTable()
+
+
 class _FakeIO:
     """SupabaseIO stub — serves pre-built synthetic prices; no network calls."""
 
@@ -109,6 +124,10 @@ class _FakeIO:
 
     def update_run_universe_symbols(self, *_args) -> None:
         pass
+
+    @property
+    def client(self):
+        return _FakeSupabaseClient()
 
 
 # ---------------------------------------------------------------------------
