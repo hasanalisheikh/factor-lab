@@ -4,6 +4,10 @@ on:
   repository_dispatch:
     types: [run-worker]
 
+concurrency:
+  group: run-worker
+  cancel-in-progress: false
+
 jobs:
   worker:
     runs-on: ubuntu-latest

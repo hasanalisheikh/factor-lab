@@ -845,6 +845,7 @@ def _build_baseline_result(
     if _prices_stale:
         prices = _download_prices(warmup_start, run_end, tickers)
         _persist_prices_to_db(io, prices)
+        prices = io.fetch_prices_frame(tickers, warmup_start, run_end)
 
     # For trend_filter: if defensive ticker still missing, try BIL fallback
     if (
@@ -860,6 +861,7 @@ def _build_baseline_result(
                 defensive_ticker = fallback
                 prices = prices_fb
                 _persist_prices_to_db(io, prices)
+                prices = io.fetch_prices_frame(tickers_fb, warmup_start, run_end)
             else:
                 raise ValueError(
                     f"Trend Filter requires a defensive asset for risk-off allocation. "
@@ -969,6 +971,7 @@ def _build_ml_result(
     if needs_download:
         prices = _download_prices(warmup_start, run["end_date"], tickers)
         _persist_prices_to_db(io, prices)
+        prices = io.fetch_prices_frame(tickers, warmup_start, run["end_date"])
 
     # Hard guard: ML requires at least one investable (non-benchmark) symbol.
     investable = [
