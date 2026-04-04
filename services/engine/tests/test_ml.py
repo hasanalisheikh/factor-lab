@@ -4,7 +4,13 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from factorlab_engine.ml import FEATURE_COLUMNS, compute_daily_features, run_walk_forward
+from factorlab_engine.ml import (
+    FEATURE_COLUMNS,
+    LIGHTGBM_DETERMINISM_MODE,
+    _build_model,
+    compute_daily_features,
+    run_walk_forward,
+)
 
 
 def _lgbm_available() -> bool:
@@ -238,6 +244,66 @@ def test_walk_forward_invokes_progress_callback():
 
     assert progress_calls, "Expected in-loop ML progress callbacks"
     assert progress_calls[-1][0] == progress_calls[-1][1]
+
+
+@_requires_lgbm
+def test_lightgbm_model_uses_strict_deterministic_params():
+    model = _build_model("ml_lightgbm")
+    params = model.get_params()
+
+    assert params["subsample"] == 1.0
+    assert params["subsample_freq"] == 0
+    assert params["colsample_bytree"] == 1.0
+    assert params["n_jobs"] == 1
+    assert params["random_state"] == 0
+    assert params["deterministic"] is True
+    assert params["force_row_wise"] is True
+    assert params["data_random_seed"] == 0
+    assert params["feature_fraction_seed"] == 0
+    assert params["bagging_seed"] == 0
+    assert params["extra_seed"] == 0
+    assert params["drop_seed"] == 0
+    assert params["objective_seed"] == 0
+
+
+@_requires_lgbm
+def test_lightgbm_repeatability_same_deployment():
+    prices = _make_prices(n_months=72, n_assets=6, seed=7)
+    run_id = "test-repeatability"
+
+    result_a = run_walk_forward(
+        run_id=run_id,
+        strategy="ml_lightgbm",
+        prices=prices,
+        start_date="2019-01-01",
+        end_date="2020-06-30",
+        benchmark_ticker="SPY",
+        top_n=3,
+        cost_bps=10.0,
+    )
+    result_b = run_walk_forward(
+        run_id=run_id,
+        strategy="ml_lightgbm",
+        prices=prices,
+        start_date="2019-01-01",
+        end_date="2020-06-30",
+        benchmark_ticker="SPY",
+        top_n=3,
+        cost_bps=10.0,
+    )
+
+    assert result_a.prediction_rows == result_b.prediction_rows
+    assert result_a.position_rows == result_b.position_rows
+    assert result_a.equity_rows == result_b.equity_rows
+    assert result_a.metrics == result_b.metrics
+
+    model_params_a = result_a.metadata.get("model_params", {})
+    model_params_b = result_b.metadata.get("model_params", {})
+    assert model_params_a == model_params_b
+    assert model_params_a.get("model_impl") == "lightgbm"
+    assert model_params_a.get("determinism_mode") == LIGHTGBM_DETERMINISM_MODE
+    assert model_params_a.get("lightgbm_version")
+    assert isinstance(model_params_a.get("deterministic_model_params"), dict)
 
 
 @_requires_lgbm

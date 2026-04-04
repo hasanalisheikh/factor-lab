@@ -24,6 +24,7 @@ FEATURE_COLUMNS = [
     "drawdown_252d",
     "beta_60d",
 ]
+LIGHTGBM_DETERMINISM_MODE = "strict_same_deployment_v1"
 
 
 @dataclass(frozen=True)
@@ -160,9 +161,8 @@ def _build_model(strategy: str):
             learning_rate=0.05,
             num_leaves=31,
             min_child_samples=10,
-            n_jobs=1,  # single-threaded: parallel FP accumulation is non-deterministic
-            random_state=0,
             verbose=-1,
+            **_lightgbm_deterministic_params(),
         )
 
     raise ValueError(f"Unsupported ML strategy: {strategy}")
@@ -200,6 +200,36 @@ def _feature_importance(model: Any, feature_names: list[str]) -> dict[str, float
 def _feature_matrix(frame: pd.DataFrame) -> pd.DataFrame:
     """Keep feature names attached across fit/predict for sklearn-compatible models."""
     return frame.loc[:, FEATURE_COLUMNS]
+
+
+def _sort_ml_rows(frame: pd.DataFrame) -> pd.DataFrame:
+    return frame.sort_values(["date", "ticker"], kind="stable").reset_index(drop=True)
+
+
+def _lightgbm_version() -> str | None:
+    try:
+        import lightgbm
+    except (ImportError, OSError):
+        return None
+    return str(getattr(lightgbm, "__version__", "unknown"))
+
+
+def _lightgbm_deterministic_params() -> dict[str, Any]:
+    return {
+        "subsample": 1.0,
+        "subsample_freq": 0,
+        "colsample_bytree": 1.0,
+        "n_jobs": 1,
+        "random_state": 0,
+        "deterministic": True,
+        "force_row_wise": True,
+        "data_random_seed": 0,
+        "feature_fraction_seed": 0,
+        "bagging_seed": 0,
+        "extra_seed": 0,
+        "drop_seed": 0,
+        "objective_seed": 0,
+    }
 
 
 def run_walk_forward(
@@ -266,6 +296,7 @@ def run_walk_forward(
     model_rows = features_clean.dropna(
         subset=FEATURE_COLUMNS + ["target_return", "target_date"]
     ).copy()
+    model_rows = _sort_ml_rows(model_rows)
 
     start_ts = pd.to_datetime(start_date)
     end_ts = pd.to_datetime(end_date)
@@ -273,6 +304,7 @@ def run_walk_forward(
     in_window_rows = model_rows[
         (model_rows["target_date"] >= start_ts) & (model_rows["target_date"] <= end_ts)
     ].copy()
+    in_window_rows = _sort_ml_rows(in_window_rows)
     if in_window_rows.empty:
         raise RuntimeError(
             f"No ML rows in backtest window {start_date}..{end_date} after feature dropna. "
@@ -347,6 +379,7 @@ def run_walk_forward(
             & (model_rows["date"] < as_of_date)
             & (model_rows["ticker"].isin(all_tickers))
         ]
+        train_slice = _sort_ml_rows(train_slice)
 
         if train_slice["date"].nunique() < min_train_days:
             continue  # warmup: not enough history yet
@@ -363,6 +396,7 @@ def run_walk_forward(
         test_slice = in_window_rows[
             (in_window_rows["date"] == as_of_date) & in_window_rows["ticker"].isin(all_tickers)
         ].copy()
+        test_slice = _sort_ml_rows(test_slice)
         if test_slice.empty:
             continue
 
@@ -480,6 +514,10 @@ def run_walk_forward(
         raise RuntimeError("Model was never trained")
 
     rows_after_dropna = len(model_rows)
+    lightgbm_version = _lightgbm_version() if model_impl == "lightgbm" else None
+    deterministic_model_params = (
+        _lightgbm_deterministic_params() if model_impl == "lightgbm" else None
+    )
     metadata = {
         "run_id": run_id,
         "model_name": strategy,
@@ -499,6 +537,11 @@ def run_walk_forward(
             "model_refit_frequency": model_refit_freq,
             "model_version": "factorlab_ml_daily_v1",
             "feature_set": "factorlab_daily_v1",
+            "determinism_mode": (
+                LIGHTGBM_DETERMINISM_MODE if model_impl == "lightgbm" else None
+            ),
+            "lightgbm_version": lightgbm_version,
+            "deterministic_model_params": deterministic_model_params,
             "rows_after_dropna": rows_after_dropna,
             "train_days": int(n_train_days),
             "avg_symbols_per_day": round(avg_symbols, 2),

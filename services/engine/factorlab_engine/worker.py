@@ -781,6 +781,7 @@ def _build_run_metadata(run: dict[str, Any], result: BacktestResult) -> dict[str
     train_start = model_metadata.get("train_start")
     train_end = model_metadata.get("train_end")
     feature_set = model_params.get("feature_set")
+    deterministic_model_params = model_params.get("deterministic_model_params")
 
     return {
         "strategy_requested": strategy,
@@ -788,6 +789,11 @@ def _build_run_metadata(run: dict[str, Any], result: BacktestResult) -> dict[str
         "model_name": str(model_metadata.get("model_name") or strategy),
         "model_version": model_params.get("model_version"),
         "feature_set": feature_set,
+        "determinism_mode": model_params.get("determinism_mode"),
+        "lightgbm_version": model_params.get("lightgbm_version"),
+        "deterministic_model_params": (
+            deterministic_model_params if isinstance(deterministic_model_params, dict) else None
+        ),
         "training_window": {
             "start": train_start,
             "end": train_end,
@@ -800,6 +806,19 @@ def _build_run_metadata(run: dict[str, Any], result: BacktestResult) -> dict[str
         "positions_digest": _rows_digest(
             result.position_rows,
             keys=["date", "symbol", "weight"],
+        ),
+        "predictions_digest": _rows_digest(
+            result.prediction_rows,
+            keys=[
+                "as_of_date",
+                "target_date",
+                "ticker",
+                "predicted_return",
+                "realized_return",
+                "rank",
+                "selected",
+                "weight",
+            ],
         ),
         "equity_digest": _rows_digest(
             result.equity_rows,

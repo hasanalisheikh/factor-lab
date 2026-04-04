@@ -148,3 +148,6 @@ def test_process_job_lightgbm_persists_model_impl_when_available():
     assert io.success_called
     assert io.run_metadata_payload is not None
     assert io.run_metadata_payload.get("model_impl") == "lightgbm"
+    assert io.run_metadata_payload.get("predictions_digest")
+    assert io.run_metadata_payload.get("lightgbm_version")
+    assert io.run_metadata_payload.get("determinism_mode") == "strict_same_deployment_v1"
