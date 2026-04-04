@@ -94,7 +94,9 @@ export function MlInsightsTab({ metadata, predictions, runMetadata }: MlInsights
       ? runMeta.data_snapshot_digest.slice(0, 12)
       : "--";
   const predictionsDigest =
-    typeof runMeta?.predictions_digest === "string" ? runMeta.predictions_digest.slice(0, 12) : "--";
+    typeof runMeta?.predictions_digest === "string"
+      ? runMeta.predictions_digest.slice(0, 12)
+      : "--";
   const positionsDigest =
     typeof runMeta?.positions_digest === "string" ? runMeta.positions_digest.slice(0, 12) : "--";
   const equityDigest =

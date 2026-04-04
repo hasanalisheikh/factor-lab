@@ -205,7 +205,8 @@ export function parseRunMetadata(value: unknown): RunMetadataView {
     dataSnapshotMode: readString(v.data_snapshot_mode),
     dataSnapshotCutoff: readString(v.data_snapshot_cutoff),
     dataSnapshotDigest: readString(v.data_snapshot_digest),
-    runtimeDownloadUsed: typeof v.runtime_download_used === "boolean" ? v.runtime_download_used : null,
+    runtimeDownloadUsed:
+      typeof v.runtime_download_used === "boolean" ? v.runtime_download_used : null,
     predictionsDigest: readString(v.predictions_digest),
     positionsDigest: readString(v.positions_digest),
     equityDigest: readString(v.equity_digest),

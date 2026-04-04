@@ -743,8 +743,10 @@ def _read_run_preflight_snapshot(run: dict[str, Any]) -> dict[str, Any]:
 
 def _ml_required_snapshot_cutoff(run: dict[str, Any]) -> str:
     preflight = _read_run_preflight_snapshot(run)
-    return _read_iso_date(preflight.get("required_end")) or _read_iso_date(run.get("end_date")) or str(
-        run["end_date"]
+    return (
+        _read_iso_date(preflight.get("required_end"))
+        or _read_iso_date(run.get("end_date"))
+        or str(run["end_date"])
     )
 
 
@@ -805,7 +807,9 @@ def _validate_ml_snapshot_prices(
 ) -> None:
     failures: list[str] = []
     available_columns = {str(c) for c in prices.columns}
-    missing_tickers = sorted({ticker for ticker in required_tickers if ticker not in available_columns})
+    missing_tickers = sorted(
+        {ticker for ticker in required_tickers if ticker not in available_columns}
+    )
     if missing_tickers:
         failures.append(f"missing_tickers={missing_tickers}")
 
@@ -814,7 +818,9 @@ def _validate_ml_snapshot_prices(
         failures.append("prices_frame=empty")
     elif required_cutoff_ts not in prices.index:
         max_date = pd.Timestamp(prices.index.max()).strftime("%Y-%m-%d")
-        failures.append(f"required_cutoff={required_cutoff} missing_from_frame (max_date={max_date})")
+        failures.append(
+            f"required_cutoff={required_cutoff} missing_from_frame (max_date={max_date})"
+        )
     else:
         uncovered = sorted(
             {
@@ -883,7 +889,9 @@ def _build_run_metadata(run: dict[str, Any], result: BacktestResult) -> dict[str
     model_params = model_metadata.get("model_params", {})
     if not isinstance(model_params, dict):
         model_params = {}
-    audit_metadata = result.run_audit_metadata if isinstance(result.run_audit_metadata, dict) else {}
+    audit_metadata = (
+        result.run_audit_metadata if isinstance(result.run_audit_metadata, dict) else {}
+    )
     requested_model_impl: str | None = None
     if strategy == "ml_ridge":
         requested_model_impl = "ridge"
@@ -902,7 +910,9 @@ def _build_run_metadata(run: dict[str, Any], result: BacktestResult) -> dict[str
         "model_name": str(model_metadata.get("model_name") or strategy),
         "model_version": model_params.get("model_version"),
         "feature_set": feature_set,
-        "random_seed": (model_params.get("random_seed") if requested_model_impl is not None else None),
+        "random_seed": (
+            model_params.get("random_seed") if requested_model_impl is not None else None
+        ),
         "determinism_mode": model_params.get("determinism_mode"),
         "lightgbm_version": model_params.get("lightgbm_version"),
         "deterministic_model_params": (

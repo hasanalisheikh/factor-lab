@@ -185,7 +185,7 @@ def test_process_job_ml_ridge_repeatability_persists_same_snapshot_digests():
 
 
 def test_process_job_ml_ridge_fails_when_snapshot_cutoff_is_unavailable(monkeypatch):
-    prices = _make_prices().loc[: "2025-12-30"].copy()
+    prices = _make_prices().loc[:"2025-12-30"].copy()
     run = _make_run(strategy_id="ml_ridge", run_id="run-ridge-snapshot-fail")
     io = _FakeIO(run=run, prices=prices)
     job = Job(id="job-ridge-snapshot-fail", run_id="run-ridge-snapshot-fail", name="job")
