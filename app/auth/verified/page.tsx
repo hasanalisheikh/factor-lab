@@ -41,13 +41,13 @@ export default async function VerifiedPage({
         <CheckCircle2 className="mx-auto mb-4 h-10 w-10 text-emerald-400" />
         <h1 className="text-foreground mb-2 text-lg font-semibold">Email Confirmed</h1>
         <p className="text-muted-foreground mb-4 text-sm">
-          Your account is active. You can close this tab — your other window will redirect you to
-          FactorLab automatically.
+          You&apos;re signed in now. You can close this tab. If your original login window is still
+          open, it will refresh and continue automatically.
         </p>
         <p className="text-muted-foreground/60 text-xs">
-          If the other tab didn&apos;t redirect,{" "}
-          <Link href="/login" className="text-primary underline-offset-2 hover:underline">
-            sign in here
+          If you need it,{" "}
+          <Link href="/dashboard" className="text-primary underline-offset-2 hover:underline">
+            go to your dashboard
           </Link>
           .
         </p>

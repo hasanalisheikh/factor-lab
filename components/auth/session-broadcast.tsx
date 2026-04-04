@@ -2,6 +2,7 @@
 
 import { useEffect } from "react";
 import { createClient } from "@/lib/supabase/client";
+import { broadcastEmailVerificationComplete } from "@/lib/auth/email-verification-sync";
 
 /**
  * Invisible component included on the /auth/verified page.
@@ -15,7 +16,9 @@ import { createClient } from "@/lib/supabase/client";
 export function SessionBroadcast() {
   useEffect(() => {
     const supabase = createClient();
-    void supabase.auth.getSession();
+    void supabase.auth.getSession().finally(() => {
+      broadcastEmailVerificationComplete();
+    });
   }, []);
   return null;
 }

@@ -1,6 +1,7 @@
 import { render, screen, cleanup, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import React from "react";
+import { EMAIL_VERIFICATION_SYNC_STORAGE_KEY } from "@/lib/auth/email-verification-sync";
 import { LoginForm } from "./login-form";
 
 // ---------------------------------------------------------------------------
@@ -20,15 +21,29 @@ vi.mock("@/app/actions/auth", () => ({
   forgotPasswordAction: vi.fn(),
 }));
 
+const mockRouterReplace = vi.fn();
+const mockRouterRefresh = vi.fn();
+
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({
+    push: vi.fn(),
+    replace: mockRouterReplace,
+    refresh: mockRouterRefresh,
+  }),
+}));
+
 // ---------------------------------------------------------------------------
 // Mock the Supabase browser client so we control what getUser() returns
 // ---------------------------------------------------------------------------
 const mockGetUser = vi.fn();
+const mockOnAuthStateChange = vi.fn();
+const mockUnsubscribe = vi.fn();
 
 vi.mock("@/lib/supabase/client", () => ({
   createClient: () => ({
     auth: {
       getUser: mockGetUser,
+      onAuthStateChange: mockOnAuthStateChange,
       setSession: vi.fn().mockResolvedValue({ data: { session: null } }),
       getSession: vi.fn().mockResolvedValue({ data: { session: null } }),
     },
@@ -52,6 +67,17 @@ function guestUser() {
 describe("LoginForm guest-upgrade mode", () => {
   beforeEach(() => {
     mockGetUser.mockReset();
+    mockOnAuthStateChange.mockReset();
+    mockOnAuthStateChange.mockReturnValue({
+      data: {
+        subscription: {
+          unsubscribe: mockUnsubscribe,
+        },
+      },
+    });
+    mockUnsubscribe.mockReset();
+    mockRouterReplace.mockReset();
+    mockRouterRefresh.mockReset();
   });
 
   it("1) shows upgrade mode when a valid guest session is confirmed client-side", async () => {
@@ -136,5 +162,30 @@ describe("LoginForm guest-upgrade mode", () => {
     const btn = await screen.findByRole("button", { name: /continue as guest/i });
     expect(btn).toBeInTheDocument();
     expect(btn).not.toBeDisabled();
+  });
+
+  it("6) verify tab redirects to dashboard when email verification completes in another tab", async () => {
+    mockGetUser.mockResolvedValue({
+      data: { user: null },
+      error: null,
+    });
+
+    render(<LoginForm sessionUser={null} initialTab="verify" initialEmail="user@example.com" />);
+
+    await waitFor(() => {
+      expect(mockOnAuthStateChange).toHaveBeenCalledTimes(1);
+    });
+
+    window.dispatchEvent(
+      new StorageEvent("storage", {
+        key: EMAIL_VERIFICATION_SYNC_STORAGE_KEY,
+        newValue: JSON.stringify({ completedAt: Date.now() }),
+      })
+    );
+
+    await waitFor(() => {
+      expect(mockRouterRefresh).toHaveBeenCalledTimes(1);
+      expect(mockRouterReplace).toHaveBeenCalledWith("/dashboard");
+    });
   });
 });

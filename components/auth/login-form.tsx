@@ -1,7 +1,8 @@
 "use client";
 
-import { useActionState, useEffect, useState } from "react";
+import { useActionState, useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { AlertCircle, CheckCircle2, Mail } from "lucide-react";
 import {
   signInAction,
@@ -20,6 +21,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Spinner } from "@/components/ui/spinner";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { subscribeToEmailVerificationComplete } from "@/lib/auth/email-verification-sync";
 import { createClient } from "@/lib/supabase/client";
 
 export function LoginForm({
@@ -40,6 +42,8 @@ export function LoginForm({
     isGuest: boolean;
   } | null;
 }) {
+  const router = useRouter();
+  const hasHandledCrossTabSignIn = useRef(false);
   const [signInState, signInAction_, isSignInPending] = useActionState<AuthState, FormData>(
     signInAction,
     null
@@ -114,16 +118,31 @@ export function LoginForm({
   // onAuthStateChange in all tabs sharing the same origin.
   useEffect(() => {
     if (activeTab !== "verify") return;
+
+    const completeCrossTabSignIn = () => {
+      if (hasHandledCrossTabSignIn.current) return;
+      hasHandledCrossTabSignIn.current = true;
+      router.refresh();
+      router.replace("/dashboard");
+    };
+
     const supabase = createClient();
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((event) => {
       if (event === "SIGNED_IN") {
-        window.location.href = "/dashboard";
+        completeCrossTabSignIn();
       }
     });
-    return () => subscription.unsubscribe();
-  }, [activeTab]);
+    const unsubscribeCrossTabVerification = subscribeToEmailVerificationComplete(() => {
+      completeCrossTabSignIn();
+    });
+    return () => {
+      subscription.unsubscribe();
+      unsubscribeCrossTabVerification();
+      hasHandledCrossTabSignIn.current = false;
+    };
+  }, [activeTab, router]);
 
   // Start 60s cooldown after successful resend
   useEffect(() => {
@@ -397,12 +416,13 @@ export function LoginForm({
               <Mail className="text-primary/80 size-8" />
               <p className="text-sm text-white/70">
                 A verification email was sent to{" "}
-                {initialEmail ? (
-                  <span className="font-medium text-white/90">{initialEmail}</span>
+                {verifyEmail ? (
+                  <span className="font-medium text-white/90">{verifyEmail}</span>
                 ) : (
                   "your inbox"
                 )}
-                . Click the link in the email to activate your account.
+                . Open the link in that email to finish signing in. This tab will continue
+                automatically once the link is confirmed.
               </p>
             </div>
 
