@@ -101,6 +101,7 @@ function makeServerClient(options?: {
         },
         error: null,
       }),
+      signOut: vi.fn().mockResolvedValue({ error: null }),
     },
   };
 }
@@ -111,9 +112,11 @@ function makeAdminClient(options?: {
     email: string | null;
   }>;
   updateError?: { message: string } | null;
+  otpError?: { message: string } | null;
 }) {
   return {
     auth: {
+      signInWithOtp: vi.fn().mockResolvedValue({ error: options?.otpError ?? null }),
       admin: {
         listUsers: vi.fn().mockResolvedValue({
           data: {
@@ -148,7 +151,7 @@ describe("guest account upgrade", () => {
     checkResendRateLimitMock.mockResolvedValue({ allowed: true });
   });
 
-  it("updates the current guest user in place and redirects to the dashboard", async () => {
+  it("upgrades guest in place, sends OTP magic-link, and redirects to verify", async () => {
     const serverClient = makeServerClient();
     const adminClient = makeAdminClient();
 
@@ -160,7 +163,7 @@ describe("guest account upgrade", () => {
         email: "user@example.com",
         password: "Password!",
       })
-    ).rejects.toThrow("REDIRECT:/dashboard");
+    ).rejects.toThrow("REDIRECT:/login?tab=verify&email=user%40example.com");
 
     expect(adminClient.auth.admin.updateUserById).toHaveBeenCalledWith(
       "guest-user-id",
@@ -174,21 +177,18 @@ describe("guest account upgrade", () => {
         }),
       })
     );
-    expect(serverClient.auth.refreshSession).toHaveBeenCalledTimes(1);
-    expect(serverClient.auth.signInWithPassword).not.toHaveBeenCalled();
+    expect(adminClient.auth.signInWithOtp).toHaveBeenCalledWith(
+      expect.objectContaining({
+        email: "user@example.com",
+        options: expect.objectContaining({ shouldCreateUser: false }),
+      })
+    );
+    expect(serverClient.auth.signOut).toHaveBeenCalledTimes(1);
   });
 
-  it("reauthenticates with the upgraded credentials when refresh returns stale guest metadata", async () => {
-    const serverClient = makeServerClient({
-      refreshedUser: {
-        id: "guest-user-id",
-        email: "user@example.com",
-        user_metadata: {
-          is_guest: true,
-        },
-      },
-    });
-    const adminClient = makeAdminClient();
+  it("OTP failure is non-fatal: still signs out and redirects to verify page", async () => {
+    const serverClient = makeServerClient();
+    const adminClient = makeAdminClient({ otpError: { message: "rate limited" } });
 
     createClientMock.mockResolvedValue(serverClient);
     createAdminClientMock.mockReturnValue(adminClient);
@@ -198,13 +198,10 @@ describe("guest account upgrade", () => {
         email: "user@example.com",
         password: "Password!",
       })
-    ).rejects.toThrow("REDIRECT:/dashboard");
+    ).rejects.toThrow("REDIRECT:/login?tab=verify&email=user%40example.com");
 
-    expect(serverClient.auth.refreshSession).toHaveBeenCalledTimes(1);
-    expect(serverClient.auth.signInWithPassword).toHaveBeenCalledWith({
-      email: "user@example.com",
-      password: "Password!",
-    });
+    expect(adminClient.auth.signInWithOtp).toHaveBeenCalledTimes(1);
+    expect(serverClient.auth.signOut).toHaveBeenCalledTimes(1);
   });
 
   it("returns a friendly error when the email already belongs to another account", async () => {
@@ -247,7 +244,9 @@ describe("guest account upgrade", () => {
     formData.set("email", "user@example.com");
     formData.set("password", "Password!");
 
-    await expect(signUpAction(null, formData)).rejects.toThrow("REDIRECT:/dashboard");
+    await expect(signUpAction(null, formData)).rejects.toThrow(
+      "REDIRECT:/login?tab=verify&email=user%40example.com"
+    );
 
     expect(adminClient.auth.admin.updateUserById).toHaveBeenCalledWith(
       "guest-user-id",
