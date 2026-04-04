@@ -30,6 +30,7 @@ import { getRunBenchmark } from "@/lib/benchmark";
 import { BenchmarkOverlapWarning } from "@/components/benchmark-overlap-warning";
 import { RunDeleteButton } from "@/components/run-delete-button";
 import { RerunButton } from "@/components/run-detail/rerun-button";
+import { getRunPreflightSnapshot } from "@/lib/run-preflight-snapshot";
 
 export const maxDuration = 60;
 
@@ -54,45 +55,6 @@ function getUniversePreset(run: { universe?: string | null; run_params?: unknown
     return nested.trim().toUpperCase();
   }
   return "ETF8";
-}
-
-function getRunPreflightSnapshot(run: { run_params?: unknown }): {
-  dataCutoffUsed: string | null;
-  universeEarliestStart: string | null;
-  benchmarkCoverageHealth: { status: string; reason: string | null } | null;
-} {
-  const params =
-    run.run_params && typeof run.run_params === "object" && !Array.isArray(run.run_params)
-      ? (run.run_params as Record<string, unknown>)
-      : null;
-  const preflight =
-    params?.preflight && typeof params.preflight === "object" && !Array.isArray(params.preflight)
-      ? (params.preflight as Record<string, unknown>)
-      : null;
-  const benchmarkHealth =
-    preflight?.benchmark_coverage_health &&
-    typeof preflight.benchmark_coverage_health === "object" &&
-    !Array.isArray(preflight.benchmark_coverage_health)
-      ? (preflight.benchmark_coverage_health as Record<string, unknown>)
-      : null;
-
-  return {
-    dataCutoffUsed:
-      typeof preflight?.data_cutoff_date === "string" ? preflight.data_cutoff_date : null,
-    universeEarliestStart:
-      typeof preflight?.universe_earliest_start === "string"
-        ? preflight.universe_earliest_start
-        : null,
-    benchmarkCoverageHealth: benchmarkHealth
-      ? {
-          status:
-            typeof benchmarkHealth.status === "string"
-              ? benchmarkHealth.status.charAt(0).toUpperCase() + benchmarkHealth.status.slice(1)
-              : "—",
-          reason: typeof benchmarkHealth.reason === "string" ? benchmarkHealth.reason : null,
-        }
-      : null,
-  };
 }
 
 export default async function RunDetailPage({ params }: { params: Promise<{ id: string }> }) {

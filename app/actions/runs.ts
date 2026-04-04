@@ -653,7 +653,7 @@ function buildRepairIssue(params: {
     return {
       severity: "blocked",
       code,
-      reason: `${reasonPrefix} for ${formatSymbolList(failedSymbols)}. We couldn't start that repair automatically.`,
+      reason: `${reasonPrefix} for ${formatSymbolList(failedSymbols)}. We couldn't start that data refresh automatically.`,
       fix: retryLabel,
       action: {
         kind: "retry_repairs",
@@ -666,7 +666,7 @@ function buildRepairIssue(params: {
   return {
     severity: "blocked",
     code,
-    reason: `${reasonPrefix} for ${names}. A download has been queued — this run will start automatically when the data is ready.`,
+    reason: `${reasonPrefix} for ${names}. We've queued a data refresh.`,
     fix: waitingFix,
     action: null,
   };
@@ -699,12 +699,12 @@ function buildDateIssues(
     issues.push({
       severity: "blocked",
       code: "end_after_cutoff",
-      reason: `Your end date is after the current dataset cutoff (${snapshot.constraints.maxEndDate}).`,
-      fix: `Choose ${snapshot.constraints.maxEndDate} or an earlier end date.`,
+      reason: `We do not have data past ${snapshot.constraints.maxEndDate} yet.`,
+      fix: `Use ${snapshot.constraints.maxEndDate} or an earlier end date. Weekend and market-holiday prices appear on the previous trading day.`,
       action: {
         kind: "clamp_end_date",
         value: snapshot.constraints.maxEndDate,
-        label: "Use cutoff end date",
+        label: `Use ${snapshot.constraints.maxEndDate}`,
       },
     });
   }
@@ -846,6 +846,9 @@ async function buildRepairIssues(params: {
 }): Promise<RunPreflightIssue[]> {
   const { input, userId, snapshot } = params;
   const issues: RunPreflightIssue[] = [];
+  if (input.end_date > snapshot.constraints.maxEndDate) {
+    return issues;
+  }
   const requiredEnd = snapshot.requiredEnd;
   const universeId = input.universe as UniverseId;
 
@@ -859,7 +862,7 @@ async function buildRepairIssues(params: {
         symbols: snapshot.constraints.missingTickers,
         failedSymbols: universeRepair.failedSymbols,
         reasonPrefix: "We're missing price history",
-        waitingFix: "Wait for the repair batch to finish, then queue the run again.",
+        waitingFix: "Try queueing the run again after the repair batch finishes.",
         retryLabel: "Retry the universe data repair.",
       })
     );
@@ -888,8 +891,8 @@ async function buildRepairIssues(params: {
         code: "universe_stale_data_repair_started",
         symbols: staleUniversePlans.map((plan) => plan.symbol),
         failedSymbols: universeRepair.failedSymbols,
-        reasonPrefix: "Your end date is past our current data for",
-        waitingFix: "This run will start automatically once the missing prices finish downloading.",
+        reasonPrefix: `We do not have price data through ${requiredEnd}`,
+        waitingFix: "Try queueing the run again after those prices are available.",
         retryLabel: "Retry the universe repair.",
       })
     );
@@ -918,8 +921,8 @@ async function buildRepairIssues(params: {
         code: "benchmark_repair_started",
         symbols: [benchmarkRow.symbol],
         failedSymbols: benchmarkRepair.failedSymbols,
-        reasonPrefix: "Your end date is past our current data for",
-        waitingFix: "This run will start automatically once the missing prices finish downloading.",
+        reasonPrefix: `We do not have price data through ${requiredEnd}`,
+        waitingFix: "Try queueing the run again after those prices are available.",
         retryLabel: "Retry the benchmark repair.",
       })
     );
@@ -969,7 +972,7 @@ async function buildRepairIssues(params: {
           symbols: [repairTarget.symbol],
           failedSymbols: repairResult.failedSymbols,
           reasonPrefix: "Trend Filter needs a defensive risk-off asset",
-          waitingFix: "Wait for the defensive asset repair to finish, then queue the run again.",
+          waitingFix: "Try queueing the run again after the defensive asset repair finishes.",
           retryLabel: "Retry the defensive asset repair.",
         })
       );

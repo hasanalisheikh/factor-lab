@@ -445,6 +445,36 @@ describe("run actions preflight gating", () => {
     ]);
   });
 
+  it("preflight does not queue repairs when the end date is beyond available data", async () => {
+    const repairAdmin = makeRepairAdminStub();
+    createAdminClientMock.mockReturnValue(repairAdmin);
+    evaluateRunPreflightSnapshotMock.mockResolvedValue(
+      makeSnapshot({
+        maxEndDate: "2026-03-12",
+        requiredEnd: "2026-03-20",
+      })
+    );
+
+    const result = await preflightRun({
+      name: "Future end date",
+      strategy_id: "equal_weight",
+      start_date: "2018-01-01",
+      end_date: "2026-03-20",
+      benchmark: "SPY",
+      universe: "ETF8",
+      costs_bps: 10,
+      top_n: 5,
+      initial_capital: 100000,
+      apply_costs: true,
+      slippage_bps: 0,
+    });
+
+    expect(result.status).toBe("block");
+    expect(result.issues.map((issue) => issue.code)).toEqual(["end_after_cutoff"]);
+    expect(result.issues[0]?.reason).toBe("We do not have data past 2026-03-12 yet.");
+    expect(repairAdmin.dataIngestRows).toHaveLength(0);
+  });
+
   it("preflight blocks ML runs with insufficient training history and includes diagnostics", async () => {
     vi.stubEnv("ML_MIN_TRAIN_DAYS", "252");
     vi.stubEnv("ML_TRAIN_WINDOW_DAYS", "504");
@@ -561,7 +591,7 @@ describe("run actions preflight gating", () => {
 
     expect(result.status).toBe("block");
     expect(result.issues[0]?.code).toBe("universe_missing_data_repair_started");
-    expect(result.issues[0]?.reason).toContain("A download has been queued");
+    expect(result.issues[0]?.reason).toContain("We've queued a data refresh");
     expect(repairAdmin.dataIngestRows).toHaveLength(1);
     expect(repairAdmin.dataIngestRows[0]).toMatchObject({
       symbol: "QQQ",

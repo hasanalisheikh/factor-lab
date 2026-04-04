@@ -621,14 +621,14 @@ function classifyUnhealthySymbols(
     if (cov.status === "not_ingested") {
       reasons.push(
         `We're missing price data for ${cov.symbol} (${role}). ` +
-          `Downloading it now — your run will start automatically when ready.`
+          `Please try again after the data refresh finishes.`
       );
     } else {
       const pct = (cov.coverageRatio * 100).toFixed(0);
       const thr = (cov.threshold * 100).toFixed(0);
       reasons.push(
         `${cov.symbol} (${role}) has ${pct}% of required price history ` +
-          `(need ${thr}%). Downloading missing days now.`
+          `(need ${thr}%). Please try again after the missing days are refreshed.`
       );
     }
   }
@@ -995,12 +995,12 @@ export function buildRunPreflightResult(params: {
     issues.push({
       severity: "blocked",
       code: "end_after_cutoff",
-      reason: `End date ${endDate} is after the current data cutoff (${constraints.maxEndDate}).`,
-      fix: `Choose ${constraints.maxEndDate} or an earlier end date.`,
+      reason: `We do not have data past ${constraints.maxEndDate} yet.`,
+      fix: `Use ${constraints.maxEndDate} or an earlier end date. Weekend and market-holiday prices appear on the previous trading day.`,
       action: {
         kind: "clamp_end_date",
         value: constraints.maxEndDate,
-        label: "Use cutoff end date",
+        label: `Use ${constraints.maxEndDate}`,
       },
     });
   }

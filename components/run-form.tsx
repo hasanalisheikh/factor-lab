@@ -641,6 +641,8 @@ export function RunForm({
   }
   const blockIssues = (blockResult?.issues ?? []).filter((issue) => issue.severity === "blocked");
   const warnIssues = (warnResult?.issues ?? []).filter((issue) => issue.severity === "warning");
+  const hasOnlyEndDateBlock =
+    blockIssues.length === 1 && blockIssues[0]?.code === "end_after_cutoff";
 
   return (
     <>
@@ -1075,9 +1077,13 @@ export function RunForm({
       >
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>This run is blocked</AlertDialogTitle>
+            <AlertDialogTitle>
+              {hasOnlyEndDateBlock ? "End date unavailable" : "This run is blocked"}
+            </AlertDialogTitle>
             <AlertDialogDescription>
-              Fix these items before the run can be created.
+              {hasOnlyEndDateBlock
+                ? "Choose an available end date to continue."
+                : "Fix these items before the run can be created."}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <div className="space-y-3">
