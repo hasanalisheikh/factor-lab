@@ -274,9 +274,13 @@ def run_walk_forward(
         (model_rows["target_date"] >= start_ts) & (model_rows["target_date"] <= end_ts)
     ].copy()
     if in_window_rows.empty:
+        sample = sorted(model_rows["target_date"].dropna().unique())
+        first3 = [str(d.date()) for d in sample[:3]]
+        last3 = [str(d.date()) for d in sample[-3:]]
         raise RuntimeError(
             f"No ML rows in backtest window {start_date}..{end_date} after feature dropna. "
-            "Check that price data covers the requested backtest window."
+            f"model_rows total={len(model_rows)}, target_date range={first3}..{last3}. "
+            "Check that price data covers the requested backtest window including the warmup period."
         )
 
     all_tickers = sorted(in_window_rows["ticker"].unique().tolist())

@@ -841,6 +841,7 @@ def _build_baseline_result(
         prices.empty
         or prices.shape[0] < 40
         or prices.index.max() < pd.Timestamp(run_end) - pd.Timedelta(days=5)
+        or (not prices.empty and prices.index.min() > pd.Timestamp(warmup_start) + pd.Timedelta(days=30))
     )
     if _prices_stale:
         prices = _download_prices(warmup_start, run_end, tickers)
@@ -967,11 +968,27 @@ def _build_ml_result(
         or not has_non_benchmark
         or bool(missing_tickers)
         or prices.index.max() < pd.Timestamp(run["end_date"]) - pd.Timedelta(days=5)
+        or prices.index.min() > pd.Timestamp(warmup_start) + pd.Timedelta(days=30)
     )
     if needs_download:
-        prices = _download_prices(warmup_start, run["end_date"], tickers)
-        _persist_prices_to_db(io, prices)
-        prices = io.fetch_prices_frame(tickers, warmup_start, run["end_date"])
+        yf_prices = _download_prices(warmup_start, run["end_date"], tickers)
+        _persist_prices_to_db(io, yf_prices)
+        refetched = io.fetch_prices_frame(tickers, warmup_start, run["end_date"])
+        # Use the re-fetched DB copy only if it covers the same warmup window.
+        # If the upsert was partial or the DB returned fewer rows than expected,
+        # fall back to the yfinance prices directly so the ML warmup is not lost.
+        if (
+            not refetched.empty
+            and refetched.index.min() <= yf_prices.index.min() + pd.Timedelta(days=30)
+        ):
+            prices = refetched
+        else:
+            prices = yf_prices
+            print(
+                f"[engine][ml] run={run['id']} re-fetch warmup insufficient "
+                f"(refetch_start={refetched.index.min() if not refetched.empty else 'N/A'} "
+                f"vs yfinance_start={yf_prices.index.min()}); using yfinance prices directly"
+            )
 
     # Hard guard: ML requires at least one investable (non-benchmark) symbol.
     investable = [
