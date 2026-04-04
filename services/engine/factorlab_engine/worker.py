@@ -974,20 +974,24 @@ def _build_ml_result(
         yf_prices = _download_prices(warmup_start, run["end_date"], tickers)
         _persist_prices_to_db(io, yf_prices)
         refetched = io.fetch_prices_frame(tickers, warmup_start, run["end_date"])
-        # Use the re-fetched DB copy only if it covers the same warmup window.
-        # If the upsert was partial or the DB returned fewer rows than expected,
-        # fall back to the yfinance prices directly so the ML warmup is not lost.
-        if (
+        # Use the re-fetched DB copy only if it covers both the warmup window start
+        # AND the run end date. If the upsert was partial or failed silently, the
+        # refetch returns stale DB rows; fall back to yfinance prices in that case.
+        refetch_ok = (
             not refetched.empty
             and refetched.index.min() <= yf_prices.index.min() + pd.Timedelta(days=30)
-        ):
+            and refetched.index.max() >= yf_prices.index.max() - pd.Timedelta(days=5)
+        )
+        if refetch_ok:
             prices = refetched
         else:
             prices = yf_prices
             print(
-                f"[engine][ml] run={run['id']} re-fetch warmup insufficient "
-                f"(refetch_start={refetched.index.min() if not refetched.empty else 'N/A'} "
-                f"vs yfinance_start={yf_prices.index.min()}); using yfinance prices directly"
+                f"[engine][ml] run={run['id']} re-fetch stale or incomplete "
+                f"(refetch={refetched.index.min() if not refetched.empty else 'N/A'}"
+                f"..{refetched.index.max() if not refetched.empty else 'N/A'} "
+                f"vs yfinance={yf_prices.index.min()}..{yf_prices.index.max()}); "
+                "using yfinance prices directly"
             )
 
     # Hard guard: ML requires at least one investable (non-benchmark) symbol.
