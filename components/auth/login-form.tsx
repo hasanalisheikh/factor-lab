@@ -109,6 +109,22 @@ export function LoginForm({
   const [verifyEmail, setVerifyEmail] = useState(initialEmail ?? "");
   const [resendCooldown, setResendCooldown] = useState(0);
 
+  // When on the verify tab, listen for a sign-in from the activation link opened
+  // in another tab. Supabase writes the session to localStorage and fires
+  // onAuthStateChange in all tabs sharing the same origin.
+  useEffect(() => {
+    if (activeTab !== "verify") return;
+    const supabase = createClient();
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((event) => {
+      if (event === "SIGNED_IN") {
+        window.location.href = "/dashboard";
+      }
+    });
+    return () => subscription.unsubscribe();
+  }, [activeTab]);
+
   // Start 60s cooldown after successful resend
   useEffect(() => {
     if ("success" in (resendState ?? {})) {
@@ -129,6 +145,13 @@ export function LoginForm({
 
     let cancelled = false;
     const supabase = createClient();
+    // Respect the ?next= param forwarded by the callback's hashForwardResponse
+    // (used for activation links that should land on /auth/verified, not /dashboard).
+    const nextParam = new URLSearchParams(window.location.search).get("next");
+    const postAuthDest =
+      nextParam && nextParam.startsWith("/") && !nextParam.startsWith("//")
+        ? nextParam
+        : "/dashboard";
     async function hydrateSession() {
       try {
         const params = new URLSearchParams(window.location.hash.replace(/^#/, ""));
@@ -146,14 +169,14 @@ export function LoginForm({
               "",
               `${window.location.pathname}${window.location.search}`
             );
-            window.location.href = "/dashboard";
+            window.location.href = postAuthDest;
           }
           return;
         }
 
         const { data } = await supabase.auth.getSession();
         if (!cancelled && data.session) {
-          window.location.href = "/dashboard";
+          window.location.href = postAuthDest;
         }
       } catch {
         // The normal login UI remains available if session hydration fails.
@@ -239,6 +262,9 @@ export function LoginForm({
   function goToVerify(email: string) {
     setVerifyEmail(email);
     setActiveTab("verify");
+    const formData = new FormData();
+    formData.set("email", email);
+    resendAction_(formData);
   }
 
   const unverifiedEmail =

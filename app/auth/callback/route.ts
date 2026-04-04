@@ -12,6 +12,12 @@ export async function GET(request: NextRequest) {
   const errorDescription = searchParams.get("error_description");
   // `next` lets the caller specify a post-auth redirect (defaults to /dashboard)
   const next = searchParams.get("next") ?? "/dashboard";
+  // `activation=1` is set by the guest-upgrade OTP email so we route to the
+  // "verified" page instead of the dashboard
+  const isActivation = searchParams.get("activation") === "1";
+  // `signup_confirm=1` is set by signUpAction / resendVerificationAction so that
+  // PKCE code-exchange confirmations also land on /auth/verified instead of /dashboard
+  const isSignupConfirm = searchParams.get("signup_confirm") === "1";
 
   const isResetFlow = next.startsWith("/reset-password");
 
@@ -38,7 +44,14 @@ export async function GET(request: NextRequest) {
         : "Verification link expired. Please request a new one."
     );
 
-    const destination = new URL(isResetFlow ? "/reset-password" : "/login", origin).toString();
+    // For activation links, tell the login-form hash handler where to land
+    // after it establishes the session from the URL hash.
+    const successBase = isResetFlow ? "/reset-password" : "/login";
+    const successUrl = new URL(successBase, origin);
+    if (isActivation && !isResetFlow) {
+      successUrl.searchParams.set("next", "/auth/verified?verified=1");
+    }
+    const destination = successUrl.toString();
     const fallback = loginUrl.toString();
     const html = `<!doctype html>
 <html lang="en">
@@ -99,9 +112,13 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  // Successful verification — for email OTP (signup/email_change), land on the
-  // verified success page so the user gets a clear confirmation message.
-  // Code-exchange flows (password reset, magic link) continue to follow `next`.
-  const successDest = tokenHash && verificationType && !isResetFlow ? "/auth/verified" : next;
+  // Successful verification:
+  // - Email OTP (signup/email_change) → verified page
+  // - Activation magic link (isActivation) → verified page
+  // - Everything else (password reset, normal magic link) → follow `next`
+  const successDest =
+    (tokenHash && verificationType && !isResetFlow) || isActivation || isSignupConfirm
+      ? "/auth/verified?verified=1"
+      : next;
   return NextResponse.redirect(new URL(successDest, origin));
 }

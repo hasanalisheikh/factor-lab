@@ -424,10 +424,10 @@ export async function getRunById(id: string): Promise<RunWithMetrics | null> {
   }
 }
 
-const EQUITY_CURVE_PAGE_SIZE = 5000;
+const EQUITY_CURVE_PAGE_SIZE = 1000;
 
 export async function fetchAllEquityCurve(runId: string): Promise<EquityCurveRow[]> {
-  const supabase = await createClient();
+  const supabase = createAdminClient();
   const all: EquityCurveRow[] = [];
   let offset = 0;
 

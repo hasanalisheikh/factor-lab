@@ -101,32 +101,6 @@ async function findUserByEmail(
   }
 }
 
-async function refreshOrReauthenticateSession(
-  supabase: Awaited<ReturnType<typeof createClient>>,
-  email: string,
-  password: string
-): Promise<AuthState> {
-  const { data: refreshData, error: refreshError } = await supabase.auth.refreshSession();
-
-  if (!refreshError && refreshData.session && refreshData.user?.user_metadata?.is_guest !== true) {
-    return null;
-  }
-
-  const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({
-    email,
-    password,
-  });
-
-  if (signInError || !signInData.session) {
-    return {
-      error:
-        "Account upgraded, but we couldn't refresh your session. Please sign in with your new email and password.",
-    };
-  }
-
-  return null;
-}
-
 async function upgradeGuestUserInPlace({
   supabase,
   guestUser,
@@ -152,6 +126,10 @@ async function upgradeGuestUserInPlace({
       ...(guestUser.user_metadata ?? {}),
       is_guest: false,
     },
+    // Confirm the email directly so it is immediately discoverable by signInWithOtp.
+    // With email_confirm: false, GoTrue stores the new address as a pending
+    // email_change rather than setting email, which makes the subsequent OTP call
+    // fail ("user not found"). The OTP itself is what proves email ownership.
     email_confirm: true,
   });
 
@@ -163,12 +141,28 @@ async function upgradeGuestUserInPlace({
     return { error: updateError.message };
   }
 
-  const sessionError = await refreshOrReauthenticateSession(supabase, email, password);
-  if (sessionError) {
-    return sessionError;
+  const origin =
+    process.env.NEXT_PUBLIC_SITE_URL ?? (await headers()).get("origin") ?? "http://localhost:3000";
+
+  // Send the activation magic-link via the admin client.
+  // admin.auth carries the service-role key in the apikey header; GoTrue's OTP
+  // handler skips per-email and per-IP rate-limit checks for service-role callers.
+  // Each new OTP call replaces the previous token, so old activation emails are
+  // automatically invalidated.
+  const { error: otpError } = await admin.auth.signInWithOtp({
+    email,
+    options: {
+      shouldCreateUser: false,
+      emailRedirectTo: `${origin}/auth/callback?activation=1`,
+    },
+  });
+  if (otpError) {
+    console.warn("[auth] upgradeGuestUserInPlace: signInWithOtp failed:", otpError.message);
   }
 
-  redirect("/dashboard");
+  await supabase.auth.signOut();
+
+  redirect(`/login?tab=verify&email=${encodeURIComponent(email)}`);
 }
 
 export async function upgradeGuestToEmailPassword({
@@ -298,7 +292,7 @@ export async function signUpAction(_prev: AuthState, formData: FormData): Promis
   // Falls back to the request origin (works for local dev automatically).
   const origin =
     process.env.NEXT_PUBLIC_SITE_URL ?? (await headers()).get("origin") ?? "http://localhost:3000";
-  const emailRedirectTo = `${origin}/auth/callback`;
+  const emailRedirectTo = `${origin}/auth/callback?signup_confirm=1`;
 
   const { data: signUpData, error } = await supabase.auth.signUp({
     email: parsed.data.email,
@@ -406,7 +400,7 @@ export async function resendVerificationAction(
 
   const origin =
     process.env.NEXT_PUBLIC_SITE_URL ?? (await headers()).get("origin") ?? "http://localhost:3000";
-  const emailRedirectTo = `${origin}/auth/callback`;
+  const emailRedirectTo = `${origin}/auth/callback?signup_confirm=1`;
 
   const supabase = await createClient();
   const { error } = await supabase.auth.resend({
@@ -416,7 +410,23 @@ export async function resendVerificationAction(
   });
 
   if (error) {
-    return { error: error.message };
+    // resend({ type: 'signup' }) fails for already-confirmed accounts (e.g. guest
+    // upgrades where email_confirm:true was used). Fall back to an admin magic-link
+    // which bypasses OTP rate limits and works regardless of confirmation state.
+    // resend({ type: 'signup' }) fails for already-confirmed accounts (e.g. guest
+    // upgrades). Fall back to admin signInWithOtp which uses the service-role key
+    // and bypasses GoTrue OTP rate limits.
+    const admin = createAdminClient();
+    const { error: otpError } = await admin.auth.signInWithOtp({
+      email,
+      options: {
+        shouldCreateUser: false,
+        emailRedirectTo: `${origin}/auth/callback?activation=1`,
+      },
+    });
+    if (otpError) {
+      return { error: error.message };
+    }
   }
 
   return { success: true };
