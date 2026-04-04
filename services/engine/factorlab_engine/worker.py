@@ -841,12 +841,10 @@ def _build_baseline_result(
         prices.empty
         or prices.shape[0] < 40
         or prices.index.max() < pd.Timestamp(run_end) - pd.Timedelta(days=5)
-        or (not prices.empty and prices.index.min() > pd.Timestamp(warmup_start) + pd.Timedelta(days=30))
     )
     if _prices_stale:
         prices = _download_prices(warmup_start, run_end, tickers)
         _persist_prices_to_db(io, prices)
-        prices = io.fetch_prices_frame(tickers, warmup_start, run_end)
 
     # For trend_filter: if defensive ticker still missing, try BIL fallback
     if (
@@ -862,7 +860,6 @@ def _build_baseline_result(
                 defensive_ticker = fallback
                 prices = prices_fb
                 _persist_prices_to_db(io, prices)
-                prices = io.fetch_prices_frame(tickers_fb, warmup_start, run_end)
             else:
                 raise ValueError(
                     f"Trend Filter requires a defensive asset for risk-off allocation. "
@@ -968,31 +965,10 @@ def _build_ml_result(
         or not has_non_benchmark
         or bool(missing_tickers)
         or prices.index.max() < pd.Timestamp(run["end_date"]) - pd.Timedelta(days=5)
-        or prices.index.min() > pd.Timestamp(warmup_start) + pd.Timedelta(days=30)
     )
     if needs_download:
-        yf_prices = _download_prices(warmup_start, run["end_date"], tickers)
-        _persist_prices_to_db(io, yf_prices)
-        refetched = io.fetch_prices_frame(tickers, warmup_start, run["end_date"])
-        # Use the re-fetched DB copy only if it covers both the warmup window start
-        # AND the run end date. If the upsert was partial or failed silently, the
-        # refetch returns stale DB rows; fall back to yfinance prices in that case.
-        refetch_ok = (
-            not refetched.empty
-            and refetched.index.min() <= yf_prices.index.min() + pd.Timedelta(days=30)
-            and refetched.index.max() >= yf_prices.index.max() - pd.Timedelta(days=5)
-        )
-        if refetch_ok:
-            prices = refetched
-        else:
-            prices = yf_prices
-            print(
-                f"[engine][ml] run={run['id']} re-fetch stale or incomplete "
-                f"(refetch={refetched.index.min() if not refetched.empty else 'N/A'}"
-                f"..{refetched.index.max() if not refetched.empty else 'N/A'} "
-                f"vs yfinance={yf_prices.index.min()}..{yf_prices.index.max()}); "
-                "using yfinance prices directly"
-            )
+        prices = _download_prices(warmup_start, run["end_date"], tickers)
+        _persist_prices_to_db(io, prices)
 
     # Hard guard: ML requires at least one investable (non-benchmark) symbol.
     investable = [
