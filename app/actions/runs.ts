@@ -666,7 +666,7 @@ function buildRepairIssue(params: {
   return {
     severity: "blocked",
     code,
-    reason: `${reasonPrefix} for ${names}. We're downloading it now—this run will be available to start when data is ready.`,
+    reason: `${reasonPrefix} for ${names}. A download has been queued — this run will start automatically when the data is ready.`,
     fix: waitingFix,
     action: null,
   };
@@ -888,8 +888,8 @@ async function buildRepairIssues(params: {
         code: "universe_stale_data_repair_started",
         symbols: staleUniversePlans.map((plan) => plan.symbol),
         failedSymbols: universeRepair.failedSymbols,
-        reasonPrefix: "Some universe prices are behind the selected end date",
-        waitingFix: "Wait for the universe repair to finish, then queue the run again.",
+        reasonPrefix: "Your end date is past our current data for",
+        waitingFix: "This run will start automatically once the missing prices finish downloading.",
         retryLabel: "Retry the universe repair.",
       })
     );
@@ -918,8 +918,8 @@ async function buildRepairIssues(params: {
         code: "benchmark_repair_started",
         symbols: [benchmarkRow.symbol],
         failedSymbols: benchmarkRepair.failedSymbols,
-        reasonPrefix: "The benchmark is missing required price history",
-        waitingFix: "Wait for the benchmark repair to finish, then queue the run again.",
+        reasonPrefix: "Your end date is past our current data for",
+        waitingFix: "This run will start automatically once the missing prices finish downloading.",
         retryLabel: "Retry the benchmark repair.",
       })
     );
