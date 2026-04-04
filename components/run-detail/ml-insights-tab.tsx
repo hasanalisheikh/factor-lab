@@ -64,6 +64,16 @@ function asObject(value: Json | null | undefined): Record<string, unknown> | nul
   return value as Record<string, unknown>;
 }
 
+function readString(value: unknown): string | null {
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function readStringish(value: unknown): string | null {
+  if (typeof value === "string" && value.length > 0) return value;
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  return null;
+}
+
 export function MlInsightsTab({ metadata, predictions, runMetadata }: MlInsightsTabProps) {
   const [advancedOpen, setAdvancedOpen] = useState(false);
 
@@ -71,13 +81,30 @@ export function MlInsightsTab({ metadata, predictions, runMetadata }: MlInsights
   const latestSelected = getLatestSelected(predictions);
   const runMeta = asObject(runMetadata);
 
-  const modelImpl = typeof runMeta?.model_impl === "string" ? runMeta.model_impl : "--";
-  const featureSet = typeof runMeta?.feature_set === "string" ? runMeta.feature_set : "--";
-  const modelVersion = typeof runMeta?.model_version === "string" ? runMeta.model_version : "--";
+  const modelImpl = readString(runMeta?.model_impl) ?? "--";
+  const featureSet = readString(runMeta?.feature_set) ?? "--";
+  const modelVersion = readString(runMeta?.model_version) ?? "--";
+  const randomSeed = readStringish(runMeta?.random_seed) ?? "--";
+  const determinismMode = readString(runMeta?.determinism_mode) ?? "--";
+  const lightgbmVersion = readString(runMeta?.lightgbm_version) ?? "--";
+  const snapshotMode = readString(runMeta?.data_snapshot_mode) ?? "--";
+  const snapshotCutoff = readString(runMeta?.data_snapshot_cutoff) ?? "--";
+  const snapshotDigest =
+    typeof runMeta?.data_snapshot_digest === "string"
+      ? runMeta.data_snapshot_digest.slice(0, 12)
+      : "--";
+  const predictionsDigest =
+    typeof runMeta?.predictions_digest === "string" ? runMeta.predictions_digest.slice(0, 12) : "--";
   const positionsDigest =
     typeof runMeta?.positions_digest === "string" ? runMeta.positions_digest.slice(0, 12) : "--";
   const equityDigest =
     typeof runMeta?.equity_digest === "string" ? runMeta.equity_digest.slice(0, 12) : "--";
+  const runtimeDownloadUsed =
+    typeof runMeta?.runtime_download_used === "boolean"
+      ? runMeta.runtime_download_used
+        ? "Yes"
+        : "No"
+      : "--";
 
   const topN = metadata?.top_n ?? null;
 
@@ -99,8 +126,20 @@ export function MlInsightsTab({ metadata, predictions, runMetadata }: MlInsights
   const advancedRows: { label: string; value: string; tooltip?: string }[] = [
     { label: "Model Version", value: modelVersion },
     { label: "Feature Set", value: featureSet },
+    { label: "Random Seed", value: randomSeed },
+    { label: "Determinism Mode", value: determinismMode },
+    { label: "LightGBM Version", value: lightgbmVersion },
     { label: "Training Rows", value: metadata ? metadata.train_rows.toLocaleString() : "--" },
     { label: "Predictions", value: metadata ? metadata.prediction_rows.toLocaleString() : "--" },
+    { label: "Snapshot Mode", value: snapshotMode },
+    { label: "Snapshot Cutoff", value: snapshotCutoff },
+    { label: "Snapshot Digest", value: snapshotDigest, tooltip: "Input price-frame checksum" },
+    { label: "Runtime Download", value: runtimeDownloadUsed },
+    {
+      label: "Predictions Digest",
+      value: predictionsDigest,
+      tooltip: "Reproducibility checksum",
+    },
     { label: "Positions Digest", value: positionsDigest, tooltip: "Reproducibility checksum" },
     { label: "Equity Digest", value: equityDigest, tooltip: "Reproducibility checksum" },
   ];

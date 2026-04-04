@@ -24,6 +24,7 @@ FEATURE_COLUMNS = [
     "drawdown_252d",
     "beta_60d",
 ]
+ML_RANDOM_SEED = 0
 LIGHTGBM_DETERMINISM_MODE = "strict_same_deployment_v1"
 
 
@@ -142,7 +143,7 @@ def compute_daily_features(prices: pd.DataFrame, benchmark_ticker: str) -> pd.Da
 
 def _build_model(strategy: str):
     if strategy == "ml_ridge":
-        return make_pipeline(StandardScaler(), Ridge(alpha=1.0, random_state=0))
+        return make_pipeline(StandardScaler(), Ridge(alpha=1.0, random_state=ML_RANDOM_SEED))
 
     if strategy == "ml_lightgbm":
         try:
@@ -220,15 +221,15 @@ def _lightgbm_deterministic_params() -> dict[str, Any]:
         "subsample_freq": 0,
         "colsample_bytree": 1.0,
         "n_jobs": 1,
-        "random_state": 0,
+        "random_state": ML_RANDOM_SEED,
         "deterministic": True,
         "force_row_wise": True,
-        "data_random_seed": 0,
-        "feature_fraction_seed": 0,
-        "bagging_seed": 0,
-        "extra_seed": 0,
-        "drop_seed": 0,
-        "objective_seed": 0,
+        "data_random_seed": ML_RANDOM_SEED,
+        "feature_fraction_seed": ML_RANDOM_SEED,
+        "bagging_seed": ML_RANDOM_SEED,
+        "extra_seed": ML_RANDOM_SEED,
+        "drop_seed": ML_RANDOM_SEED,
+        "objective_seed": ML_RANDOM_SEED,
     }
 
 
@@ -532,6 +533,7 @@ def run_walk_forward(
         "feature_importance": _feature_importance(model, FEATURE_COLUMNS),
         "model_params": {
             "model_impl": model_impl,
+            "random_seed": ML_RANDOM_SEED,
             "horizon_days": 1,
             "train_window_days": train_window_days,
             "model_refit_frequency": model_refit_freq,

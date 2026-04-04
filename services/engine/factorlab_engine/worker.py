@@ -73,6 +73,7 @@ _INGEST_HTTP_TIMEOUT_SECONDS: int = 25
 _INGEST_ATTEMPT_TIMEOUT_SECONDS: int = 45
 _INGEST_MAX_RETRIES: int = 3
 _INGEST_BACKOFF_SECONDS: tuple[int, ...] = (1, 2, 4)
+_ML_SNAPSHOT_MODE = "db_only_strict_v1"
 
 # Static preset baskets used for run-level reproducibility. These can be updated
 # later without changing the resolution precedence contract.
@@ -133,6 +134,7 @@ class BacktestResult:
     prediction_rows: list[dict[str, Any]] | None = None
     model_metadata: dict[str, Any] | None = None
     position_rows: list[dict[str, Any]] | None = None
+    run_audit_metadata: dict[str, Any] | None = None
 
 
 def validate_backtest_window(
@@ -722,6 +724,116 @@ def _rows_digest(rows: list[dict[str, Any]] | None, *, keys: list[str]) -> str |
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def _read_iso_date(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        return pd.Timestamp(value).strftime("%Y-%m-%d")
+    except Exception:
+        return None
+
+
+def _read_run_preflight_snapshot(run: dict[str, Any]) -> dict[str, Any]:
+    run_params = run.get("run_params")
+    if not isinstance(run_params, dict):
+        return {}
+    preflight = run_params.get("preflight")
+    return preflight if isinstance(preflight, dict) else {}
+
+
+def _ml_required_snapshot_cutoff(run: dict[str, Any]) -> str:
+    preflight = _read_run_preflight_snapshot(run)
+    return _read_iso_date(preflight.get("required_end")) or _read_iso_date(run.get("end_date")) or str(
+        run["end_date"]
+    )
+
+
+def _price_frame_snapshot_digest(frame: pd.DataFrame) -> str | None:
+    if frame.empty:
+        return None
+    normalized = frame.sort_index().reindex(sorted(str(c) for c in frame.columns), axis=1)
+    flattened: list[dict[str, Any]] = []
+    for dt in normalized.index:
+        date_str = pd.Timestamp(dt).strftime("%Y-%m-%d")
+        for ticker in normalized.columns:
+            value = normalized.at[dt, ticker]
+            flattened.append(
+                {
+                    "date": date_str,
+                    "ticker": str(ticker),
+                    "adj_close": (None if pd.isna(value) else float(value)),
+                }
+            )
+    payload = json.dumps(flattened, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _build_price_snapshot_metadata(
+    frame: pd.DataFrame,
+    *,
+    required_cutoff: str,
+) -> dict[str, Any]:
+    if frame.empty:
+        return {
+            "data_snapshot_digest": None,
+            "data_snapshot_start": None,
+            "data_snapshot_end": None,
+            "data_snapshot_cutoff": required_cutoff,
+            "data_snapshot_rows": 0,
+            "data_snapshot_tickers": 0,
+            "data_snapshot_mode": _ML_SNAPSHOT_MODE,
+            "runtime_download_used": False,
+        }
+
+    return {
+        "data_snapshot_digest": _price_frame_snapshot_digest(frame),
+        "data_snapshot_start": pd.Timestamp(frame.index.min()).strftime("%Y-%m-%d"),
+        "data_snapshot_end": pd.Timestamp(frame.index.max()).strftime("%Y-%m-%d"),
+        "data_snapshot_cutoff": required_cutoff,
+        "data_snapshot_rows": int(frame.shape[0] * frame.shape[1]),
+        "data_snapshot_tickers": int(frame.shape[1]),
+        "data_snapshot_mode": _ML_SNAPSHOT_MODE,
+        "runtime_download_used": False,
+    }
+
+
+def _validate_ml_snapshot_prices(
+    prices: pd.DataFrame,
+    *,
+    required_tickers: list[str],
+    required_cutoff: str,
+) -> None:
+    failures: list[str] = []
+    available_columns = {str(c) for c in prices.columns}
+    missing_tickers = sorted({ticker for ticker in required_tickers if ticker not in available_columns})
+    if missing_tickers:
+        failures.append(f"missing_tickers={missing_tickers}")
+
+    required_cutoff_ts = pd.Timestamp(required_cutoff)
+    if prices.empty:
+        failures.append("prices_frame=empty")
+    elif required_cutoff_ts not in prices.index:
+        max_date = pd.Timestamp(prices.index.max()).strftime("%Y-%m-%d")
+        failures.append(f"required_cutoff={required_cutoff} missing_from_frame (max_date={max_date})")
+    else:
+        uncovered = sorted(
+            {
+                ticker
+                for ticker in required_tickers
+                if ticker in available_columns and pd.isna(prices.at[required_cutoff_ts, ticker])
+            }
+        )
+        if uncovered:
+            failures.append(f"null_at_required_cutoff={uncovered}")
+
+    if failures:
+        raise RuntimeError(
+            "ML reproducibility guard: queued snapshot unavailable in DB. "
+            + "; ".join(failures)
+            + ". Runtime price downloads are disabled for ML runs."
+        )
+
+
 def _validate_backtest_result(result: BacktestResult, run_id: str) -> None:
     """Raise RuntimeError if any required output is missing.
 
@@ -771,6 +883,7 @@ def _build_run_metadata(run: dict[str, Any], result: BacktestResult) -> dict[str
     model_params = model_metadata.get("model_params", {})
     if not isinstance(model_params, dict):
         model_params = {}
+    audit_metadata = result.run_audit_metadata if isinstance(result.run_audit_metadata, dict) else {}
     requested_model_impl: str | None = None
     if strategy == "ml_ridge":
         requested_model_impl = "ridge"
@@ -783,12 +896,13 @@ def _build_run_metadata(run: dict[str, Any], result: BacktestResult) -> dict[str
     feature_set = model_params.get("feature_set")
     deterministic_model_params = model_params.get("deterministic_model_params")
 
-    return {
+    metadata = {
         "strategy_requested": strategy,
         "model_impl": model_impl,
         "model_name": str(model_metadata.get("model_name") or strategy),
         "model_version": model_params.get("model_version"),
         "feature_set": feature_set,
+        "random_seed": (model_params.get("random_seed") if requested_model_impl is not None else None),
         "determinism_mode": model_params.get("determinism_mode"),
         "lightgbm_version": model_params.get("lightgbm_version"),
         "deterministic_model_params": (
@@ -825,6 +939,8 @@ def _build_run_metadata(run: dict[str, Any], result: BacktestResult) -> dict[str
             keys=["date", "portfolio", "benchmark"],
         ),
     }
+    metadata.update(audit_metadata)
+    return metadata
 
 
 def _build_baseline_result(
@@ -973,26 +1089,16 @@ def _build_ml_result(
     if on_progress:
         on_progress("load_data", 15)
     prices = io.fetch_prices_frame(tickers, warmup_start, run["end_date"])
-    available_columns = set(str(c) for c in prices.columns)
-    missing_tickers = [t for t in tickers if t not in available_columns]
-    has_benchmark = requested_benchmark in available_columns
-    has_non_benchmark = any(t != requested_benchmark and t in available_columns for t in tickers)
-    needs_download = (
-        prices.empty
-        or prices.shape[0] < 260
-        or not has_benchmark
-        or not has_non_benchmark
-        or bool(missing_tickers)
-        or prices.index.max() < pd.Timestamp(run["end_date"]) - pd.Timedelta(days=5)
+    snapshot_cutoff = _ml_required_snapshot_cutoff(run)
+    _validate_ml_snapshot_prices(
+        prices,
+        required_tickers=tickers,
+        required_cutoff=snapshot_cutoff,
     )
-    if needs_download:
-        prices = _download_prices(warmup_start, run["end_date"], tickers)
-        _persist_prices_to_db(io, prices)
+    available_columns = set(str(c) for c in prices.columns)
 
     # Hard guard: ML requires at least one investable (non-benchmark) symbol.
-    investable = [
-        t for t in tickers if t != requested_benchmark and t in set(str(c) for c in prices.columns)
-    ]
+    investable = [t for t in tickers if t != requested_benchmark and t in available_columns]
     if not investable:
         raise ValueError(
             "ML run aborted: no non-benchmark universe symbols are available in price data. "
@@ -1059,6 +1165,10 @@ def _build_ml_result(
         prediction_rows=ml.prediction_rows,
         model_metadata=ml.metadata,
         position_rows=ml.position_rows,
+        run_audit_metadata=_build_price_snapshot_metadata(
+            prices,
+            required_cutoff=snapshot_cutoff,
+        ),
     )
 
 

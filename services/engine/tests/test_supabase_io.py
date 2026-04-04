@@ -109,6 +109,21 @@ class _FakePricesClient:
         return self._prices_table
 
 
+class _CappedPricesTable(_PricesTable):
+    def __init__(self, rows: list[dict[str, Any]], *, cap: int) -> None:
+        super().__init__(rows)
+        self._cap = cap
+
+    def eq(self, column: str, value: str) -> "_CappedPricesTable":
+        filtered = [r for r in self._rows if r.get(column) == value]
+        return _CappedPricesTable(filtered, cap=self._cap)
+
+    def execute(self) -> _Result:
+        start, end = self._range
+        capped_end = min(end, start + self._cap - 1)
+        return _Result(self._rows[start : capped_end + 1])
+
+
 class _RetryablePricesTable:
     def __init__(self, rows: list[dict[str, Any]], failures_remaining: int = 1) -> None:
         self._rows = rows
@@ -411,6 +426,23 @@ def test_fetch_prices_frame_paginates_beyond_supabase_default_limit() -> None:
 
     assert list(frame.columns) == ["AAA", "BBB"]
     assert len(frame) == 600
+    assert frame.index.min() == dates.min()
+    assert frame.index.max() == dates.max()
+
+
+def test_fetch_prices_frame_paginates_when_backend_caps_pages_at_1000_rows() -> None:
+    rows: list[dict[str, Any]] = []
+    dates = pd.bdate_range("2008-01-01", periods=1600)
+    for dt in dates:
+        rows.append({"ticker": "AAA", "date": dt.strftime("%Y-%m-%d"), "adj_close": 100.0})
+
+    io = object.__new__(SupabaseIO)
+    io.client = _FakePricesClient(_CappedPricesTable(rows, cap=1000))
+
+    frame = io.fetch_prices_frame(["AAA"], "2008-01-01", "2015-12-31")
+
+    assert list(frame.columns) == ["AAA"]
+    assert len(frame) == 1600
     assert frame.index.min() == dates.min()
     assert frame.index.max() == dates.max()
 

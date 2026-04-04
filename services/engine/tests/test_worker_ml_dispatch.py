@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+import factorlab_engine.worker as worker_module
 from factorlab_engine.supabase_io import Job
 from factorlab_engine.worker import _process_job
 
@@ -26,6 +27,7 @@ class _FakeIO:
         self.success_called = False
         self.failure: _FailureRecord | None = None
         self.run_metadata_payload: dict[str, Any] | None = None
+        self.save_success_payloads: list[dict[str, Any]] = []
 
     def claim_job(self, job: Job) -> bool:  # noqa: ARG002
         return True
@@ -49,6 +51,7 @@ class _FakeIO:
 
     def save_success(self, **kwargs: Any) -> None:  # noqa: ARG002
         self.success_called = True
+        self.save_success_payloads.append(kwargs)
 
     def save_failure(
         self,
@@ -76,6 +79,34 @@ def _make_prices() -> pd.DataFrame:
     return pd.DataFrame(out, index=dates)
 
 
+def _make_run(
+    *,
+    strategy_id: str,
+    run_id: str,
+    end_date: str = "2025-12-31",
+) -> dict[str, Any]:
+    return {
+        "id": run_id,
+        "name": f"{strategy_id} test",
+        "strategy_id": strategy_id,
+        "status": "queued",
+        "start_date": "2021-01-01",
+        "end_date": end_date,
+        "benchmark": "SPY",
+        "benchmark_ticker": "SPY",
+        "costs_bps": 10,
+        "top_n": 2,
+        "universe": "ETF8",
+        "universe_symbols": ["AAA", "BBB", "CCC"],
+        "run_params": {
+            "preflight": {
+                "required_end": end_date,
+            }
+        },
+        "run_metadata": {},
+    }
+
+
 def _lgbm_available() -> bool:
     try:
         import lightgbm  # noqa: F401
@@ -86,22 +117,7 @@ def _lgbm_available() -> bool:
 
 
 def test_process_job_lightgbm_fails_loudly_when_lightgbm_missing(monkeypatch):
-    run = {
-        "id": "run-lgbm-fail",
-        "name": "LGBM test",
-        "strategy_id": "ml_lightgbm",
-        "status": "queued",
-        "start_date": "2021-01-01",
-        "end_date": "2025-12-31",
-        "benchmark": "SPY",
-        "benchmark_ticker": "SPY",
-        "costs_bps": 10,
-        "top_n": 2,
-        "universe": "ETF8",
-        "universe_symbols": ["AAA", "BBB", "CCC"],
-        "run_params": {},
-        "run_metadata": {},
-    }
+    run = _make_run(strategy_id="ml_lightgbm", run_id="run-lgbm-fail")
     io = _FakeIO(run=run, prices=_make_prices())
     job = Job(id="job-lgbm-fail", run_id="run-lgbm-fail", name="job")
 
@@ -123,22 +139,7 @@ def test_process_job_lightgbm_fails_loudly_when_lightgbm_missing(monkeypatch):
 
 @pytest.mark.skipif(not _lgbm_available(), reason="LightGBM is unavailable in this environment")
 def test_process_job_lightgbm_persists_model_impl_when_available():
-    run = {
-        "id": "run-lgbm-ok",
-        "name": "LGBM test",
-        "strategy_id": "ml_lightgbm",
-        "status": "queued",
-        "start_date": "2021-01-01",
-        "end_date": "2025-12-31",
-        "benchmark": "SPY",
-        "benchmark_ticker": "SPY",
-        "costs_bps": 10,
-        "top_n": 2,
-        "universe": "ETF8",
-        "universe_symbols": ["AAA", "BBB", "CCC"],
-        "run_params": {},
-        "run_metadata": {},
-    }
+    run = _make_run(strategy_id="ml_lightgbm", run_id="run-lgbm-ok")
     io = _FakeIO(run=run, prices=_make_prices())
     job = Job(id="job-lgbm-ok", run_id="run-lgbm-ok", name="job")
 
@@ -151,3 +152,53 @@ def test_process_job_lightgbm_persists_model_impl_when_available():
     assert io.run_metadata_payload.get("predictions_digest")
     assert io.run_metadata_payload.get("lightgbm_version")
     assert io.run_metadata_payload.get("determinism_mode") == "strict_same_deployment_v1"
+    assert io.run_metadata_payload.get("random_seed") == 0
+    assert io.run_metadata_payload.get("data_snapshot_digest")
+    assert io.run_metadata_payload.get("data_snapshot_cutoff") == "2025-12-31"
+    assert io.run_metadata_payload.get("data_snapshot_mode") == "db_only_strict_v1"
+    assert io.run_metadata_payload.get("runtime_download_used") is False
+
+
+def test_process_job_ml_ridge_repeatability_persists_same_snapshot_digests():
+    prices = _make_prices()
+    run = _make_run(strategy_id="ml_ridge", run_id="run-ridge-repeat")
+    job = Job(id="job-ridge-repeat", run_id="run-ridge-repeat", name="job")
+
+    io_a = _FakeIO(run=run, prices=prices)
+    io_b = _FakeIO(run=run, prices=prices)
+
+    _process_job(io_a, job)
+    _process_job(io_b, job)
+
+    assert io_a.failure is None
+    assert io_b.failure is None
+    assert io_a.success_called
+    assert io_b.success_called
+    assert io_a.run_metadata_payload == io_b.run_metadata_payload
+    assert io_a.run_metadata_payload is not None
+    assert io_a.run_metadata_payload.get("data_snapshot_digest")
+    assert io_a.run_metadata_payload.get("data_snapshot_cutoff") == "2025-12-31"
+    assert io_a.run_metadata_payload.get("predictions_digest")
+    assert io_a.run_metadata_payload.get("positions_digest")
+    assert io_a.run_metadata_payload.get("equity_digest")
+    assert io_a.run_metadata_payload.get("runtime_download_used") is False
+
+
+def test_process_job_ml_ridge_fails_when_snapshot_cutoff_is_unavailable(monkeypatch):
+    prices = _make_prices().loc[: "2025-12-30"].copy()
+    run = _make_run(strategy_id="ml_ridge", run_id="run-ridge-snapshot-fail")
+    io = _FakeIO(run=run, prices=prices)
+    job = Job(id="job-ridge-snapshot-fail", run_id="run-ridge-snapshot-fail", name="job")
+
+    def _unexpected_download(*args, **kwargs):  # noqa: ARG001
+        raise AssertionError("ML snapshot guard should fail before any runtime download")
+
+    monkeypatch.setattr(worker_module, "_download_prices", _unexpected_download)
+
+    _process_job(io, job)
+
+    assert not io.success_called
+    assert io.run_metadata_payload is None
+    assert io.failure is not None
+    assert "ML reproducibility guard" in io.failure.error_message
+    assert "Runtime price downloads are disabled for ML runs" in io.failure.error_message

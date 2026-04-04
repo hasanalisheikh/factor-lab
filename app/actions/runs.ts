@@ -1166,7 +1166,10 @@ async function preflightRunInternal(
     return buildErrorPreflightResult(parsed.error.issues[0].message, constraints);
   }
 
-  const cutoffDate = getLastCompleteTradingDayUtc();
+  const cutoffDate =
+    ML_STRATEGIES.has(parsed.data.strategy_id) && constraints.dataCutoffDate
+      ? constraints.dataCutoffDate
+      : getLastCompleteTradingDayUtc();
   const snapshot = await evaluateRunPreflightSnapshot({
     strategyId: parsed.data.strategy_id,
     startDate: parsed.data.start_date,

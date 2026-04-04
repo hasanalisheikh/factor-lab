@@ -26,6 +26,7 @@ _TRANSIENT_DB_RETRY_ATTEMPTS: int = int(os.getenv("SUPABASE_TRANSIENT_RETRY_ATTE
 _TRANSIENT_DB_RETRY_BASE_SECONDS: float = float(
     os.getenv("SUPABASE_TRANSIENT_RETRY_BASE_SECONDS", "0.5")
 )
+_SUPABASE_SELECT_PAGE_SIZE = 1000
 
 
 @dataclass(frozen=True)
@@ -677,7 +678,7 @@ class SupabaseIO:
         # sorted streams and skip potentially 10 000–20 000 rows on later pages,
         # which reliably hits Supabase's statement timeout for long date windows
         # (ML warmup = 5 years → ~2 500 rows per ticker → 5+ pages multi-ticker).
-        page_size = 3000
+        page_size = _SUPABASE_SELECT_PAGE_SIZE
         for ticker in tickers:
             offset = 0
             while True:

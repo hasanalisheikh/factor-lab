@@ -154,9 +154,27 @@ export type RunMetadataView = {
   modelImpl: string | null;
   modelVersion: string | null;
   featureSet: string | null;
+  randomSeed: string | null;
+  determinismMode: string | null;
+  lightgbmVersion: string | null;
+  dataSnapshotMode: string | null;
+  dataSnapshotCutoff: string | null;
+  dataSnapshotDigest: string | null;
+  runtimeDownloadUsed: boolean | null;
+  predictionsDigest: string | null;
   positionsDigest: string | null;
   equityDigest: string | null;
 };
+
+function readString(value: unknown): string | null {
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function readStringish(value: unknown): string | null {
+  if (typeof value === "string" && value.length > 0) return value;
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  return null;
+}
 
 export function parseRunMetadata(value: unknown): RunMetadataView {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -164,17 +182,33 @@ export function parseRunMetadata(value: unknown): RunMetadataView {
       modelImpl: null,
       modelVersion: null,
       featureSet: null,
+      randomSeed: null,
+      determinismMode: null,
+      lightgbmVersion: null,
+      dataSnapshotMode: null,
+      dataSnapshotCutoff: null,
+      dataSnapshotDigest: null,
+      runtimeDownloadUsed: null,
+      predictionsDigest: null,
       positionsDigest: null,
       equityDigest: null,
     };
   }
   const v = value as Record<string, unknown>;
   return {
-    modelImpl: typeof v.model_impl === "string" ? v.model_impl : null,
-    modelVersion: typeof v.model_version === "string" ? v.model_version : null,
-    featureSet: typeof v.feature_set === "string" ? v.feature_set : null,
-    positionsDigest: typeof v.positions_digest === "string" ? v.positions_digest : null,
-    equityDigest: typeof v.equity_digest === "string" ? v.equity_digest : null,
+    modelImpl: readString(v.model_impl),
+    modelVersion: readString(v.model_version),
+    featureSet: readString(v.feature_set),
+    randomSeed: readStringish(v.random_seed),
+    determinismMode: readString(v.determinism_mode),
+    lightgbmVersion: readString(v.lightgbm_version),
+    dataSnapshotMode: readString(v.data_snapshot_mode),
+    dataSnapshotCutoff: readString(v.data_snapshot_cutoff),
+    dataSnapshotDigest: readString(v.data_snapshot_digest),
+    runtimeDownloadUsed: typeof v.runtime_download_used === "boolean" ? v.runtime_download_used : null,
+    predictionsDigest: readString(v.predictions_digest),
+    positionsDigest: readString(v.positions_digest),
+    equityDigest: readString(v.equity_digest),
   };
 }
 
@@ -425,6 +459,13 @@ export function buildReportHtml(params: {
       ${runMetadata.modelImpl ? `<p><strong>Model impl:</strong> ${escapeHtml(runMetadata.modelImpl)}</p>` : ""}
       ${runMetadata.modelVersion ? `<p><strong>Model version:</strong> ${escapeHtml(runMetadata.modelVersion)}</p>` : ""}
       ${runMetadata.featureSet ? `<p><strong>Feature set:</strong> ${escapeHtml(runMetadata.featureSet)}</p>` : ""}
+      ${runMetadata.randomSeed ? `<p><strong>Random seed:</strong> ${escapeHtml(runMetadata.randomSeed)}</p>` : ""}
+      ${runMetadata.determinismMode ? `<p><strong>Determinism mode:</strong> ${escapeHtml(runMetadata.determinismMode)}</p>` : ""}
+      ${runMetadata.lightgbmVersion ? `<p><strong>LightGBM version:</strong> ${escapeHtml(runMetadata.lightgbmVersion)}</p>` : ""}
+      ${runMetadata.dataSnapshotMode ? `<p><strong>Snapshot mode:</strong> ${escapeHtml(runMetadata.dataSnapshotMode)}</p>` : ""}
+      ${runMetadata.dataSnapshotCutoff ? `<p><strong>Snapshot cutoff:</strong> ${escapeHtml(runMetadata.dataSnapshotCutoff)}</p>` : ""}
+      ${runMetadata.dataSnapshotDigest ? `<p><strong>Snapshot digest:</strong> <span style="font-size:12px">${escapeHtml(runMetadata.dataSnapshotDigest.slice(0, 16))}</span></p>` : ""}
+      ${runMetadata.runtimeDownloadUsed !== null ? `<p><strong>Runtime download used:</strong> ${runMetadata.runtimeDownloadUsed ? "Yes" : "No"}</p>` : ""}
       <p><strong>Benchmark:</strong> ${escapeHtml(benchmarkTicker)}</p>
       <p><strong>Window:</strong> ${escapeHtml(windowDisplay)}</p>
       <p><strong>Universe:</strong> ${escapeHtml(universeLabel)}</p>
@@ -437,6 +478,7 @@ export function buildReportHtml(params: {
       ${warmupPoints > 0 ? `<p><strong>Warmup before first active position:</strong> ${warmupPoints} trading day(s) at starting NAV.</p>` : ""}
       ${benchmarkOverlapDetected ? `<p><strong>Benchmark overlap:</strong> portfolio holds ${escapeHtml(benchmarkTicker)} at some rebalances.</p>` : ""}
       ${universeSymbols?.includes("GOOGL") && universeSymbols?.includes("GOOG") ? `<p><strong>Dual-class shares:</strong> GOOGL and GOOG are both held &mdash; these are dual-class shares of Alphabet Inc. and move nearly identically; their combined weight is roughly double a single-class holding.</p>` : ""}
+      ${runMetadata.predictionsDigest ? `<p><strong>Predictions digest:</strong> <span style="font-size:12px">${escapeHtml(runMetadata.predictionsDigest.slice(0, 16))}</span></p>` : ""}
       ${runMetadata.positionsDigest ? `<p><strong>Positions digest:</strong> <span style="font-size:12px">${escapeHtml(runMetadata.positionsDigest.slice(0, 16))}</span></p>` : ""}
       ${runMetadata.equityDigest ? `<p><strong>Equity digest:</strong> <span style="font-size:12px">${escapeHtml(runMetadata.equityDigest.slice(0, 16))}</span></p>` : ""}
       <p><strong>Generated:</strong> ${escapeHtml(generatedAt)}</p>

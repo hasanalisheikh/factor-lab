@@ -7,6 +7,7 @@ import pytest
 from factorlab_engine.ml import (
     FEATURE_COLUMNS,
     LIGHTGBM_DETERMINISM_MODE,
+    ML_RANDOM_SEED,
     _build_model,
     compute_daily_features,
     run_walk_forward,
@@ -133,6 +134,19 @@ def test_target_is_next_day_return_alignment():
 # ── run_walk_forward ──────────────────────────────────────────────────────────
 
 
+def _assert_repeatable_results(result_a, result_b, *, expected_impl: str) -> None:
+    assert result_a.prediction_rows == result_b.prediction_rows
+    assert result_a.position_rows == result_b.position_rows
+    assert result_a.equity_rows == result_b.equity_rows
+    assert result_a.metrics == result_b.metrics
+
+    model_params_a = result_a.metadata.get("model_params", {})
+    model_params_b = result_b.metadata.get("model_params", {})
+    assert model_params_a == model_params_b
+    assert model_params_a.get("model_impl") == expected_impl
+    assert model_params_a.get("random_seed") == ML_RANDOM_SEED
+
+
 def test_walk_forward_split_and_output_shapes(monkeypatch: pytest.MonkeyPatch):
     """End-to-end daily walk-forward: verify output shapes and structure."""
     monkeypatch.setenv("ML_MIN_TRAIN_DAYS", "252")
@@ -246,6 +260,33 @@ def test_walk_forward_invokes_progress_callback():
     assert progress_calls[-1][0] == progress_calls[-1][1]
 
 
+def test_ridge_repeatability_same_snapshot():
+    prices = _make_prices(n_months=72, n_assets=6, seed=7)
+
+    result_a = run_walk_forward(
+        run_id="test-ridge-repeatability",
+        strategy="ml_ridge",
+        prices=prices,
+        start_date="2019-01-01",
+        end_date="2020-06-30",
+        benchmark_ticker="SPY",
+        top_n=3,
+        cost_bps=10.0,
+    )
+    result_b = run_walk_forward(
+        run_id="test-ridge-repeatability",
+        strategy="ml_ridge",
+        prices=prices,
+        start_date="2019-01-01",
+        end_date="2020-06-30",
+        benchmark_ticker="SPY",
+        top_n=3,
+        cost_bps=10.0,
+    )
+
+    _assert_repeatable_results(result_a, result_b, expected_impl="ridge")
+
+
 @_requires_lgbm
 def test_lightgbm_model_uses_strict_deterministic_params():
     model = _build_model("ml_lightgbm")
@@ -292,15 +333,9 @@ def test_lightgbm_repeatability_same_deployment():
         cost_bps=10.0,
     )
 
-    assert result_a.prediction_rows == result_b.prediction_rows
-    assert result_a.position_rows == result_b.position_rows
-    assert result_a.equity_rows == result_b.equity_rows
-    assert result_a.metrics == result_b.metrics
+    _assert_repeatable_results(result_a, result_b, expected_impl="lightgbm")
 
     model_params_a = result_a.metadata.get("model_params", {})
-    model_params_b = result_b.metadata.get("model_params", {})
-    assert model_params_a == model_params_b
-    assert model_params_a.get("model_impl") == "lightgbm"
     assert model_params_a.get("determinism_mode") == LIGHTGBM_DETERMINISM_MODE
     assert model_params_a.get("lightgbm_version")
     assert isinstance(model_params_a.get("deterministic_model_params"), dict)

@@ -43,6 +43,14 @@ const BASE_PARAMS = {
     modelImpl: null,
     modelVersion: null,
     featureSet: null,
+    randomSeed: null,
+    determinismMode: null,
+    lightgbmVersion: null,
+    dataSnapshotMode: null,
+    dataSnapshotCutoff: null,
+    dataSnapshotDigest: null,
+    runtimeDownloadUsed: null,
+    predictionsDigest: null,
     positionsDigest: null,
     equityDigest: null,
   },
@@ -122,6 +130,42 @@ describe("buildReportHtml - rebalance frequency", () => {
       runParams: { rebalance_frequency: "Weekly" },
     });
     expect(html).toContain("Rebalance frequency:</strong> Weekly");
+  });
+});
+
+describe("buildReportHtml - reproducibility metadata", () => {
+  it("renders snapshot and seed audit fields when present", () => {
+    const html = buildReportHtml({
+      ...BASE_PARAMS,
+      strategyId: "ml_lightgbm",
+      runMetadata: {
+        ...BASE_PARAMS.runMetadata,
+        modelImpl: "lightgbm",
+        modelVersion: "factorlab_ml_daily_v1",
+        featureSet: "factorlab_daily_v1",
+        randomSeed: "0",
+        determinismMode: "strict_same_deployment_v1",
+        lightgbmVersion: "4.5.0",
+        dataSnapshotMode: "db_only_strict_v1",
+        dataSnapshotCutoff: "2023-12-29",
+        dataSnapshotDigest: "abcdef1234567890fedcba",
+        runtimeDownloadUsed: false,
+        predictionsDigest: "111111111111222222222222",
+        positionsDigest: "333333333333444444444444",
+        equityDigest: "555555555555666666666666",
+      },
+    });
+
+    expect(html).toContain("Random seed:</strong> 0");
+    expect(html).toContain("Determinism mode:</strong> strict_same_deployment_v1");
+    expect(html).toContain("LightGBM version:</strong> 4.5.0");
+    expect(html).toContain("Snapshot mode:</strong> db_only_strict_v1");
+    expect(html).toContain("Snapshot cutoff:</strong> 2023-12-29");
+    expect(html).toContain("Snapshot digest:</strong>");
+    expect(html).toContain("Runtime download used:</strong> No");
+    expect(html).toContain("Predictions digest:</strong>");
+    expect(html).toContain("Positions digest:</strong>");
+    expect(html).toContain("Equity digest:</strong>");
   });
 });
 

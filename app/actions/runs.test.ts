@@ -556,6 +556,34 @@ describe("run actions preflight gating", () => {
     );
   });
 
+  it("preflight uses the persisted DB cutoff for ML snapshot evaluation", async () => {
+    getUniverseConstraintsSnapshotMock.mockResolvedValue({
+      ...BASE_CONSTRAINTS,
+      dataCutoffDate: "2020-03-23",
+    });
+
+    await preflightRun({
+      name: "ML db cutoff",
+      strategy_id: "ml_lightgbm",
+      start_date: "2018-01-01",
+      end_date: "2026-04-02",
+      benchmark: "SPY",
+      universe: "ETF8",
+      costs_bps: 10,
+      top_n: 5,
+      initial_capital: 100000,
+      apply_costs: true,
+      slippage_bps: 0,
+    });
+
+    expect(evaluateRunPreflightSnapshotMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        strategyId: "ml_lightgbm",
+        dataCutoffDate: "2020-03-23",
+      })
+    );
+  });
+
   it("preflight starts universe repairs and blocks queueing until missing data is ready", async () => {
     const repairAdmin = makeRepairAdminStub();
     createAdminClientMock.mockReturnValue(repairAdmin);
