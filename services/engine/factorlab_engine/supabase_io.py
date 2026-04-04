@@ -326,10 +326,12 @@ class SupabaseIO:
 
     def update_run_metadata(self, run_id: str, metadata: dict[str, Any]) -> None:
         self._execute_with_retry(
-            lambda: self.client.table("runs")
-            .update({"run_metadata": metadata})
-            .eq("id", run_id)
-            .execute(),
+            lambda: (
+                self.client.table("runs")
+                .update({"run_metadata": metadata})
+                .eq("id", run_id)
+                .execute()
+            ),
             context=f"update_run_metadata run_id={run_id}",
         )
 
@@ -679,21 +681,21 @@ class SupabaseIO:
         for ticker in tickers:
             offset = 0
             while True:
-                result = (
-                    self._execute_with_retry(
-                        lambda: self.client.table("prices")
+                result = self._execute_with_retry(
+                    lambda: (
+                        self.client.table("prices")
                         .select("ticker,date,adj_close")
                         .eq("ticker", ticker)
                         .gte("date", start_date)
                         .lte("date", end_date)
                         .order("date")
                         .range(offset, offset + page_size - 1)
-                        .execute(),
-                        context=(
-                            f"fetch_prices_frame ticker={ticker} "
-                            f"range={start_date}..{end_date} offset={offset}"
-                        ),
-                    )
+                        .execute()
+                    ),
+                    context=(
+                        f"fetch_prices_frame ticker={ticker} "
+                        f"range={start_date}..{end_date} offset={offset}"
+                    ),
                 )
                 chunk = result.data or []
                 if not chunk:
@@ -937,9 +939,9 @@ class SupabaseIO:
             "calmar": metrics["calmar"],
         }
         self._execute_with_retry(
-            lambda: self.client.table("run_metrics")
-            .upsert(payload, on_conflict="run_id")
-            .execute(),
+            lambda: (
+                self.client.table("run_metrics").upsert(payload, on_conflict="run_id").execute()
+            ),
             context=f"upsert_run_metrics run_id={run_id}",
         )
 
@@ -949,12 +951,14 @@ class SupabaseIO:
         for start in range(0, len(rows), chunk_size):
             chunk = rows[start : start + chunk_size]
             self._execute_with_retry(
-                lambda chunk=chunk: self.client.table("features_monthly")
-                .upsert(
-                    chunk,
-                    on_conflict="ticker,date",
-                )
-                .execute(),
+                lambda chunk=chunk: (
+                    self.client.table("features_monthly")
+                    .upsert(
+                        chunk,
+                        on_conflict="ticker,date",
+                    )
+                    .execute()
+                ),
                 context=f"upsert_features_monthly rows={len(chunk)} offset={start}",
             )
 
@@ -972,8 +976,7 @@ class SupabaseIO:
             self._execute_with_retry(
                 lambda chunk=chunk: self.client.table("model_predictions").insert(chunk).execute(),
                 context=(
-                    f"insert_model_predictions run_id={run_id} "
-                    f"rows={len(chunk)} offset={start}"
+                    f"insert_model_predictions run_id={run_id} rows={len(chunk)} offset={start}"
                 ),
             )
 

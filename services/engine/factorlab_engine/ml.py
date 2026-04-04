@@ -537,9 +537,7 @@ def run_walk_forward(
             "model_refit_frequency": model_refit_freq,
             "model_version": "factorlab_ml_daily_v1",
             "feature_set": "factorlab_daily_v1",
-            "determinism_mode": (
-                LIGHTGBM_DETERMINISM_MODE if model_impl == "lightgbm" else None
-            ),
+            "determinism_mode": (LIGHTGBM_DETERMINISM_MODE if model_impl == "lightgbm" else None),
             "lightgbm_version": lightgbm_version,
             "deterministic_model_params": deterministic_model_params,
             "rows_after_dropna": rows_after_dropna,
