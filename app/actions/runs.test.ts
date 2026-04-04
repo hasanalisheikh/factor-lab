@@ -561,7 +561,7 @@ describe("run actions preflight gating", () => {
 
     expect(result.status).toBe("block");
     expect(result.issues[0]?.code).toBe("universe_missing_data_repair_started");
-    expect(result.issues[0]?.reason).toContain("We're downloading it now");
+    expect(result.issues[0]?.reason).toContain("A download has been queued");
     expect(repairAdmin.dataIngestRows).toHaveLength(1);
     expect(repairAdmin.dataIngestRows[0]).toMatchObject({
       symbol: "QQQ",
