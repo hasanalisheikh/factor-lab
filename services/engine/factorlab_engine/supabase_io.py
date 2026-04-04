@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import os
+import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 import pandas as pd
 from supabase import Client, create_client
@@ -20,6 +21,10 @@ _INGEST_MAX_RUNTIME_SECONDS: int = int(os.getenv("INGEST_MAX_RUNTIME_SECONDS", "
 # not freeze the entire pipeline indefinitely.
 _BENCHMARK_TICKERS: frozenset[str] = frozenset(
     ["SPY", "QQQ", "IWM", "VTI", "EFA", "EEM", "TLT", "GLD", "VNQ"]
+)
+_TRANSIENT_DB_RETRY_ATTEMPTS: int = int(os.getenv("SUPABASE_TRANSIENT_RETRY_ATTEMPTS", "3"))
+_TRANSIENT_DB_RETRY_BASE_SECONDS: float = float(
+    os.getenv("SUPABASE_TRANSIENT_RETRY_BASE_SECONDS", "0.5")
 )
 
 
@@ -96,6 +101,44 @@ class SupabaseIO:
                 )
             )
         )
+
+    def _is_transient_db_timeout(self, exc: Exception | str) -> bool:
+        message = str(exc).lower()
+        return (
+            "statement timeout" in message
+            or "canceling statement due to statement timeout" in message
+            or "code': '57014'" in message
+            or 'code": "57014"' in message
+            or '"code":"57014"' in message
+        )
+
+    def _execute_with_retry(
+        self,
+        action: Callable[[], Any],
+        *,
+        context: str,
+        attempts: int | None = None,
+    ) -> Any:
+        max_attempts = max(1, attempts or _TRANSIENT_DB_RETRY_ATTEMPTS)
+        last_exc: Exception | None = None
+
+        for attempt in range(1, max_attempts + 1):
+            try:
+                return action()
+            except Exception as exc:
+                last_exc = exc
+                if attempt >= max_attempts or not self._is_transient_db_timeout(exc):
+                    raise
+                delay = _TRANSIENT_DB_RETRY_BASE_SECONDS * (2 ** (attempt - 1))
+                print(
+                    f"[supabase_io] transient DB timeout during {context}; "
+                    f"retry {attempt}/{max_attempts} in {delay:.2f}s"
+                )
+                time.sleep(delay)
+
+        if last_exc is not None:
+            raise last_exc
+        raise RuntimeError(f"{context} failed without raising an exception")
 
     def _normalize_data_ingest_status(self, status: str | None) -> str | None:
         if status == "completed":
@@ -282,7 +325,13 @@ class SupabaseIO:
         (self.client.table("runs").update({"universe_symbols": symbols}).eq("id", run_id).execute())
 
     def update_run_metadata(self, run_id: str, metadata: dict[str, Any]) -> None:
-        (self.client.table("runs").update({"run_metadata": metadata}).eq("id", run_id).execute())
+        self._execute_with_retry(
+            lambda: self.client.table("runs")
+            .update({"run_metadata": metadata})
+            .eq("id", run_id)
+            .execute(),
+            context=f"update_run_metadata run_id={run_id}",
+        )
 
     def _update_job_row(
         self,
@@ -631,14 +680,20 @@ class SupabaseIO:
             offset = 0
             while True:
                 result = (
-                    self.client.table("prices")
-                    .select("ticker,date,adj_close")
-                    .eq("ticker", ticker)
-                    .gte("date", start_date)
-                    .lte("date", end_date)
-                    .order("date")
-                    .range(offset, offset + page_size - 1)
-                    .execute()
+                    self._execute_with_retry(
+                        lambda: self.client.table("prices")
+                        .select("ticker,date,adj_close")
+                        .eq("ticker", ticker)
+                        .gte("date", start_date)
+                        .lte("date", end_date)
+                        .order("date")
+                        .range(offset, offset + page_size - 1)
+                        .execute(),
+                        context=(
+                            f"fetch_prices_frame ticker={ticker} "
+                            f"range={start_date}..{end_date} offset={offset}"
+                        ),
+                    )
                 )
                 chunk = result.data or []
                 if not chunk:
@@ -699,7 +754,10 @@ class SupabaseIO:
             dates = [row["date"] for row in rows]
             runs_update["executed_start_date"] = min(dates)
             runs_update["executed_end_date"] = max(dates)
-        (self.client.table("runs").update(runs_update).eq("id", job.run_id).execute())
+        self._execute_with_retry(
+            lambda: self.client.table("runs").update(runs_update).eq("id", job.run_id).execute(),
+            context=f"finalize_run_success run_id={job.run_id}",
+        )
 
     def save_failure(
         self,
@@ -853,12 +911,18 @@ class SupabaseIO:
     def _replace_equity_curve(
         self, run_id: str, rows: list[dict[str, Any]], chunk_size: int = 500
     ) -> None:
-        self.client.table("equity_curve").delete().eq("run_id", run_id).execute()
+        self._execute_with_retry(
+            lambda: self.client.table("equity_curve").delete().eq("run_id", run_id).execute(),
+            context=f"delete_equity_curve run_id={run_id}",
+        )
         if not rows:
             return
         for start in range(0, len(rows), chunk_size):
             chunk = rows[start : start + chunk_size]
-            self.client.table("equity_curve").insert(chunk).execute()
+            self._execute_with_retry(
+                lambda chunk=chunk: self.client.table("equity_curve").insert(chunk).execute(),
+                context=f"insert_equity_curve run_id={run_id} rows={len(chunk)} offset={start}",
+            )
 
     def _upsert_metrics(self, run_id: str, metrics: dict[str, float]) -> None:
         payload = {
@@ -872,41 +936,72 @@ class SupabaseIO:
             "profit_factor": metrics["profit_factor"],
             "calmar": metrics["calmar"],
         }
-        self.client.table("run_metrics").upsert(payload, on_conflict="run_id").execute()
+        self._execute_with_retry(
+            lambda: self.client.table("run_metrics")
+            .upsert(payload, on_conflict="run_id")
+            .execute(),
+            context=f"upsert_run_metrics run_id={run_id}",
+        )
 
     def _upsert_features_monthly(self, rows: list[dict[str, Any]], chunk_size: int = 500) -> None:
         if not rows:
             return
         for start in range(0, len(rows), chunk_size):
             chunk = rows[start : start + chunk_size]
-            self.client.table("features_monthly").upsert(
-                chunk,
-                on_conflict="ticker,date",
-            ).execute()
+            self._execute_with_retry(
+                lambda chunk=chunk: self.client.table("features_monthly")
+                .upsert(
+                    chunk,
+                    on_conflict="ticker,date",
+                )
+                .execute(),
+                context=f"upsert_features_monthly rows={len(chunk)} offset={start}",
+            )
 
     def _replace_model_predictions(
         self, run_id: str, rows: list[dict[str, Any]], chunk_size: int = 500
     ) -> None:
-        self.client.table("model_predictions").delete().eq("run_id", run_id).execute()
+        self._execute_with_retry(
+            lambda: self.client.table("model_predictions").delete().eq("run_id", run_id).execute(),
+            context=f"delete_model_predictions run_id={run_id}",
+        )
         if not rows:
             return
         for start in range(0, len(rows), chunk_size):
             chunk = rows[start : start + chunk_size]
-            self.client.table("model_predictions").insert(chunk).execute()
+            self._execute_with_retry(
+                lambda chunk=chunk: self.client.table("model_predictions").insert(chunk).execute(),
+                context=(
+                    f"insert_model_predictions run_id={run_id} "
+                    f"rows={len(chunk)} offset={start}"
+                ),
+            )
 
     def _replace_positions(
         self, run_id: str, rows: list[dict[str, Any]], chunk_size: int = 500
     ) -> None:
-        self.client.table("positions").delete().eq("run_id", run_id).execute()
+        self._execute_with_retry(
+            lambda: self.client.table("positions").delete().eq("run_id", run_id).execute(),
+            context=f"delete_positions run_id={run_id}",
+        )
         if not rows:
             return
         for start in range(0, len(rows), chunk_size):
             chunk = rows[start : start + chunk_size]
-            self.client.table("positions").insert(chunk).execute()
+            self._execute_with_retry(
+                lambda chunk=chunk: self.client.table("positions").insert(chunk).execute(),
+                context=f"insert_positions run_id={run_id} rows={len(chunk)} offset={start}",
+            )
 
     def _replace_model_metadata(self, run_id: str, metadata: dict[str, Any]) -> None:
-        self.client.table("model_metadata").delete().eq("run_id", run_id).execute()
-        self.client.table("model_metadata").insert([metadata]).execute()
+        self._execute_with_retry(
+            lambda: self.client.table("model_metadata").delete().eq("run_id", run_id).execute(),
+            context=f"delete_model_metadata run_id={run_id}",
+        )
+        self._execute_with_retry(
+            lambda: self.client.table("model_metadata").insert([metadata]).execute(),
+            context=f"insert_model_metadata run_id={run_id}",
+        )
 
     def try_chain_preflight_backtest(self, job: Job) -> None:
         """After a data_ingest job completes (or fails), check whether all preflight

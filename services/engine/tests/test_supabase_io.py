@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
+from unittest.mock import patch
 
 import pandas as pd
 
@@ -106,6 +107,77 @@ class _FakePricesClient:
     def table(self, name: str) -> _PricesTable:
         assert name == "prices"
         return self._prices_table
+
+
+class _RetryablePricesTable:
+    def __init__(self, rows: list[dict[str, Any]], failures_remaining: int = 1) -> None:
+        self._rows = rows
+        self._range = (0, len(rows) - 1)
+        self.failures_remaining = failures_remaining
+        self.execute_calls = 0
+
+    def select(self, _fields: str) -> "_RetryablePricesTable":
+        return self
+
+    def eq(self, _column: str, _value: str) -> "_RetryablePricesTable":
+        return self
+
+    def gte(self, _column: str, _value: str) -> "_RetryablePricesTable":
+        return self
+
+    def lte(self, _column: str, _value: str) -> "_RetryablePricesTable":
+        return self
+
+    def order(self, _column: str, desc: bool = False) -> "_RetryablePricesTable":  # noqa: ARG002
+        return self
+
+    def range(self, start: int, end: int) -> "_RetryablePricesTable":
+        self._range = (start, end)
+        return self
+
+    def execute(self) -> _Result:
+        self.execute_calls += 1
+        if self.failures_remaining > 0:
+            self.failures_remaining -= 1
+            raise RuntimeError(
+                "{'message': 'canceling statement due to statement timeout', 'code': '57014'}"
+            )
+        start, end = self._range
+        return _Result(self._rows[start : end + 1])
+
+
+class _RunsTable:
+    def __init__(self, failures_remaining: int = 0) -> None:
+        self.failures_remaining = failures_remaining
+        self.update_payloads: list[dict[str, Any]] = []
+        self._pending_update: dict[str, Any] | None = None
+
+    def update(self, payload: dict[str, Any]) -> "_RunsTable":
+        self._pending_update = dict(payload)
+        return self
+
+    def eq(self, _column: str, _value: Any) -> "_RunsTable":
+        return self
+
+    def execute(self) -> _Result:
+        if self.failures_remaining > 0:
+            self.failures_remaining -= 1
+            raise RuntimeError(
+                "{'message': 'canceling statement due to statement timeout', 'code': '57014'}"
+            )
+        if self._pending_update is not None:
+            self.update_payloads.append(self._pending_update)
+            self._pending_update = None
+        return _Result([{"id": "run-1"}])
+
+
+class _FakeRunsClient:
+    def __init__(self, runs_table: _RunsTable) -> None:
+        self._runs_table = runs_table
+
+    def table(self, name: str) -> _RunsTable:
+        assert name == "runs"
+        return self._runs_table
 
 
 def test_requeue_due_for_retry_resets_legacy_jobs_to_ingest_stage() -> None:
@@ -341,3 +413,31 @@ def test_fetch_prices_frame_paginates_beyond_supabase_default_limit() -> None:
     assert len(frame) == 600
     assert frame.index.min() == dates.min()
     assert frame.index.max() == dates.max()
+
+
+def test_fetch_prices_frame_retries_transient_statement_timeout() -> None:
+    rows = [
+        {"ticker": "AAA", "date": "2021-01-01", "adj_close": 100.0},
+        {"ticker": "AAA", "date": "2021-01-04", "adj_close": 101.0},
+    ]
+    table = _RetryablePricesTable(rows, failures_remaining=1)
+    io = object.__new__(SupabaseIO)
+    io.client = _FakePricesClient(table)
+
+    with patch("factorlab_engine.supabase_io.time.sleep", return_value=None):
+        frame = io.fetch_prices_frame(["AAA"], "2021-01-01", "2021-01-31")
+
+    assert list(frame.columns) == ["AAA"]
+    assert len(frame) == 2
+    assert table.execute_calls >= 2
+
+
+def test_update_run_metadata_retries_transient_statement_timeout() -> None:
+    runs_table = _RunsTable(failures_remaining=1)
+    io = object.__new__(SupabaseIO)
+    io.client = _FakeRunsClient(runs_table)
+
+    with patch("factorlab_engine.supabase_io.time.sleep", return_value=None):
+        io.update_run_metadata("run-1", {"model_impl": "ridge"})
+
+    assert runs_table.update_payloads == [{"run_metadata": {"model_impl": "ridge"}}]
