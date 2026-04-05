@@ -2,7 +2,7 @@
 
 import { useActionState, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { AlertCircle, CheckCircle2, Mail } from "lucide-react";
 import {
   signInAction,
@@ -24,6 +24,20 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { subscribeToEmailVerificationComplete } from "@/lib/auth/email-verification-sync";
 import { createClient } from "@/lib/supabase/client";
 
+type AuthTab = "signin" | "signup" | "verify" | "forgot";
+
+function normalizeAuthTab(tab: string | null | undefined): AuthTab | undefined {
+  switch (tab) {
+    case "signin":
+    case "signup":
+    case "verify":
+    case "forgot":
+      return tab;
+    default:
+      return undefined;
+  }
+}
+
 export function LoginForm({
   authError,
   initialTab,
@@ -33,7 +47,7 @@ export function LoginForm({
   sessionUser,
 }: {
   authError?: string;
-  initialTab?: "signin" | "signup" | "verify" | "forgot";
+  initialTab?: AuthTab;
   initialEmail?: string;
   verifyError?: string;
   forgotError?: string;
@@ -43,6 +57,7 @@ export function LoginForm({
   } | null;
 }) {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const hasHandledCrossTabSignIn = useRef(false);
   const [signInState, signInAction_, isSignInPending] = useActionState<AuthState, FormData>(
     signInAction,
@@ -69,9 +84,9 @@ export function LoginForm({
 
   const [isGuestPending, setIsGuestPending] = useState(false);
   const [guestError, setGuestError] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<"signin" | "signup" | "verify" | "forgot">(
-    initialTab ?? "signin"
-  );
+  const searchTab = normalizeAuthTab(searchParams.get("tab"));
+  const searchEmail = searchParams.get("email") ?? undefined;
+  const [activeTab, setActiveTab] = useState<AuthTab>(searchTab ?? initialTab ?? "signin");
 
   // Optimistic from server prop, validated client-side on mount.
   // Guards against stale Next.js router-cache hits (server prop may be up to
@@ -110,18 +125,18 @@ export function LoginForm({
   const [signUpPassword, setSignUpPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [passwordMismatchError, setPasswordMismatchError] = useState<string | null>(null);
-  const [verifyEmail, setVerifyEmail] = useState(initialEmail ?? "");
+  const [verifyEmail, setVerifyEmail] = useState(searchEmail ?? initialEmail ?? "");
   const [resendCooldown, setResendCooldown] = useState(0);
 
   useEffect(() => {
-    if (initialTab) {
-      setActiveTab(initialTab);
+    if (searchTab ?? initialTab) {
+      setActiveTab(searchTab ?? initialTab ?? "signin");
     }
-  }, [initialTab]);
+  }, [searchTab, initialTab]);
 
   useEffect(() => {
-    setVerifyEmail(initialEmail ?? "");
-  }, [initialEmail]);
+    setVerifyEmail(searchEmail ?? initialEmail ?? "");
+  }, [searchEmail, initialEmail]);
 
   // When on the verify tab, listen for a sign-in from the activation link opened
   // in another tab. Supabase writes the session to localStorage and fires

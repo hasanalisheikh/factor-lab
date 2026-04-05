@@ -23,6 +23,7 @@ vi.mock("@/app/actions/auth", () => ({
 
 const mockRouterReplace = vi.fn();
 const mockRouterRefresh = vi.fn();
+let mockSearchParams = new URLSearchParams();
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({
@@ -30,6 +31,7 @@ vi.mock("next/navigation", () => ({
     replace: mockRouterReplace,
     refresh: mockRouterRefresh,
   }),
+  useSearchParams: () => mockSearchParams,
 }));
 
 // ---------------------------------------------------------------------------
@@ -66,6 +68,7 @@ function guestUser() {
 // ---------------------------------------------------------------------------
 describe("LoginForm guest-upgrade mode", () => {
   beforeEach(() => {
+    mockSearchParams = new URLSearchParams();
     mockGetUser.mockReset();
     mockOnAuthStateChange.mockReset();
     mockOnAuthStateChange.mockReturnValue({
@@ -201,7 +204,8 @@ describe("LoginForm guest-upgrade mode", () => {
       expect(screen.getByRole("heading", { name: "Sign in" })).toBeInTheDocument();
     });
 
-    rerender(<LoginForm sessionUser={null} initialTab="verify" initialEmail="user@example.com" />);
+    mockSearchParams = new URLSearchParams("tab=verify&email=user%40example.com");
+    rerender(<LoginForm sessionUser={null} />);
 
     await waitFor(() => {
       expect(screen.getByRole("heading", { name: "Verify your email" })).toBeInTheDocument();
