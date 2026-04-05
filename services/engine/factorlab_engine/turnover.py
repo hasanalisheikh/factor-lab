@@ -11,11 +11,15 @@ def _coerce_weights(weights: pd.Series | dict[str, Any]) -> pd.Series:
     return pd.Series({str(k): float(v) for k, v in weights.items()}, dtype=float).fillna(0.0)
 
 
-def one_way_turnover(prev_weights: pd.Series | dict[str, Any], curr_weights: pd.Series | dict[str, Any]) -> float:
+def one_way_turnover(
+    prev_weights: pd.Series | dict[str, Any], curr_weights: pd.Series | dict[str, Any]
+) -> float:
     prev = _coerce_weights(prev_weights)
     curr = _coerce_weights(curr_weights)
     aligned_index = prev.index.union(curr.index)
-    delta = curr.reindex(aligned_index, fill_value=0.0) - prev.reindex(aligned_index, fill_value=0.0)
+    delta = curr.reindex(aligned_index, fill_value=0.0) - prev.reindex(
+        aligned_index, fill_value=0.0
+    )
     return float(delta.abs().sum() / 2.0)
 
 
