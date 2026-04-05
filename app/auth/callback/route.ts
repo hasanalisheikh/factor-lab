@@ -18,8 +18,10 @@ export async function GET(request: NextRequest) {
   // `signup_confirm=1` is set by signUpAction / resendVerificationAction so that
   // PKCE code-exchange confirmations also land on /auth/verified instead of /dashboard
   const isSignupConfirm = searchParams.get("signup_confirm") === "1";
-
   const isResetFlow = next.startsWith("/reset-password");
+  const verifiedPagePath = "/auth/verified?verified=1";
+  const verificationCompletePath =
+    !isResetFlow && (isActivation || isSignupConfirm) ? verifiedPagePath : null;
 
   function errorRedirect(message?: string) {
     const loginUrl = new URL("/login", origin);
@@ -48,8 +50,8 @@ export async function GET(request: NextRequest) {
     // after it establishes the session from the URL hash.
     const successBase = isResetFlow ? "/reset-password" : "/login";
     const successUrl = new URL(successBase, origin);
-    if (isActivation && !isResetFlow) {
-      successUrl.searchParams.set("next", "/auth/verified?verified=1");
+    if (verificationCompletePath) {
+      successUrl.searchParams.set("next", verificationCompletePath);
     }
     const destination = successUrl.toString();
     const fallback = loginUrl.toString();
@@ -117,8 +119,8 @@ export async function GET(request: NextRequest) {
   // - Activation magic link (isActivation) → verified page
   // - Everything else (password reset, normal magic link) → follow `next`
   const successDest =
-    (tokenHash && verificationType && !isResetFlow) || isActivation || isSignupConfirm
-      ? "/auth/verified?verified=1"
+    (tokenHash && verificationType && !isResetFlow) || verificationCompletePath
+      ? verifiedPagePath
       : next;
   return NextResponse.redirect(new URL(successDest, origin));
 }

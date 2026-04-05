@@ -188,4 +188,24 @@ describe("LoginForm guest-upgrade mode", () => {
       expect(mockRouterReplace).toHaveBeenCalledWith("/dashboard");
     });
   });
+
+  it("7) syncs to the verify tab when the page rerenders with new search params", async () => {
+    mockGetUser.mockResolvedValue({
+      data: { user: null },
+      error: null,
+    });
+
+    const { rerender } = render(<LoginForm sessionUser={null} />);
+
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: "Sign in" })).toBeInTheDocument();
+    });
+
+    rerender(<LoginForm sessionUser={null} initialTab="verify" initialEmail="user@example.com" />);
+
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: "Verify your email" })).toBeInTheDocument();
+      expect(screen.getByText("user@example.com")).toBeInTheDocument();
+    });
+  });
 });

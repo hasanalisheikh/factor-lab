@@ -113,6 +113,16 @@ export function LoginForm({
   const [verifyEmail, setVerifyEmail] = useState(initialEmail ?? "");
   const [resendCooldown, setResendCooldown] = useState(0);
 
+  useEffect(() => {
+    if (initialTab) {
+      setActiveTab(initialTab);
+    }
+  }, [initialTab]);
+
+  useEffect(() => {
+    setVerifyEmail(initialEmail ?? "");
+  }, [initialEmail]);
+
   // When on the verify tab, listen for a sign-in from the activation link opened
   // in another tab. Supabase writes the session to localStorage and fires
   // onAuthStateChange in all tabs sharing the same origin.
