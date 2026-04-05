@@ -22,6 +22,9 @@ export async function GET(request: NextRequest) {
   const verifiedPagePath = "/auth/verified?verified=1";
   const verificationCompletePath =
     !isResetFlow && (isActivation || isSignupConfirm) ? verifiedPagePath : null;
+  const shouldRouteToVerifiedPage =
+    !isResetFlow &&
+    ((tokenHash != null && verificationType != null) || isActivation || isSignupConfirm);
 
   function errorRedirect(message?: string) {
     const loginUrl = new URL("/login", origin);
@@ -46,13 +49,10 @@ export async function GET(request: NextRequest) {
         : "Verification link expired. Please request a new one."
     );
 
-    // For activation links, tell the login-form hash handler where to land
-    // after it establishes the session from the URL hash.
-    const successBase = isResetFlow ? "/reset-password" : "/login";
-    const successUrl = new URL(successBase, origin);
-    if (verificationCompletePath) {
-      successUrl.searchParams.set("next", verificationCompletePath);
-    }
+    const successUrl = new URL(
+      verificationCompletePath ?? (isResetFlow ? "/reset-password" : "/login"),
+      origin
+    );
     const destination = successUrl.toString();
     const fallback = loginUrl.toString();
     const html = `<!doctype html>
@@ -118,9 +118,6 @@ export async function GET(request: NextRequest) {
   // - Email OTP (signup/email_change) → verified page
   // - Activation magic link (isActivation) → verified page
   // - Everything else (password reset, normal magic link) → follow `next`
-  const successDest =
-    (tokenHash && verificationType && !isResetFlow) || verificationCompletePath
-      ? verifiedPagePath
-      : next;
+  const successDest = shouldRouteToVerifiedPage ? verifiedPagePath : next;
   return NextResponse.redirect(new URL(successDest, origin));
 }

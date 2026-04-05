@@ -10,6 +10,7 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Spinner } from "@/components/ui/spinner";
+import { hydrateBrowserSession } from "@/lib/auth/client-session-hydration";
 import { createClient } from "@/lib/supabase/client";
 
 export function ResetPasswordForm() {
@@ -29,24 +30,7 @@ export function ResetPasswordForm() {
 
     async function hydrateSession() {
       try {
-        const params = new URLSearchParams(window.location.hash.replace(/^#/, ""));
-        const accessToken = params.get("access_token");
-        const refreshToken = params.get("refresh_token");
-
-        if (accessToken && refreshToken) {
-          await supabase.auth.setSession({
-            access_token: accessToken,
-            refresh_token: refreshToken,
-          });
-          window.history.replaceState(
-            null,
-            "",
-            `${window.location.pathname}${window.location.search}`
-          );
-          return;
-        }
-
-        await supabase.auth.getSession();
+        await hydrateBrowserSession(supabase);
       } catch {
         // The form will surface a server-side error if the reset session is invalid.
       } finally {

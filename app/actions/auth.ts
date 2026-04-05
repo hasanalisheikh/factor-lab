@@ -43,6 +43,20 @@ const emailPasswordSchema = z.object({
 const ACCOUNT_EXISTS_ERROR =
   "An account with this email already exists. Sign in to that account instead.";
 
+async function getRequestOrigin() {
+  return (
+    process.env.NEXT_PUBLIC_SITE_URL ?? (await headers()).get("origin") ?? "http://localhost:3000"
+  );
+}
+
+function getSignupVerificationCallbackUrl(origin: string) {
+  return `${origin}/auth/callback?signup_confirm=1`;
+}
+
+function getActivationVerificationCallbackUrl(origin: string) {
+  return `${origin}/auth/callback?activation=1`;
+}
+
 async function checkCreateAccountRateLimit(): Promise<AuthState> {
   const headersList = await headers();
   const ip = headersList.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "unknown";
@@ -141,8 +155,7 @@ async function upgradeGuestUserInPlace({
     return { error: updateError.message };
   }
 
-  const origin =
-    process.env.NEXT_PUBLIC_SITE_URL ?? (await headers()).get("origin") ?? "http://localhost:3000";
+  const origin = await getRequestOrigin();
 
   // Send the activation magic-link via the admin client.
   // admin.auth carries the service-role key in the apikey header; GoTrue's OTP
@@ -153,7 +166,7 @@ async function upgradeGuestUserInPlace({
     email,
     options: {
       shouldCreateUser: false,
-      emailRedirectTo: `${origin}/auth/callback?activation=1`,
+      emailRedirectTo: getActivationVerificationCallbackUrl(origin),
     },
   });
   if (otpError) {
@@ -290,9 +303,8 @@ export async function signUpAction(_prev: AuthState, formData: FormData): Promis
   // Build the callback URL for email verification.
   // NEXT_PUBLIC_SITE_URL should be set to https://factor-lab.vercel.app in production.
   // Falls back to the request origin (works for local dev automatically).
-  const origin =
-    process.env.NEXT_PUBLIC_SITE_URL ?? (await headers()).get("origin") ?? "http://localhost:3000";
-  const emailRedirectTo = `${origin}/auth/callback?signup_confirm=1`;
+  const origin = await getRequestOrigin();
+  const emailRedirectTo = getSignupVerificationCallbackUrl(origin);
 
   const { data: signUpData, error } = await supabase.auth.signUp({
     email: parsed.data.email,
@@ -342,8 +354,7 @@ export async function forgotPasswordAction(
     return { error: "Please enter a valid email address." };
   }
 
-  const origin =
-    process.env.NEXT_PUBLIC_SITE_URL ?? (await headers()).get("origin") ?? "http://localhost:3000";
+  const origin = await getRequestOrigin();
 
   const supabase = await createClient();
   await supabase.auth.resetPasswordForEmail(email, {
@@ -398,9 +409,8 @@ export async function resendVerificationAction(
     return { error: rateLimitError ?? "Please wait before requesting another verification email." };
   }
 
-  const origin =
-    process.env.NEXT_PUBLIC_SITE_URL ?? (await headers()).get("origin") ?? "http://localhost:3000";
-  const emailRedirectTo = `${origin}/auth/callback?signup_confirm=1`;
+  const origin = await getRequestOrigin();
+  const emailRedirectTo = getSignupVerificationCallbackUrl(origin);
 
   const supabase = await createClient();
   const { error } = await supabase.auth.resend({
@@ -421,7 +431,7 @@ export async function resendVerificationAction(
       email,
       options: {
         shouldCreateUser: false,
-        emailRedirectTo: `${origin}/auth/callback?activation=1`,
+        emailRedirectTo: getActivationVerificationCallbackUrl(origin),
       },
     });
     if (otpError) {

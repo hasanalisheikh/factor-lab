@@ -26,6 +26,7 @@ const mockRouterRefresh = vi.fn();
 let mockSearchParams = new URLSearchParams();
 
 vi.mock("next/navigation", () => ({
+  usePathname: () => "/login",
   useRouter: () => ({
     push: vi.fn(),
     replace: mockRouterReplace,
@@ -38,6 +39,7 @@ vi.mock("next/navigation", () => ({
 // Mock the Supabase browser client so we control what getUser() returns
 // ---------------------------------------------------------------------------
 const mockGetUser = vi.fn();
+const mockGetSession = vi.fn();
 const mockOnAuthStateChange = vi.fn();
 const mockUnsubscribe = vi.fn();
 
@@ -45,9 +47,8 @@ vi.mock("@/lib/supabase/client", () => ({
   createClient: () => ({
     auth: {
       getUser: mockGetUser,
+      getSession: mockGetSession,
       onAuthStateChange: mockOnAuthStateChange,
-      setSession: vi.fn().mockResolvedValue({ data: { session: null } }),
-      getSession: vi.fn().mockResolvedValue({ data: { session: null } }),
     },
   }),
 }));
@@ -70,6 +71,11 @@ describe("LoginForm guest-upgrade mode", () => {
   beforeEach(() => {
     mockSearchParams = new URLSearchParams();
     mockGetUser.mockReset();
+    mockGetSession.mockReset();
+    mockGetSession.mockResolvedValue({
+      data: { session: null },
+      error: null,
+    });
     mockOnAuthStateChange.mockReset();
     mockOnAuthStateChange.mockReturnValue({
       data: {
@@ -210,6 +216,24 @@ describe("LoginForm guest-upgrade mode", () => {
     await waitFor(() => {
       expect(screen.getByRole("heading", { name: "Verify your email" })).toBeInTheDocument();
       expect(screen.getByText("user@example.com")).toBeInTheDocument();
+    });
+  });
+
+  it("8) proceeds to the dashboard if the verify tab finds an existing session", async () => {
+    mockGetUser.mockResolvedValue({
+      data: { user: null },
+      error: null,
+    });
+    mockGetSession.mockResolvedValue({
+      data: { session: { access_token: "session-token" } },
+      error: null,
+    });
+
+    render(<LoginForm sessionUser={null} initialTab="verify" initialEmail="user@example.com" />);
+
+    await waitFor(() => {
+      expect(mockRouterRefresh).toHaveBeenCalledTimes(1);
+      expect(mockRouterReplace).toHaveBeenCalledWith("/dashboard");
     });
   });
 });

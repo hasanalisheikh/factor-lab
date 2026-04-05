@@ -24,14 +24,19 @@ function makeCookieStore() {
 }
 
 describe("/auth/callback", () => {
+  let mockVerifyOtp: ReturnType<typeof vi.fn>;
+  let mockExchangeCodeForSession: ReturnType<typeof vi.fn>;
+
   beforeEach(() => {
     cookiesMock.mockReset();
     createServerClientMock.mockReset();
     cookiesMock.mockResolvedValue(makeCookieStore());
+    mockVerifyOtp = vi.fn().mockResolvedValue({ error: null });
+    mockExchangeCodeForSession = vi.fn().mockResolvedValue({ error: null });
     createServerClientMock.mockReturnValue({
       auth: {
-        verifyOtp: vi.fn().mockResolvedValue({ error: null }),
-        exchangeCodeForSession: vi.fn().mockResolvedValue({ error: null }),
+        verifyOtp: mockVerifyOtp,
+        exchangeCodeForSession: mockExchangeCodeForSession,
       },
     });
   });
@@ -44,6 +49,55 @@ describe("/auth/callback", () => {
     expect(response.headers.get("content-type")).toContain("text/html");
     const body = await response.text();
 
-    expect(body).toContain("/login?next=%2Fauth%2Fverified%3Fverified%3D1");
+    expect(body).toContain("/auth/verified?verified=1");
+    expect(body).not.toContain("/login?next=");
+  });
+
+  it("redirects code-based signup confirmations to the verified page", async () => {
+    const response = await GET(
+      new NextRequest("https://factorlab.test/auth/callback?code=pkce-code&signup_confirm=1")
+    );
+
+    expect(mockExchangeCodeForSession).toHaveBeenCalledWith("pkce-code");
+    expect(response.headers.get("location")).toBe(
+      "https://factorlab.test/auth/verified?verified=1"
+    );
+  });
+
+  it("redirects token-hash signup confirmations to the verified page", async () => {
+    const response = await GET(
+      new NextRequest("https://factorlab.test/auth/callback?token_hash=signup-token&type=signup")
+    );
+
+    expect(mockVerifyOtp).toHaveBeenCalledWith({
+      token_hash: "signup-token",
+      type: "signup",
+    });
+    expect(response.headers.get("location")).toBe(
+      "https://factorlab.test/auth/verified?verified=1"
+    );
+  });
+
+  it("keeps reset-password hash forwarding pointed at /reset-password", async () => {
+    const response = await GET(
+      new NextRequest("https://factorlab.test/auth/callback?next=/reset-password")
+    );
+
+    expect(response.headers.get("content-type")).toContain("text/html");
+    const body = await response.text();
+
+    expect(body).toContain("https://factorlab.test/reset-password");
+  });
+
+  it("sends invalid verification links back to the verify tab", async () => {
+    const response = await GET(
+      new NextRequest(
+        "https://factorlab.test/auth/callback?error=access_denied&error_description=Expired%20link"
+      )
+    );
+
+    expect(response.headers.get("location")).toBe(
+      "https://factorlab.test/login?tab=verify&error=Expired+link"
+    );
   });
 });

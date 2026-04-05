@@ -2,7 +2,7 @@
 
 import { useActionState, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { useRouter, useSearchParams } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { AlertCircle, CheckCircle2, Mail } from "lucide-react";
 import {
   signInAction,
@@ -56,6 +56,7 @@ export function LoginForm({
     isGuest: boolean;
   } | null;
 }) {
+  const pathname = usePathname();
   const router = useRouter();
   const searchParams = useSearchParams();
   const hasHandledCrossTabSignIn = useRef(false);
@@ -125,18 +126,21 @@ export function LoginForm({
   const [signUpPassword, setSignUpPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [passwordMismatchError, setPasswordMismatchError] = useState<string | null>(null);
-  const [verifyEmail, setVerifyEmail] = useState(searchEmail ?? initialEmail ?? "");
+  const lockedVerifyEmail = searchEmail ?? initialEmail;
+  const [verifyEmail, setVerifyEmail] = useState(lockedVerifyEmail ?? "");
   const [resendCooldown, setResendCooldown] = useState(0);
 
   useEffect(() => {
-    if (searchTab ?? initialTab) {
-      setActiveTab(searchTab ?? initialTab ?? "signin");
+    if (searchTab) {
+      setActiveTab(searchTab);
     }
-  }, [searchTab, initialTab]);
+  }, [searchTab]);
 
   useEffect(() => {
-    setVerifyEmail(searchEmail ?? initialEmail ?? "");
-  }, [searchEmail, initialEmail]);
+    if (searchEmail !== undefined) {
+      setVerifyEmail(searchEmail);
+    }
+  }, [searchEmail]);
 
   // When on the verify tab, listen for a sign-in from the activation link opened
   // in another tab. Supabase writes the session to localStorage and fires
@@ -152,6 +156,12 @@ export function LoginForm({
     };
 
     const supabase = createClient();
+    const checkForExistingSession = async () => {
+      const { data, error } = await supabase.auth.getSession();
+      if (!error && data.session) {
+        completeCrossTabSignIn();
+      }
+    };
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((event) => {
@@ -159,10 +169,23 @@ export function LoginForm({
         completeCrossTabSignIn();
       }
     });
+    void checkForExistingSession();
+    const sessionPollId = window.setInterval(() => {
+      if (hasHandledCrossTabSignIn.current) {
+        window.clearInterval(sessionPollId);
+        return;
+      }
+      void checkForExistingSession();
+    }, 1000);
+    const stopPollingId = window.setTimeout(() => {
+      window.clearInterval(sessionPollId);
+    }, 5000);
     const unsubscribeCrossTabVerification = subscribeToEmailVerificationComplete(() => {
       completeCrossTabSignIn();
     });
     return () => {
+      window.clearInterval(sessionPollId);
+      window.clearTimeout(stopPollingId);
       subscription.unsubscribe();
       unsubscribeCrossTabVerification();
       hasHandledCrossTabSignIn.current = false;
@@ -182,57 +205,10 @@ export function LoginForm({
     return () => clearInterval(id);
   }, [resendCooldown]);
 
-  useEffect(() => {
-    if (typeof window === "undefined" || !window.location.hash.includes("access_token=")) {
-      return;
-    }
-
-    let cancelled = false;
-    const supabase = createClient();
-    // Respect the ?next= param forwarded by the callback's hashForwardResponse
-    // (used for activation links that should land on /auth/verified, not /dashboard).
-    const nextParam = new URLSearchParams(window.location.search).get("next");
-    const postAuthDest =
-      nextParam && nextParam.startsWith("/") && !nextParam.startsWith("//")
-        ? nextParam
-        : "/dashboard";
-    async function hydrateSession() {
-      try {
-        const params = new URLSearchParams(window.location.hash.replace(/^#/, ""));
-        const accessToken = params.get("access_token");
-        const refreshToken = params.get("refresh_token");
-
-        if (accessToken && refreshToken) {
-          const { data } = await supabase.auth.setSession({
-            access_token: accessToken,
-            refresh_token: refreshToken,
-          });
-          if (!cancelled && data.session) {
-            window.history.replaceState(
-              null,
-              "",
-              `${window.location.pathname}${window.location.search}`
-            );
-            window.location.href = postAuthDest;
-          }
-          return;
-        }
-
-        const { data } = await supabase.auth.getSession();
-        if (!cancelled && data.session) {
-          window.location.href = postAuthDest;
-        }
-      } catch {
-        // The normal login UI remains available if session hydration fails.
-      }
-    }
-
-    void hydrateSession();
-
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  function replaceAuthUrl(nextParams: URLSearchParams) {
+    const query = nextParams.toString();
+    router.replace(query ? `${pathname}?${query}` : pathname);
+  }
 
   const isGuestSession = resolvedIsGuest;
   const createAccountAction = isGuestSession ? upgradeAction_ : signUpAction_;
@@ -301,11 +277,21 @@ export function LoginForm({
     setActiveTab(tab);
     setGuestError(null);
     setPasswordMismatchError(null);
+    const nextParams = new URLSearchParams(searchParams.toString());
+    nextParams.delete("tab");
+    nextParams.delete("email");
+    replaceAuthUrl(nextParams);
   }
 
   function goToVerify(email: string) {
     setVerifyEmail(email);
     setActiveTab("verify");
+    setGuestError(null);
+    setPasswordMismatchError(null);
+    const nextParams = new URLSearchParams(searchParams.toString());
+    nextParams.set("tab", "verify");
+    nextParams.set("email", email);
+    replaceAuthUrl(nextParams);
     const formData = new FormData();
     formData.set("email", email);
     resendAction_(formData);
@@ -374,7 +360,7 @@ export function LoginForm({
                 </div>
                 <Button
                   variant="ghost"
-                  onClick={() => setActiveTab("signin")}
+                  onClick={() => switchTab("signin")}
                   className="h-9 w-full border-white/15 text-white/60 hover:bg-white/5 hover:text-white/80"
                 >
                   ← Back to Sign in
@@ -427,7 +413,7 @@ export function LoginForm({
                 </form>
                 <Button
                   variant="ghost"
-                  onClick={() => setActiveTab("signin")}
+                  onClick={() => switchTab("signin")}
                   className="h-9 w-full border-white/15 text-white/60 hover:bg-white/5 hover:text-white/80"
                 >
                   ← Back to Sign in
@@ -477,7 +463,7 @@ export function LoginForm({
             )}
 
             <form action={resendAction_}>
-              {initialEmail ? (
+              {lockedVerifyEmail ? (
                 <input type="hidden" name="email" value={verifyEmail} />
               ) : (
                 <div className="mb-2.5 space-y-1.5">
@@ -593,6 +579,10 @@ export function LoginForm({
                     onClick={() => {
                       setForgotEmail(signInEmail);
                       setActiveTab("forgot");
+                      const nextParams = new URLSearchParams(searchParams.toString());
+                      nextParams.set("tab", "forgot");
+                      nextParams.delete("email");
+                      replaceAuthUrl(nextParams);
                     }}
                     className="text-xs text-white/45 hover:text-emerald-400 hover:underline"
                   >

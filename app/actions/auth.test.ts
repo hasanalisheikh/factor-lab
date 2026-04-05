@@ -39,7 +39,11 @@ vi.mock("@/lib/supabase/rate-limit", () => ({
   checkResendRateLimit: checkResendRateLimitMock,
 }));
 
-import { signUpAction, upgradeGuestToEmailPassword } from "@/app/actions/auth";
+import {
+  resendVerificationAction,
+  signUpAction,
+  upgradeGuestToEmailPassword,
+} from "@/app/actions/auth";
 
 function makeGuestUser() {
   return {
@@ -60,6 +64,7 @@ function makeServerClient(options?: {
     user_metadata: Record<string, unknown>;
   } | null;
   refreshError?: { message: string } | null;
+  resendError?: { message: string } | null;
 }) {
   const user = options?.user ?? makeGuestUser();
   const refreshedUser = options?.refreshedUser ?? {
@@ -100,6 +105,10 @@ function makeServerClient(options?: {
           session: { access_token: "session-token" },
         },
         error: null,
+      }),
+      resend: vi.fn().mockResolvedValue({
+        data: {},
+        error: options?.resendError ?? null,
       }),
       signOut: vi.fn().mockResolvedValue({ error: null }),
     },
@@ -256,5 +265,83 @@ describe("guest account upgrade", () => {
       })
     );
     expect(serverClient.auth.signUp).not.toHaveBeenCalled();
+  });
+});
+
+describe("resend verification", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+
+    headersMock.mockResolvedValue(
+      new Headers({
+        "x-forwarded-for": "127.0.0.1",
+        origin: "http://localhost:3000",
+      })
+    );
+    checkAccountCreationRateLimitMock.mockResolvedValue({ allowed: true });
+    checkResendRateLimitMock.mockResolvedValue({ allowed: true });
+  });
+
+  it("uses the standard signup resend flow for unverified accounts", async () => {
+    const serverClient = makeServerClient({ user: null });
+    const adminClient = makeAdminClient();
+
+    createClientMock.mockResolvedValue(serverClient);
+    createAdminClientMock.mockReturnValue(adminClient);
+
+    const formData = new FormData();
+    formData.set("email", "user@example.com");
+
+    await expect(resendVerificationAction(null, formData)).resolves.toEqual({ success: true });
+
+    expect(serverClient.auth.resend).toHaveBeenCalledWith({
+      type: "signup",
+      email: "user@example.com",
+      options: {
+        emailRedirectTo: "http://localhost:3000/auth/callback?signup_confirm=1",
+      },
+    });
+    expect(adminClient.auth.signInWithOtp).not.toHaveBeenCalled();
+  });
+
+  it("falls back to an activation magic link when signup resend fails", async () => {
+    const serverClient = makeServerClient({
+      user: null,
+      resendError: { message: "Email is already confirmed" },
+    });
+    const adminClient = makeAdminClient();
+
+    createClientMock.mockResolvedValue(serverClient);
+    createAdminClientMock.mockReturnValue(adminClient);
+
+    const formData = new FormData();
+    formData.set("email", "user@example.com");
+
+    await expect(resendVerificationAction(null, formData)).resolves.toEqual({ success: true });
+
+    expect(adminClient.auth.signInWithOtp).toHaveBeenCalledWith({
+      email: "user@example.com",
+      options: {
+        shouldCreateUser: false,
+        emailRedirectTo: "http://localhost:3000/auth/callback?activation=1",
+      },
+    });
+  });
+
+  it("returns the rate-limit error without attempting a resend", async () => {
+    checkResendRateLimitMock.mockResolvedValue({
+      allowed: false,
+      error: "Please wait before requesting another verification email.",
+    });
+
+    const formData = new FormData();
+    formData.set("email", "user@example.com");
+
+    await expect(resendVerificationAction(null, formData)).resolves.toEqual({
+      error: "Please wait before requesting another verification email.",
+    });
+
+    expect(createClientMock).not.toHaveBeenCalled();
+    expect(createAdminClientMock).not.toHaveBeenCalled();
   });
 });
