@@ -21,6 +21,7 @@ import yfinance as yf
 
 from .ml import run_walk_forward
 from .supabase_io import DataIngestJob, Job, SupabaseIO
+from .turnover import annualize_turnover, annualize_turnover_from_position_rows, one_way_turnover
 
 # ---------------------------------------------------------------------------
 # Job-level wall-clock timeout (prevents stuck/runaway jobs)
@@ -239,9 +240,31 @@ def _slice_positions_to_run_window(
     return [row for row in rows if start <= str(row.get("date", "")) <= end]
 
 
-def _annualize_turnover_from_rebalances(rebalance_turnover: pd.Series) -> float:
-    positive = rebalance_turnover[rebalance_turnover > 0]
-    return float(positive.mean() * 12.0) if len(positive) > 0 else 0.0
+def _rebalance_turnover_points(
+    rebalance_turnover: pd.Series, *, periods_per_year: float
+) -> pd.Series:
+    clean = rebalance_turnover.astype(float).fillna(0.0)
+    if clean.empty:
+        return clean
+
+    if not isinstance(clean.index, pd.DatetimeIndex):
+        return clean
+
+    if periods_per_year >= 252.0:
+        return clean
+
+    month_periods = clean.index.to_series().dt.to_period("M")
+    rebalance_mask = month_periods.ne(month_periods.shift(1))
+    return clean.loc[rebalance_mask.values]
+
+
+def _annualize_turnover_from_rebalances(
+    rebalance_turnover: pd.Series, *, periods_per_year: float = 12.0
+) -> float:
+    rebalance_points = _rebalance_turnover_points(
+        rebalance_turnover, periods_per_year=periods_per_year
+    )
+    return annualize_turnover(rebalance_points, periods_per_year=periods_per_year)
 
 
 def _normalize_symbol_list(values: Any) -> list[str]:
@@ -421,18 +444,12 @@ def _equal_weight(prices: pd.DataFrame) -> tuple[pd.Series, float, pd.Series, li
     rets = prices.pct_change().fillna(0.0)
     portfolio_rets = pd.Series(0.0, index=prices.index)
     monthly_turnover = pd.Series(0.0, index=prices.index)
-    rebalance_mask = (
-        prices.index.to_series()
-        .dt.to_period("M")
-        .ne(prices.index.to_series().shift(1).dt.to_period("M"))
-    )
-    monthly_turnover.loc[rebalance_mask.values] = 0.08
-    annualized_turnover = float(monthly_turnover[monthly_turnover > 0].mean() * 12.0)
 
     # Collect rebalance-date positions (first day of each month), excluding pre-inception tickers.
     rebalance_positions: list[dict[str, Any]] = []
     prev_month = None
-    prev_weights: pd.Series = pd.Series(0.0, index=prices.columns)
+    active_weights = pd.Series(0.0, index=prices.columns)
+    prev_rebalance_weights = pd.Series(0.0, index=prices.columns)
 
     for dt in prices.index:
         current_month = dt.to_period("M")
@@ -445,7 +462,9 @@ def _equal_weight(prices: pd.DataFrame) -> tuple[pd.Series, float, pd.Series, li
             current_w = pd.Series(0.0, index=prices.columns)
             if n > 0:
                 current_w.loc[available_cols] = weight_per_asset
-            prev_weights = current_w
+            monthly_turnover.loc[dt] = one_way_turnover(prev_rebalance_weights, current_w)
+            prev_rebalance_weights = current_w.copy()
+            active_weights = current_w.copy()
 
             for col in available_cols:
                 rebalance_positions.append(
@@ -457,8 +476,11 @@ def _equal_weight(prices: pd.DataFrame) -> tuple[pd.Series, float, pd.Series, li
                 )
 
         # Daily portfolio return using weights set at last rebalance
-        portfolio_rets.loc[dt] = float((rets.loc[dt] * prev_weights).sum())
+        portfolio_rets.loc[dt] = float((rets.loc[dt] * active_weights).sum())
 
+    annualized_turnover = _annualize_turnover_from_rebalances(
+        monthly_turnover, periods_per_year=12.0
+    )
     return portfolio_rets, annualized_turnover, monthly_turnover, rebalance_positions
 
 
@@ -487,9 +509,7 @@ def _momentum_12_1(
             current_w = pd.Series(0.0, index=prices.columns)
             if not s.empty:
                 current_w.loc[s.index] = 1.0 / len(s)
-            rebalance_turnover.loc[dt] = float(
-                (current_w - prev_rebalance_weights).abs().sum() / 2.0
-            )
+            rebalance_turnover.loc[dt] = one_way_turnover(prev_rebalance_weights, current_w)
             prev_rebalance_weights = current_w.copy()
 
             # Snapshot positions at this rebalance date
@@ -505,7 +525,9 @@ def _momentum_12_1(
 
     shifted = weights.shift(1).fillna(0.0)
     portfolio_rets = (asset_rets * shifted).sum(axis=1)
-    annualized_turnover = float(rebalance_turnover[rebalance_turnover > 0].mean() * 12.0)
+    annualized_turnover = _annualize_turnover_from_rebalances(
+        rebalance_turnover, periods_per_year=12.0
+    )
     return portfolio_rets, annualized_turnover, rebalance_turnover, rebalance_positions
 
 
@@ -539,9 +561,7 @@ def _low_vol(
             current_w = pd.Series(0.0, index=prices.columns)
             if not selected.empty:
                 current_w.loc[selected.index] = 1.0 / len(selected)
-            rebalance_turnover.loc[dt] = float(
-                (current_w - prev_rebalance_weights).abs().sum() / 2.0
-            )
+            rebalance_turnover.loc[dt] = one_way_turnover(prev_rebalance_weights, current_w)
             prev_rebalance_weights = current_w.copy()
             for sym, wt in current_w[current_w > 0].items():
                 rebalance_positions.append(
@@ -555,8 +575,9 @@ def _low_vol(
 
     shifted = weights.shift(1).fillna(0.0)
     portfolio_rets = (asset_rets * shifted).sum(axis=1)
-    pos_turnover = rebalance_turnover[rebalance_turnover > 0]
-    annualized_turnover = float(pos_turnover.mean() * 12.0) if len(pos_turnover) > 0 else 0.0
+    annualized_turnover = _annualize_turnover_from_rebalances(
+        rebalance_turnover, periods_per_year=12.0
+    )
     return portfolio_rets, annualized_turnover, rebalance_turnover, rebalance_positions
 
 
@@ -624,9 +645,7 @@ def _trend_filter(
             else:
                 # Risk-off: 100% defensive asset
                 current_w.loc[defensive_ticker] = 1.0
-            rebalance_turnover.loc[dt] = float(
-                (current_w - prev_rebalance_weights).abs().sum() / 2.0
-            )
+            rebalance_turnover.loc[dt] = one_way_turnover(prev_rebalance_weights, current_w)
             prev_rebalance_weights = current_w.copy()
             for sym, wt in current_w[current_w > 0].items():
                 rebalance_positions.append(
@@ -640,8 +659,9 @@ def _trend_filter(
 
     shifted = weights.shift(1).fillna(0.0)
     portfolio_rets = (asset_rets * shifted).sum(axis=1)
-    pos_turnover = rebalance_turnover[rebalance_turnover > 0]
-    annualized_turnover = float(pos_turnover.mean() * 12.0) if len(pos_turnover) > 0 else 0.0
+    annualized_turnover = _annualize_turnover_from_rebalances(
+        rebalance_turnover, periods_per_year=12.0
+    )
     return portfolio_rets, annualized_turnover, rebalance_turnover, rebalance_positions
 
 
@@ -1067,16 +1087,15 @@ def _build_baseline_result(
 
     if on_progress:
         on_progress("metrics", 78)
-    metrics = _compute_metrics(
-        daily_rets,
-        _annualize_turnover_from_rebalances(rebalance_turnover),
-    )
-
     # Attach run_id to each position row
     position_rows: list[dict[str, Any]] = [
         {"run_id": run["id"], **p}
         for p in _slice_positions_to_run_window(rebalance_positions, run_start, run_end)
     ]
+    metrics = _compute_metrics(
+        daily_rets,
+        annualize_turnover_from_position_rows(position_rows, periods_per_year=12.0),
+    )
     return BacktestResult(equity_rows=rows, metrics=metrics, position_rows=position_rows)
 
 

@@ -45,7 +45,7 @@ Weights drift as prices move through the month. At the start of each new month, 
 ### Strengths
 
 - Maximum diversification within the universe
-- Low turnover (only drift correction)
+- Low turnover when holdings and target weights remain stable under the rebalance-target convention
 - No look-ahead bias; no parameters to overfit
 - Well-established academic baseline (DeMiguel et al., 2009)
 
@@ -285,18 +285,18 @@ When the selected benchmark ticker (e.g., SPY) is also a member of the investabl
 
 ## Metrics Glossary
 
-| Metric              | Definition                                                                                                           |
-| ------------------- | -------------------------------------------------------------------------------------------------------------------- | ------------ | -------------------------------------------- |
-| **CAGR**            | `(final_NAV / 100,000)^(252/n_days) − 1`. Compound annual growth rate.                                               |
-| **Sharpe**          | `(mean_daily_return / std_daily_return) × √252`. Risk-adjusted return; >1.0 is considered strong.                    |
-| **Max Drawdown**    | Largest peak-to-trough NAV decline (%). Lower magnitude is better.                                                   |
-| **Turnover (Ann.)** | `mean(rebalance_turnover) × periods/year`. Annual portfolio replacement rate. 100% = full book replaced once a year. |
-| **Volatility**      | `std(daily_returns) × √252`. Annualized total risk.                                                                  |
-| **Win Rate**        | Fraction of trading days with a positive return. >50% means more up days than down.                                  |
-| **Profit Factor**   | Total gains ÷ total losses. >1.0 means gains exceed losses in aggregate.                                             |
-| **Calmar**          | `CAGR /                                                                                                              | Max Drawdown | `. Return per unit of maximum drawdown risk. |
+| Metric              | Definition                                                                                                                                           |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- | ------------ | -------------------------------------------- |
+| **CAGR**            | `(final_NAV / 100,000)^(252/n_days) − 1`. Compound annual growth rate.                                                                               |
+| **Sharpe**          | `(mean_daily_return / std_daily_return) × √252`. Risk-adjusted return; >1.0 is considered strong.                                                    |
+| **Max Drawdown**    | Largest peak-to-trough NAV decline (%). Lower magnitude is better.                                                                                   |
+| **Turnover (Ann.)** | `mean(rebalance_turnover after initial establishment) × periods/year`, using one-way turnover per rebalance date. No-change rebalances count as `0`. |
+| **Volatility**      | `std(daily_returns) × √252`. Annualized total risk.                                                                                                  |
+| **Win Rate**        | Fraction of trading days with a positive return. >50% means more up days than down.                                                                  |
+| **Profit Factor**   | Total gains ÷ total losses. >1.0 means gains exceed losses in aggregate.                                                                             |
+| **Calmar**          | `CAGR /                                                                                                                                              | Max Drawdown | `. Return per unit of maximum drawdown risk. |
 
-> **Annualization note:** Monthly strategies annualize turnover by multiplying by 12; ML strategies (daily) use 252. All volatility and Sharpe calculations use √252 regardless of strategy.
+> **Annualization note:** Monthly strategies annualize turnover by multiplying by 12; ML strategies (daily) use 252. Initial portfolio establishment is excluded from turnover, and no-change rebalance dates are included as `0`. All volatility and Sharpe calculations use √252 regardless of strategy.
 
 ---
 

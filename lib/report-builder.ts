@@ -1,4 +1,5 @@
 import type { EquityCurveRow, RunMetricsRow } from "@/lib/supabase/types";
+import type { TurnoverSummary } from "@/lib/turnover";
 import {
   DEFAULT_EQUITY_CHART_MAX_POINTS,
   getChartDateLabels,
@@ -231,6 +232,7 @@ export function buildReportHtml(params: {
   topN: number;
   runParams: Record<string, unknown>;
   runMetadata: RunMetadataView;
+  turnoverSummary: TurnoverSummary | null;
 }): string {
   const {
     runName,
@@ -248,6 +250,7 @@ export function buildReportHtml(params: {
     topN,
     runParams,
     runMetadata,
+    turnoverSummary,
   } = params;
 
   const strategyLabel = STRATEGY_LABELS[strategyId] ?? strategyId;
@@ -363,12 +366,15 @@ export function buildReportHtml(params: {
   ].join("\n        ");
 
   // ── Cost drag calculations ─────────────────────────────────────────────────
-  // turnover is a fraction (e.g. 0.08 = 8% one-way per rebalance)
+  // run_metrics.turnover is an annualized fraction (e.g. 0.96 = 96% annualized)
+  // turnoverSummary.averageTurnover is a per-rebalance fraction (e.g. 0.08 = 8%)
   // cost_rate = costs_bps / 10_000 (e.g. 10 bps -> 0.001)
-  const turnoverFrac = metrics.turnover;
+  const annualizedTurnoverFrac = metrics.turnover;
+  const averageTurnoverPerRebalance = turnoverSummary?.averageTurnover ?? null;
   const costRate = costsBps / 10_000;
-  const perRebalanceCostDrag = turnoverFrac * costRate;
-  const annualizedCostDrag = perRebalanceCostDrag * periods;
+  const perRebalanceCostDrag =
+    averageTurnoverPerRebalance != null ? averageTurnoverPerRebalance * costRate : null;
+  const annualizedCostDrag = perRebalanceCostDrag != null ? perRebalanceCostDrag * periods : null;
 
   // ── Run-params extraction (best-effort; older runs may lack these fields) ──
   const initialCapital =
@@ -493,14 +499,14 @@ export function buildReportHtml(params: {
       <div class="kpi"><div class="label">Volatility</div><div class="value">${fmtPercent(metrics.volatility)}</div></div>
       <div class="kpi"><div class="label">Win Rate</div><div class="value">${fmtPercent(metrics.win_rate)}</div></div>
       <div class="kpi"><div class="label">Profit Factor</div><div class="value">${fmtRatio(metrics.profit_factor)}</div></div>
-      <div class="kpi"><div class="label">Turnover</div><div class="value">${fmtPercent(metrics.turnover)}</div></div>
+      <div class="kpi"><div class="label">Turnover (Ann.)</div><div class="value">${fmtPercent(metrics.turnover)}</div></div>
       <div class="kpi"><div class="label">Calmar</div><div class="value">${fmtRatio(metrics.calmar)}</div></div>
     </div>
     <div class="kpi-defs">
       <strong>Max Drawdown</strong>: peak-to-trough decline shown as positive magnitude (e.g. 25.8% means a 25.8% drop from peak).<br />
       <strong>Win rate</strong>: % of trading days with positive portfolio return (daily granularity).<br />
       <strong>Profit factor</strong>: sum(positive daily returns) &divide; |sum(negative daily returns)| &mdash; daily granularity.<br />
-      <strong>Turnover</strong>: average one-way turnover per rebalance period (fraction of portfolio replaced).
+      <strong>Turnover</strong>: annualized one-way turnover = average one-way turnover per rebalance &times; periods/year. Initial establishment is excluded; no-change rebalance dates count as 0.
     </div>
 
     <h2>Equity Curve vs ${escapeHtml(benchmarkTicker)}</h2>
@@ -535,10 +541,12 @@ export function buildReportHtml(params: {
     <h2>Turnover and Cost Assumptions</h2>
     <div class="panel">
       <ul>
-        <li>Turnover shown is average one-way turnover per rebalance period (fraction of portfolio replaced).</li>
+        <li>Turnover KPI shown is annualized one-way turnover: ${fmtPercent(annualizedTurnoverFrac, 2)}.</li>
+        <li>Average one-way turnover per rebalance: ${averageTurnoverPerRebalance != null ? fmtPercent(averageTurnoverPerRebalance, 2) : "Unavailable (positions history required)"}.</li>
+        <li>Initial portfolio establishment is excluded from turnover. No-change rebalance dates count as 0.</li>
         <li>Transaction cost rate: ${costsBps} bps per 100% one-way turnover (cost_rate = ${(costRate * 100).toFixed(4)}%).</li>
-        <li>Per-rebalance cost drag: ${fmtCostDrag(perRebalanceCostDrag)} (= ${fmtPercent(turnoverFrac, 2)} turnover &times; ${costsBps} bps).</li>
-        <li>Annualized cost drag (${escapeHtml(rebalanceFreq.toLowerCase())} rebalancing, ${periods} periods/year): ${fmtCostDrag(annualizedCostDrag)}.</li>
+        <li>Per-rebalance cost drag: ${perRebalanceCostDrag != null ? `${fmtCostDrag(perRebalanceCostDrag)} (= ${fmtPercent(averageTurnoverPerRebalance ?? 0, 2)} turnover &times; ${costsBps} bps).` : "Unavailable (positions history required)."}</li>
+        <li>Annualized cost drag (${escapeHtml(rebalanceFreq.toLowerCase())} rebalancing, ${periods} periods/year): ${annualizedCostDrag != null ? fmtCostDrag(annualizedCostDrag) : "Unavailable (positions history required)"}.</li>
         ${costsBps === 0 ? "<li>Note: no transaction costs were applied in this run (effective costs_bps = 0).</li>" : ""}
         <li>Slippage${slippageBps !== null && slippageBps > 0 ? `: ${slippageBps} bps configured` : " not modeled"}. No explicit market impact model applied.</li>
       </ul>

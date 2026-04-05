@@ -112,7 +112,7 @@ Click any completed run to open its detail page. Results are organized into tabs
 ### Overview Tab
 
 - **Equity curve** — portfolio NAV vs. benchmark NAV over the full run window, starting at $100,000
-- **Key metrics** — CAGR, Sharpe, Max Drawdown (peak-to-trough), Volatility, Turnover, Win Rate, Profit Factor, Calmar
+- **Key metrics** — CAGR, Sharpe, Max Drawdown (peak-to-trough), Volatility, Turnover (annualized), Win Rate, Profit Factor, Calmar
 - **Run configuration card** — strategy, universe, benchmark, date range, costs, and disclaimer
 
 ### Holdings Tab
@@ -121,7 +121,7 @@ Current portfolio composition as of the most recent rebalance. Shows symbol, wei
 
 ### Trades Tab
 
-Full rebalance log — one entry per rebalance date showing what was bought and sold (the weight change) and the resulting turnover.
+Full rebalance log — one entry per rebalance date showing what was bought and sold (the weight change) and the resulting one-way turnover for that rebalance date.
 
 ### ML Insights Tab (ML strategies only)
 

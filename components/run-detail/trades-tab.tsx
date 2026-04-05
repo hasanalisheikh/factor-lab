@@ -17,7 +17,8 @@ import {
   type ChartConfig,
 } from "@/components/ui/chart";
 import { Bar, BarChart, CartesianGrid, XAxis, YAxis } from "recharts";
-import type { ModelPredictionRow, PositionRow } from "@/lib/supabase/types";
+import type { PositionRow } from "@/lib/supabase/types";
+import { buildTurnoverPointsFromPositions } from "@/lib/turnover";
 
 const turnoverConfig = {
   turnover: { label: "Turnover %", color: "var(--color-chart-2)" },
@@ -28,6 +29,7 @@ type RebalanceEntry = {
   entered: string[];
   exited: string[];
   count: number;
+  isInitialEstablishment: boolean;
 };
 
 type TradesData = {
@@ -35,100 +37,31 @@ type TradesData = {
   rebalanceLog: RebalanceEntry[];
 };
 
-function getPredictionDisplayDate(row: ModelPredictionRow): string {
-  return row.target_date || row.as_of_date;
-}
-
-function buildFromPredictions(predictions: ModelPredictionRow[]): TradesData {
-  if (predictions.length === 0) return { turnoverData: [], rebalanceLog: [] };
-
-  // Group by realized holding date so the log stays inside the requested run window.
-  const byDate: Record<string, ModelPredictionRow[]> = {};
-  for (const row of predictions) {
-    const date = getPredictionDisplayDate(row);
-    if (!byDate[date]) byDate[date] = [];
-    byDate[date].push(row);
-  }
-
-  const dates = Object.keys(byDate).sort();
-  const turnoverData: { date: string; turnover: number }[] = [];
-  const rebalanceLog: RebalanceEntry[] = [];
-  let prevSelected = new Set<string>();
-  let prevWeights = new Map<string, number>();
-
-  for (const date of dates) {
-    const rows = byDate[date];
-    const currWeights = new Map(rows.map((r) => [r.ticker, Number(r.weight)]));
-    const currSelected = new Set(rows.filter((r) => r.selected).map((r) => r.ticker));
-
-    const allTickers = new Set([...prevWeights.keys(), ...currWeights.keys()]);
-    let to = 0;
-    for (const t of allTickers) {
-      to += Math.abs((currWeights.get(t) ?? 0) - (prevWeights.get(t) ?? 0));
-    }
-    to /= 2;
-    turnoverData.push({ date, turnover: Math.round(to * 1000) / 10 });
-
-    const entered = [...currSelected].filter((t) => !prevSelected.has(t));
-    const exited = [...prevSelected].filter((t) => !currSelected.has(t));
-    rebalanceLog.push({ date, entered, exited, count: currSelected.size });
-
-    prevSelected = currSelected;
-    prevWeights = currWeights;
-  }
-
-  return { turnoverData, rebalanceLog };
-}
-
 function buildFromPositions(positions: PositionRow[]): TradesData {
   if (positions.length === 0) return { turnoverData: [], rebalanceLog: [] };
-
-  // Group by date (rebalance snapshots)
-  const byDate: Record<string, PositionRow[]> = {};
-  for (const row of positions) {
-    if (!byDate[row.date]) byDate[row.date] = [];
-    byDate[row.date].push(row);
-  }
-
-  const dates = Object.keys(byDate).sort();
-  const turnoverData: { date: string; turnover: number }[] = [];
-  const rebalanceLog: RebalanceEntry[] = [];
-  let prevSelected = new Set<string>();
-  let prevWeights = new Map<string, number>();
-
-  for (const date of dates) {
-    const rows = byDate[date];
-    const currWeights = new Map(rows.map((r) => [r.symbol, Number(r.weight)]));
-    const currSelected = new Set(rows.filter((r) => Number(r.weight) > 0).map((r) => r.symbol));
-
-    const allTickers = new Set([...prevWeights.keys(), ...currWeights.keys()]);
-    let to = 0;
-    for (const t of allTickers) {
-      to += Math.abs((currWeights.get(t) ?? 0) - (prevWeights.get(t) ?? 0));
-    }
-    to /= 2;
-    turnoverData.push({ date, turnover: Math.round(to * 1000) / 10 });
-
-    const entered = [...currSelected].filter((t) => !prevSelected.has(t));
-    const exited = [...prevSelected].filter((t) => !currSelected.has(t));
-    rebalanceLog.push({ date, entered, exited, count: currSelected.size });
-
-    prevSelected = currSelected;
-    prevWeights = currWeights;
-  }
-
-  return { turnoverData, rebalanceLog };
+  const points = buildTurnoverPointsFromPositions(positions);
+  return {
+    turnoverData: points.map((point) => ({
+      date: point.date,
+      turnover: Math.round(point.turnover * 1000) / 10,
+    })),
+    rebalanceLog: points.map((point) => ({
+      date: point.date,
+      entered: point.entered,
+      exited: point.exited,
+      count: point.count,
+      isInitialEstablishment: point.isInitialEstablishment,
+    })),
+  };
 }
 
 interface TradesTabProps {
-  predictions?: ModelPredictionRow[];
   positions?: PositionRow[];
 }
 
-export function TradesTab({ predictions = [], positions = [] }: TradesTabProps) {
-  const { turnoverData, rebalanceLog } =
-    predictions.length > 0 ? buildFromPredictions(predictions) : buildFromPositions(positions);
-  const isEmpty = predictions.length === 0 && positions.length === 0;
+export function TradesTab({ positions = [] }: TradesTabProps) {
+  const { turnoverData, rebalanceLog } = buildFromPositions(positions);
+  const isEmpty = positions.length === 0;
 
   return (
     <div className="flex flex-col gap-4">
@@ -136,7 +69,7 @@ export function TradesTab({ predictions = [], positions = [] }: TradesTabProps) 
       <Card className="bg-card border-border">
         <CardHeader className="px-4 pt-4 pb-1">
           <CardTitle className="text-card-foreground text-[13px] font-medium">
-            Monthly Turnover
+            Turnover by rebalance date
           </CardTitle>
         </CardHeader>
         <CardContent className="px-2 pt-1 pb-3">
@@ -177,7 +110,7 @@ export function TradesTab({ predictions = [], positions = [] }: TradesTabProps) 
                 <ChartTooltip
                   content={
                     <ChartTooltipContent
-                      formatter={(v) => [`${Number(v).toFixed(1)}%`, "Turnover"]}
+                      formatter={(v) => [`${Number(v).toFixed(1)}%`, "One-way turnover"]}
                     />
                   }
                 />
@@ -189,6 +122,12 @@ export function TradesTab({ predictions = [], positions = [] }: TradesTabProps) 
                 />
               </BarChart>
             </ChartContainer>
+          )}
+          {!isEmpty && (
+            <p className="text-muted-foreground px-2 pt-2 text-[11px]">
+              Bars show per-rebalance one-way turnover. Initial portfolio establishment is excluded
+              from turnover and shown as 0%.
+            </p>
           )}
         </CardContent>
       </Card>
@@ -275,7 +214,7 @@ export function TradesTab({ predictions = [], positions = [] }: TradesTabProps) 
                           </div>
                         </TableCell>
                         <TableCell className="text-muted-foreground hidden py-2.5 pr-4 text-right font-mono text-[12px] sm:table-cell">
-                          {row.count}
+                          {row.isInitialEstablishment ? `${row.count} (init)` : row.count}
                         </TableCell>
                       </TableRow>
                     ))}

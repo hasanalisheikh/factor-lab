@@ -85,7 +85,7 @@ const LEADERBOARD_METRICS: {
   },
   {
     key: "turnover",
-    label: "Turnover",
+    label: "Turnover (Ann.)",
     higherIsBetter: false,
     format: (v) => `${(v * 100).toFixed(1)}%`,
   },

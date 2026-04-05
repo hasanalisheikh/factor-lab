@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { buildReportHtml, computeCAGRFromEquityCurve, fmtPercent } from "@/lib/report-builder";
 import type { EquityCurveRow, RunMetricsRow } from "@/lib/supabase/types";
+import type { TurnoverSummary } from "@/lib/turnover";
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -24,6 +25,13 @@ const EQUITY: EquityCurveRow[] = Array.from({ length: 10 }, (_, i) => ({
   portfolio: 100_000 + i * 1_000,
   benchmark: 100_000 + i * 800,
 }));
+
+const DEFAULT_TURNOVER_SUMMARY: TurnoverSummary = {
+  points: [],
+  averageTurnover: 0.0125,
+  annualizedTurnover: 0.15,
+  periodsPerYear: 12,
+};
 
 const BASE_PARAMS = {
   runName: "Test Run",
@@ -54,6 +62,7 @@ const BASE_PARAMS = {
     positionsDigest: null,
     equityDigest: null,
   },
+  turnoverSummary: DEFAULT_TURNOVER_SUMMARY,
 };
 
 function makeTradingDayCurve(startDate: string, endDate: string): EquityCurveRow[] {
@@ -457,22 +466,23 @@ describe("buildReportHtml - metric formatting precision", () => {
 
 describe("buildReportHtml - turnover convention and cost drag", () => {
   /**
-   * Turnover definition in the report must say "one-way" to match the computation
-   * in worker.py: per-rebalance turnover = sum(abs(weight_changes)) / 2.
+   * Turnover definition in the report must say "annualized one-way" to match the
+   * product KPI convention and the shared turnover computation.
    */
-  it("Turnover definition text includes 'one-way' to match computation convention", () => {
+  it("Turnover definition text includes 'annualized one-way turnover'", () => {
     const html = buildReportHtml({ ...BASE_PARAMS, strategyId: "equal_weight" });
-    expect(html).toContain("one-way");
+    expect(html).toContain("annualized one-way turnover");
   });
 
-  it("Turnover definition text references 'per rebalance period'", () => {
+  it("Turnover definition text notes initial establishment is excluded and no-change rebalances count as 0", () => {
     const html = buildReportHtml({ ...BASE_PARAMS, strategyId: "equal_weight" });
-    expect(html).toContain("per rebalance period");
+    expect(html).toContain("Initial establishment is excluded");
+    expect(html).toContain("No-change rebalance dates count as 0");
   });
 
   /**
-   * Cost drag formula: annualizedCostDrag = turnoverFrac × (costsBps/10000) × periods
-   * With turnover=0.08 (8%), costs=10bps, monthly (12 periods):
+   * Cost drag formula: annualizedCostDrag = avg_turnover_per_rebalance × (costsBps/10000) × periods
+   * With avg turnover=0.08 (8%), costs=10bps, monthly (12 periods):
    *   perRebalance = 0.08 × 0.001 = 0.00008 = 0.008%
    *   annualized   = 0.00008 × 12 = 0.00096 ≈ 0.10%
    */
@@ -481,7 +491,12 @@ describe("buildReportHtml - turnover convention and cost drag", () => {
       ...BASE_PARAMS,
       strategyId: "equal_weight",
       costsBps: 10,
-      metrics: { ...METRICS, turnover: 0.08 },
+      metrics: { ...METRICS, turnover: 0.96 },
+      turnoverSummary: {
+        ...DEFAULT_TURNOVER_SUMMARY,
+        averageTurnover: 0.08,
+        annualizedTurnover: 0.96,
+      },
     });
     // Per-rebalance: 0.08 × 0.001 = 0.00008 → fmtCostDrag → "0.008%"
     expect(html).toContain("0.008%");

@@ -11,6 +11,8 @@ from sklearn.linear_model import Ridge
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
+from .turnover import annualize_turnover_from_position_rows, one_way_turnover
+
 # ---------------------------------------------------------------------------
 # Feature columns — daily, leakage-safe
 # ---------------------------------------------------------------------------
@@ -365,7 +367,6 @@ def run_walk_forward(
     daily_portfolio: list[float] = []
     daily_benchmark: list[float] = []
     equity_dates: list[pd.Timestamp] = []
-    turnovers: list[float] = []
     prev_weights = pd.Series(0.0, index=all_tickers)
     model: Any = None
     last_refit_idx = -model_refit_freq  # force refit on first eligible step
@@ -428,9 +429,8 @@ def run_walk_forward(
         new_weights = pd.Series(0.0, index=all_tickers)
         for _, row in selected.iterrows():
             new_weights.at[row["ticker"]] = selected_weight
-        turnover = float((new_weights - prev_weights).abs().sum() / 2.0)
+        turnover = one_way_turnover(prev_weights, new_weights)
         prev_weights = new_weights
-        turnovers.append(turnover)
 
         # Returns
         gross_ret = float(selected["target_return"].mean()) if len(selected) > 0 else 0.0
@@ -507,7 +507,8 @@ def run_walk_forward(
     ]
 
     metrics = _compute_metrics(
-        portfolio_ser, turnover=float(np.mean(turnovers) if turnovers else 0.0)
+        portfolio_ser,
+        turnover=annualize_turnover_from_position_rows(position_rows, periods_per_year=252.0),
     )
 
     # ── Metadata ──────────────────────────────────────────────────────────────

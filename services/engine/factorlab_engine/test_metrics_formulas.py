@@ -42,7 +42,8 @@ Convention reference (cross-check with TypeScript metrics.ts):
 
     Turnover (per-rebalance, one-way)
         Formula:   sum(abs(new_weights - prev_weights)) / 2
-        Annualized: mean(positive_rebalance_turnovers) * 12.0  (monthly assumed)
+        Annualized: mean(rebalance_turnovers after initial establishment) * periods/year
+                    No-change rebalance dates count as 0.
 """
 
 import math
@@ -517,7 +518,7 @@ class TestTurnover:
     The /2 factor converts two-sided (buy + sell = 2× the actual trading amount)
     to one-sided (fraction of portfolio actually traded).
 
-    Annualization: mean(positive_rebalance_turnovers) * 12.0
+    Annualization: mean(rebalance_turnovers after initial establishment) * periods/year
     """
 
     def _turnover(self, prev: dict, curr: dict) -> float:
@@ -579,49 +580,62 @@ class TestTurnover:
         raw_sum = abs(0.0 - 1.0) + abs(1.0 - 0.0)  # = 2.0
         assert_close(turnover, raw_sum / 2.0, abs_tol=1e-12)
 
+    def test_one_name_swap_in_five_position_equal_weight_book_is_20pct(self):
+        prev = {"A": 0.2, "B": 0.2, "C": 0.2, "D": 0.2, "E": 0.2}
+        curr = {"A": 0.2, "B": 0.2, "C": 0.2, "D": 0.2, "F": 0.2}
+        turnover = self._turnover(prev, curr)
+        assert_close(turnover, 0.2, abs_tol=1e-12)
+
 
 class TestAnnualizedTurnover:
     """
-    Annualization: mean(positive per-rebalance turnovers) × 12.0
-    Only positive (non-zero) rebalances are included in the mean.
+    Annualization: mean(per-rebalance turnovers after initial establishment) × periods/year
+    No-change (0 turnover) rebalance dates remain in the mean.
     """
 
     def test_constant_turnover_annualized(self):
         """
-        12 rebalances all with 50% turnover → annualized = 0.50 × 12 = 6.0 (600%).
+        Initial establishment excluded.
+        12 subsequent rebalances all with 50% turnover → annualized = 0.50 × 12 = 6.0 (600%).
         """
-        series = pd.Series([0.5] * 12)
+        series = pd.Series([1.0] + [0.5] * 12)
         result = _annualize_turnover_from_rebalances(series)
         assert_close(result, 6.0, abs_tol=1e-12)
 
     def test_variable_turnover_uses_mean(self):
         """
-        Rebalances: [0.5, 0.3, 0.4] → mean = 0.4 → annualized = 0.4 × 12 = 4.8.
+        Rebalances after initial establishment: [0.5, 0.3, 0.4] → mean = 0.4 → annualized = 4.8.
         """
-        series = pd.Series([0.5, 0.3, 0.4])
+        series = pd.Series([1.0, 0.5, 0.3, 0.4])
         result = _annualize_turnover_from_rebalances(series)
         assert_close(result, (0.5 + 0.3 + 0.4) / 3 * 12, abs_tol=1e-12)
 
-    def test_zeros_excluded_from_mean(self):
+    def test_zeros_are_included_in_mean(self):
         """
-        Series: [0.5, 0.0, 0.5]. Zeros are excluded.
-        mean(positive) = mean([0.5, 0.5]) = 0.5 → annualized = 0.5 × 12 = 6.0.
+        Series after initial establishment: [0.5, 0.0, 0.5].
+        mean([0.5, 0.0, 0.5]) = 1/3 → annualized = 4.0.
         """
-        series = pd.Series([0.5, 0.0, 0.5])
+        series = pd.Series([1.0, 0.5, 0.0, 0.5])
         result = _annualize_turnover_from_rebalances(series)
-        assert_close(result, 6.0, abs_tol=1e-12)
+        assert_close(result, 4.0, abs_tol=1e-12)
 
     def test_all_zero_turnovers_returns_zero(self):
-        """No positive rebalances → annualized turnover = 0.0."""
-        series = pd.Series([0.0, 0.0, 0.0])
+        """No turnover after initial establishment → annualized turnover = 0.0."""
+        series = pd.Series([1.0, 0.0, 0.0, 0.0])
         result = _annualize_turnover_from_rebalances(series)
         assert result == 0.0
 
     def test_single_rebalance(self):
-        """Single rebalance with 80% turnover → annualized = 0.80 × 12 = 9.6."""
-        series = pd.Series([0.80])
+        """Single post-establishment rebalance with 80% turnover → annualized = 9.6."""
+        series = pd.Series([1.0, 0.80])
         result = _annualize_turnover_from_rebalances(series)
         assert_close(result, 9.6, abs_tol=1e-12)
+
+    def test_daily_annualization_uses_252(self):
+        """Daily ML turnover uses 252 rebalances/year, not 12."""
+        series = pd.Series([1.0, 0.2, 0.0, 0.2])
+        result = _annualize_turnover_from_rebalances(series, periods_per_year=252.0)
+        assert_close(result, ((0.2 + 0.0 + 0.2) / 3) * 252.0, abs_tol=1e-12)
 
 
 # ── Convention summary sanity ─────────────────────────────────────────────────

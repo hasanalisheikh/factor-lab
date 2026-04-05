@@ -425,6 +425,7 @@ export async function getRunById(id: string): Promise<RunWithMetrics | null> {
 }
 
 const EQUITY_CURVE_PAGE_SIZE = 1000;
+const POSITIONS_PAGE_SIZE = 1000;
 
 export async function fetchAllEquityCurve(runId: string): Promise<EquityCurveRow[]> {
   const supabase = createAdminClient();
@@ -461,6 +462,38 @@ export async function getEquityCurve(runId: string): Promise<EquityCurveRow[]> {
     console.error("getEquityCurve exception:", err);
     return [];
   }
+}
+
+export async function fetchAllPositionsByRunId(runId: string): Promise<PositionRow[]> {
+  const supabase = await createClient();
+  const all: PositionRow[] = [];
+  let offset = 0;
+
+  while (true) {
+    const { data, error } = await supabase
+      .from("positions")
+      .select("*")
+      .eq("run_id", runId)
+      .order("date", { ascending: true })
+      .order("symbol", { ascending: true })
+      .range(offset, offset + POSITIONS_PAGE_SIZE - 1);
+
+    if (error) {
+      if (isMissingPositionsTableError(error.message)) {
+        return [];
+      }
+      throw new Error(`Failed to load positions: ${error.message}`);
+    }
+
+    const page = (data ?? []) as PositionRow[];
+    if (page.length === 0) break;
+
+    all.push(...page);
+    if (page.length < POSITIONS_PAGE_SIZE) break;
+    offset += POSITIONS_PAGE_SIZE;
+  }
+
+  return all;
 }
 
 export async function getJobs(): Promise<JobRow[]> {
@@ -2326,23 +2359,7 @@ export async function getActiveIngestJobCount(): Promise<number> {
 
 export async function getPositionsByRunId(runId: string): Promise<PositionRow[]> {
   try {
-    const supabase = await createClient();
-    const { data, error } = await supabase
-      .from("positions")
-      .select("*")
-      .eq("run_id", runId)
-      .order("date", { ascending: false })
-      .order("symbol", { ascending: true })
-      .limit(2000);
-
-    if (error) {
-      if (isMissingPositionsTableError(error.message)) {
-        return [];
-      }
-      console.error("getPositionsByRunId error:", error.message);
-      return [];
-    }
-    return (data ?? []) as PositionRow[];
+    return await fetchAllPositionsByRunId(runId);
   } catch (err) {
     console.error("getPositionsByRunId exception:", err);
     return [];

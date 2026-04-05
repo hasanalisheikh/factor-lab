@@ -12,6 +12,7 @@ from factorlab_engine.ml import (
     compute_daily_features,
     run_walk_forward,
 )
+from factorlab_engine.turnover import annualize_turnover_from_position_rows
 
 
 def _lgbm_available() -> bool:
@@ -260,6 +261,23 @@ def test_walk_forward_invokes_progress_callback():
     assert progress_calls[-1][0] == progress_calls[-1][1]
 
 
+def test_ml_ridge_turnover_matches_position_history_annualized_at_252():
+    prices = _make_prices(n_months=72, n_assets=6)
+    result = run_walk_forward(
+        run_id="test-ridge-turnover",
+        strategy="ml_ridge",
+        prices=prices,
+        start_date="2019-01-01",
+        end_date="2020-06-30",
+        benchmark_ticker="SPY",
+        top_n=3,
+        cost_bps=10.0,
+    )
+
+    expected = annualize_turnover_from_position_rows(result.position_rows, periods_per_year=252.0)
+    assert np.isclose(result.metrics["turnover"], expected, atol=1e-12)
+
+
 def test_ridge_repeatability_same_snapshot():
     prices = _make_prices(n_months=72, n_assets=6, seed=7)
 
@@ -362,6 +380,24 @@ def test_metrics_sanity():
     assert np.isfinite(m["sharpe"])
     assert m["turnover"] >= 0.0
     assert 0.0 <= m["win_rate"] <= 1.0
+
+
+@_requires_lgbm
+def test_ml_lightgbm_turnover_matches_position_history_annualized_at_252():
+    prices = _make_prices(n_months=72, n_assets=6)
+    result = run_walk_forward(
+        run_id="test-lightgbm-turnover",
+        strategy="ml_lightgbm",
+        prices=prices,
+        start_date="2019-01-01",
+        end_date="2020-06-30",
+        benchmark_ticker="SPY",
+        top_n=3,
+        cost_bps=10.0,
+    )
+
+    expected = annualize_turnover_from_position_rows(result.position_rows, periods_per_year=252.0)
+    assert np.isclose(result.metrics["turnover"], expected, atol=1e-12)
 
 
 def test_walk_forward_raises_with_insufficient_data():

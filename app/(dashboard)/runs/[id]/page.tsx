@@ -245,7 +245,7 @@ export default async function RunDetailPage({ params }: { params: Promise<{ id: 
           <HoldingsTab predictions={modelPredictions} positions={positions} />
         </TabsContent>
         <TabsContent value="trades" className="mt-4">
-          <TradesTab predictions={modelPredictions} positions={positions} />
+          <TradesTab positions={positions} />
         </TabsContent>
         {isMlRun && (
           <TabsContent value="ml-insights" className="mt-4">

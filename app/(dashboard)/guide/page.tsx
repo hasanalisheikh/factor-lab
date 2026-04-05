@@ -174,8 +174,8 @@ const sections = [
               desc: "Sum of winning months' returns divided by sum of losing months' returns. >1 means more gains than losses.",
             },
             {
-              label: "Turnover",
-              desc: "Average one-way turnover per rebalance — what fraction of the portfolio was traded.",
+              label: "Turnover (Ann.)",
+              desc: "Annualized one-way turnover: the average fraction of the portfolio traded at each rebalance, multiplied by rebalances per year. Initial establishment is excluded and no-change rebalances count as 0.",
             },
             {
               label: "Calmar Ratio",

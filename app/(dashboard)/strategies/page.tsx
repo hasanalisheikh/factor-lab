@@ -18,7 +18,7 @@ const strategies = [
     selection: "All assets in the universe — no filtering.",
     weightScheme: "1/N per asset (e.g., 12.5% each for the 8-asset ETF8 universe).",
     turnover:
-      "Low (~8% per rebalance). Weights drift slightly as prices move; the monthly reset corrects them.",
+      "Low under the rebalance-target convention. Turnover only appears when holdings or target weights change.",
     signal: null,
     mlDetails: null,
     expectations:
@@ -37,7 +37,8 @@ const strategies = [
     selection:
       "Top N assets (N = run.top_n, clamped to universe size) ranked by momentum score; only assets with a positive score qualify.",
     weightScheme: "Equal weight among selected assets (1/N).",
-    turnover: "Moderate. Changes monthly as rankings shift.",
+    turnover:
+      "Variable. Measured as one-way weight change between consecutive monthly rebalance targets.",
     signal:
       "score = price(t−21 trading days) / price(t−252 trading days) − 1\n\nThe 1-month skip (t−21) removes short-term price reversal contamination. Momentum is a 2–12 month phenomenon.",
     mlDetails: null,
@@ -55,7 +56,8 @@ const strategies = [
     rule: "Each month, retrain a Ridge regressor on all past data, rank assets by predicted next-month return, and hold the top N equal-weighted.",
     selection: `Top N assets by predicted return (N = run.top_n, default 10). Requires ≥ 24 months of training history before first prediction.`,
     weightScheme: "Equal weight among the top-N selected assets.",
-    turnover: "Variable. Typically moderate as rankings shift with new predictions.",
+    turnover:
+      "Variable. Daily one-way turnover annualized at 252; initial portfolio establishment is excluded.",
     signal: null,
     mlDetails: {
       features: [
@@ -110,7 +112,8 @@ const strategies = [
     rule: "Identical to ML Ridge, substituting a LightGBM regressor for the Ridge model.",
     selection: "Top N assets by predicted return.",
     weightScheme: "Equal weight among selected assets.",
-    turnover: "Variable.",
+    turnover:
+      "Variable. Daily one-way turnover annualized at 252; initial portfolio establishment is excluded.",
     signal: null,
     mlDetails: {
       features: [
@@ -199,7 +202,7 @@ const metricDefs = [
   {
     name: "Turnover (Ann.)",
     full: "Annualized Turnover",
-    desc: "Average annual fraction of the portfolio replaced. Computed as mean(rebalance_turnover) × 12. 100% = entire portfolio replaced once per year. Lower means lower transaction cost drag.",
+    desc: "Average annual fraction of the portfolio replaced. Computed as mean(one-way turnover over rebalance dates after initial establishment) × periods/year. Monthly strategies use 12; daily ML strategies use 252. No-change rebalances count as 0.",
   },
   {
     name: "Volatility",
@@ -379,21 +382,23 @@ export default function StrategiesPage() {
           <Card className="bg-card border-border">
             <CardContent className="text-foreground/90 space-y-3 px-4 py-4 text-[13px] leading-relaxed">
               <p>
-                On the <strong>last trading day of each calendar month</strong>, the engine computes
-                new target weights and calculates the turnover required to move from the current
-                (drifted) weights to the target.
+                On each <strong>rebalance date</strong>, the engine computes new target weights and
+                calculates one-way turnover from the previous rebalance target:
+                <code className="bg-secondary mx-1 rounded px-1 text-[12px]">
+                  0.5 × sum(abs(new_weights − old_weights))
+                </code>
+                . Initial portfolio establishment is excluded from the turnover KPI, and no-change
+                rebalance dates count as 0.
               </p>
               <p>
-                <strong>Example:</strong> You start January with ETF8 at equal weight (12.5% each).
-                By end-of-month, QQQ rallied and now represents 15% of the portfolio while TLT fell
-                to 10%. The rebalance sells 2.5% of QQQ and buys 2.5% of TLT to restore equal
-                weight. The one-way turnover is 2.5% → transaction cost = 10 bps × 5% two-way =
-                0.05% drag.
+                <strong>Example:</strong> In a 5-position equal-weight portfolio, swapping one name
+                means selling 20% of the old holding and buying 20% of the new one. The one-way
+                turnover is therefore 20%, and at 10 bps costs the rebalance drag is 0.02%.
               </p>
               <p>
-                For momentum strategies, <strong>turnover is higher</strong> because the set of
-                selected assets can change entirely between months — a replaced asset requires both
-                a full sell and a full buy.
+                Daily ML strategies annualize turnover with 252 rebalances/year; monthly strategies
+                use 12. The turnover chart shows per-rebalance one-way turnover, not an annualized
+                value.
               </p>
             </CardContent>
           </Card>

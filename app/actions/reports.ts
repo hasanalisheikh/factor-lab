@@ -5,6 +5,7 @@ import { createClient } from "@/lib/supabase/server";
 import {
   fetchAllEquityCurve,
   getBenchmarkOverlapStateForRun,
+  getPositionsByRunId,
   type EquityCurveRow,
   type RunMetricsRow,
   type RunRow,
@@ -12,6 +13,7 @@ import {
 import { getRunBenchmark } from "@/lib/benchmark";
 import { buildReportHtml, parseRunMetadata } from "@/lib/report-builder";
 import { buildReportStoragePath, resolveReportsBucketName } from "@/lib/storage";
+import { buildTurnoverSummaryFromPositions, getTurnoverPeriodsPerYear } from "@/lib/turnover";
 
 function isMissingPositionsTableError(message?: string): boolean {
   if (!message) return false;
@@ -29,12 +31,17 @@ export async function ensureRunReport(runId: string): Promise<void> {
     throw new Error("Authentication required.");
   }
 
-  const [{ data: run, error: runError }, { data: metrics, error: metricsError }, equity] =
-    await Promise.all([
-      serverClient.from("runs").select("*").eq("id", runId).maybeSingle(),
-      serverClient.from("run_metrics").select("*").eq("run_id", runId).maybeSingle(),
-      fetchAllEquityCurve(runId),
-    ]);
+  const [
+    { data: run, error: runError },
+    { data: metrics, error: metricsError },
+    equity,
+    positions,
+  ] = await Promise.all([
+    serverClient.from("runs").select("*").eq("id", runId).maybeSingle(),
+    serverClient.from("run_metrics").select("*").eq("run_id", runId).maybeSingle(),
+    fetchAllEquityCurve(runId),
+    getPositionsByRunId(runId),
+  ]);
 
   if (runError || !run) {
     throw new Error(`Failed to load run: ${runError?.message ?? "not found"}`);
@@ -44,6 +51,14 @@ export async function ensureRunReport(runId: string): Promise<void> {
   }
   const runRow = run as RunRow;
   const benchmarkTicker = getRunBenchmark(runRow);
+  const turnoverSummary = buildTurnoverSummaryFromPositions(
+    positions,
+    getTurnoverPeriodsPerYear(runRow.strategy_id)
+  );
+  const reportMetrics: RunMetricsRow = {
+    ...(metrics as RunMetricsRow),
+    turnover: turnoverSummary?.annualizedTurnover ?? (metrics as RunMetricsRow).turnover,
+  };
   const overlapState = await getBenchmarkOverlapStateForRun(runRow);
   let benchmarkOverlapDetected = overlapState.confirmed;
   if (!benchmarkOverlapDetected) {
@@ -86,7 +101,7 @@ export async function ensureRunReport(runId: string): Promise<void> {
     generatedAt: new Date().toISOString(),
     benchmarkTicker,
     benchmarkOverlapDetected,
-    metrics: metrics as RunMetricsRow,
+    metrics: reportMetrics,
     equityCurve: equity as EquityCurveRow[],
     universe: runRow.universe ?? "",
     universeSymbols: runRow.universe_symbols,
@@ -94,6 +109,7 @@ export async function ensureRunReport(runId: string): Promise<void> {
     topN: runRow.top_n ?? 0,
     runParams: runParamsObj,
     runMetadata: parseRunMetadata(runRow.run_metadata),
+    turnoverSummary,
   });
 
   const fileData = new Blob([html], { type: "text/html; charset=utf-8" });
