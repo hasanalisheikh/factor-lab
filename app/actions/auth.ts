@@ -7,6 +7,11 @@ import { z } from "zod";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import {
+  buildResendCooldownMessage,
+  isResendRateLimitError,
+  RESEND_VERIFICATION_COOLDOWN_SECONDS,
+} from "@/lib/auth/resend-verification";
+import {
   buildVerifyUrl,
   normalizeVerificationFlow,
   type VerificationFlow,
@@ -30,7 +35,12 @@ async function transferGuestRuns(guestUserId: string, newUserId: string) {
 }
 
 export type AuthState = { error: string } | { unverifiedEmail: string } | null;
-export type ResendState = { error: string } | { success: true } | null;
+export type ResendState =
+  | { error: string }
+  | { success: true; cooldownSeconds: number }
+  | { rateLimited: true; cooldownSeconds: number; message: string }
+  | { providerLimited: true; message: string }
+  | null;
 export type ForgotPasswordState = { success: true } | { error: string } | null;
 export type ResetPasswordState = { error: string } | null;
 
@@ -47,6 +57,8 @@ const emailPasswordSchema = z.object({
 
 const ACCOUNT_EXISTS_ERROR =
   "An account with this email already exists. Sign in to that account instead.";
+
+type AuthApiError = { message: string; status?: number; code?: string };
 
 function normalizeOrigin(origin: string) {
   return origin.replace(/\/+$/, "");
@@ -96,28 +108,59 @@ async function sendVerificationEmail({
   email: string;
   origin: string;
   flow: VerificationFlow;
-}): Promise<{ error: { message: string } | null }> {
-  if (flow === "upgrade") {
-    const admin = createAdminClient();
-    const { error } = await admin.auth.signInWithOtp({
-      email,
-      options: {
-        shouldCreateUser: false,
-        emailRedirectTo: getActivationVerificationCallbackUrl(origin),
-      },
-    });
-
-    return { error };
-  }
-
-  const supabase = await createClient();
-  const { error } = await supabase.auth.resend({
-    type: "signup",
+}): Promise<{ error: AuthApiError | null }> {
+  const admin = createAdminClient();
+  const { error } = await admin.auth.signInWithOtp({
     email,
-    options: { emailRedirectTo: getSignupVerificationCallbackUrl(origin) },
+    options: {
+      shouldCreateUser: false,
+      emailRedirectTo:
+        flow === "upgrade"
+          ? getActivationVerificationCallbackUrl(origin)
+          : getSignupVerificationCallbackUrl(origin),
+    },
   });
 
   return { error };
+}
+
+function buildResendSuccessState(): Extract<ResendState, { success: true; cooldownSeconds: number }> {
+  return {
+    success: true,
+    cooldownSeconds: RESEND_VERIFICATION_COOLDOWN_SECONDS,
+  };
+}
+
+function buildResendRateLimitedState(
+  retryAfterSeconds = RESEND_VERIFICATION_COOLDOWN_SECONDS,
+  message = buildResendCooldownMessage(retryAfterSeconds)
+): Extract<ResendState, { rateLimited: true; cooldownSeconds: number; message: string }> {
+  return {
+    rateLimited: true,
+    cooldownSeconds: retryAfterSeconds,
+    message,
+  };
+}
+
+function buildResendProviderLimitedState(
+  message = "We've sent too many verification emails recently. Please try again later. Check your inbox and spam for the latest email."
+): Extract<ResendState, { providerLimited: true; message: string }> {
+  return {
+    providerLimited: true,
+    message,
+  };
+}
+
+function isProviderEmailSendLimitError(error: AuthApiError | null) {
+  return (
+    !!error &&
+    (error.code === "over_email_send_rate_limit" ||
+      error.message.toLowerCase().includes("email rate limit exceeded"))
+  );
+}
+
+function isAuthRateLimitError(error: AuthApiError | null) {
+  return !!error && (error.status === 429 || isResendRateLimitError(error.message));
 }
 
 async function checkCreateAccountRateLimit(): Promise<AuthState> {
@@ -242,6 +285,7 @@ async function upgradeGuestUserInPlace({
     buildVerifyUrl({
       email,
       flow: "upgrade",
+      sentAt: otpError ? undefined : Date.now(),
     })
   );
 }
@@ -399,6 +443,7 @@ export async function signUpAction(_prev: AuthState, formData: FormData): Promis
     const verifyUrl = buildVerifyUrl({
       email: parsed.data.email,
       flow: "signup",
+      sentAt: Date.now(),
     });
     redirect(verifyUrl);
   }
@@ -476,9 +521,15 @@ export async function resendVerificationAction(
     return { error: "Email address is required." };
   }
 
-  const { allowed, error: rateLimitError } = await checkResendRateLimit(email);
+  const { allowed, error: rateLimitError, retryAfterSeconds } = await checkResendRateLimit(email);
   if (!allowed) {
-    return { error: rateLimitError ?? "Please wait before requesting another verification email." };
+    return buildResendRateLimitedState(
+      retryAfterSeconds,
+      rateLimitError ??
+        buildResendCooldownMessage(
+          retryAfterSeconds ?? RESEND_VERIFICATION_COOLDOWN_SECONDS
+        )
+    );
   }
 
   const origin = await getRequestOrigin();
@@ -490,10 +541,16 @@ export async function resendVerificationAction(
       flow,
     });
     if (error) {
+      if (isProviderEmailSendLimitError(error)) {
+        return buildResendProviderLimitedState();
+      }
+      if (isAuthRateLimitError(error)) {
+        return buildResendRateLimitedState();
+      }
       return { error: error.message };
     }
 
-    return { success: true };
+    return buildResendSuccessState();
   }
 
   const { error: signupError } = await sendVerificationEmail({
@@ -502,7 +559,15 @@ export async function resendVerificationAction(
     flow: "signup",
   });
   if (!signupError) {
-    return { success: true };
+    return buildResendSuccessState();
+  }
+
+  if (isProviderEmailSendLimitError(signupError)) {
+    return buildResendProviderLimitedState();
+  }
+
+  if (isAuthRateLimitError(signupError)) {
+    return buildResendRateLimitedState();
   }
 
   const { error: upgradeError } = await sendVerificationEmail({
@@ -511,8 +576,14 @@ export async function resendVerificationAction(
     flow: "upgrade",
   });
   if (upgradeError) {
+    if (isProviderEmailSendLimitError(upgradeError)) {
+      return buildResendProviderLimitedState();
+    }
+    if (isAuthRateLimitError(upgradeError)) {
+      return buildResendRateLimitedState();
+    }
     return { error: signupError.message };
   }
 
-  return { success: true };
+  return buildResendSuccessState();
 }

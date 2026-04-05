@@ -42,6 +42,7 @@ const mockGetUser = vi.fn();
 const mockGetSession = vi.fn();
 const mockOnAuthStateChange = vi.fn();
 const mockUnsubscribe = vi.fn();
+const FIXED_SENT_AT = 1741305600000;
 
 vi.mock("@/lib/supabase/client", () => ({
   createClient: () => ({
@@ -252,5 +253,36 @@ describe("LoginForm guest-upgrade mode", () => {
     });
 
     expect(document.querySelector('input[name="flow"]')).toBeNull();
+  });
+
+  it("10) shows a resend countdown banner after a fresh verification email send", async () => {
+    const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(FIXED_SENT_AT);
+
+    try {
+      mockGetUser.mockResolvedValue({
+        data: { user: null },
+        error: null,
+      });
+
+      render(
+        <LoginForm
+          sessionUser={null}
+          initialTab="verify"
+          initialEmail="user@example.com"
+          initialFlow="signup"
+          initialSentAt={FIXED_SENT_AT}
+        />
+      );
+
+      await waitFor(() => {
+        expect(
+          screen.getByText("A verification email was sent recently. You can resend again in 60s.")
+        ).toBeInTheDocument();
+      });
+
+      expect(screen.getByRole("button", { name: "Resend again in 60s" })).toBeDisabled();
+    } finally {
+      dateNowSpy.mockRestore();
+    }
   });
 });

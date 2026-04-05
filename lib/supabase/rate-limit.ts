@@ -1,6 +1,15 @@
 import "server-only";
 
-export type RateLimitResult = { allowed: boolean; error?: string };
+import {
+  buildResendCooldownMessage,
+  RESEND_VERIFICATION_COOLDOWN_SECONDS,
+} from "@/lib/auth/resend-verification";
+
+export type RateLimitResult = {
+  allowed: boolean;
+  error?: string;
+  retryAfterSeconds?: number;
+};
 
 /**
  * Check the per-email resend rate limit using Upstash Redis.
@@ -23,12 +32,18 @@ export async function checkResendRateLimit(email: string): Promise<RateLimitResu
       analytics: false,
     });
 
-    const { success } = await ratelimit.limit(email.toLowerCase());
+    const { success, reset } = await ratelimit.limit(email.toLowerCase());
 
     if (!success) {
+      const retryAfterSeconds = Math.max(
+        1,
+        Math.ceil((reset - Date.now()) / 1000) || RESEND_VERIFICATION_COOLDOWN_SECONDS
+      );
+
       return {
         allowed: false,
-        error: "Please wait 60 seconds before requesting another verification email.",
+        error: buildResendCooldownMessage(retryAfterSeconds),
+        retryAfterSeconds,
       };
     }
 

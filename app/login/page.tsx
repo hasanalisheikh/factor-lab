@@ -6,6 +6,15 @@ import { Card } from "@/components/ui/card";
 import { normalizeVerificationFlow } from "@/lib/auth/verification-flow";
 import { createClient } from "@/lib/supabase/server";
 
+function parseSentAt(value?: string) {
+  if (!value) {
+    return undefined;
+  }
+
+  const sentAt = Number(value);
+  return Number.isFinite(sentAt) && sentAt > 0 ? sentAt : undefined;
+}
+
 export default async function LoginPage({
   searchParams,
 }: {
@@ -15,13 +24,14 @@ export default async function LoginPage({
     email?: string;
     flow?: string;
     upgrade?: string;
+    sent_at?: string;
   }>;
 }) {
   const supabase = await createClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();
-  const { error, tab, email, flow, upgrade } = await searchParams;
+  const { error, tab, email, flow, upgrade, sent_at: sentAt } = await searchParams;
 
   const isVerify = tab === "verify";
   const isForgot = tab === "forgot";
@@ -52,6 +62,7 @@ export default async function LoginPage({
               initialTab={initialTab}
               initialEmail={email}
               initialFlow={isVerify ? normalizeVerificationFlow(flow) : undefined}
+              initialSentAt={isVerify ? parseSentAt(sentAt) : undefined}
               verifyError={isVerify ? error : undefined}
               forgotError={isForgot ? error : undefined}
               sessionUser={

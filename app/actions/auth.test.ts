@@ -1,4 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const FIXED_SENT_AT = 1741305600000;
+
+let dateNowSpy: ReturnType<typeof vi.spyOn> | null = null;
 
 const {
   createClientMock,
@@ -64,7 +68,7 @@ function makeServerClient(options?: {
     user_metadata: Record<string, unknown>;
   } | null;
   refreshError?: { message: string } | null;
-  resendError?: { message: string } | null;
+  resendError?: { message: string; status?: number } | null;
 }) {
   const user = options?.user === undefined ? makeGuestUser() : options.user;
   const refreshedUser = options?.refreshedUser ?? {
@@ -121,7 +125,7 @@ function makeAdminClient(options?: {
     email: string | null;
   }>;
   updateError?: { message: string } | null;
-  otpError?: { message: string } | null;
+  otpError?: { message: string; status?: number } | null;
 }) {
   return {
     auth: {
@@ -149,6 +153,8 @@ function makeAdminClient(options?: {
 describe("guest account upgrade", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    dateNowSpy?.mockRestore();
+    dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(FIXED_SENT_AT);
 
     headersMock.mockResolvedValue(
       new Headers({
@@ -158,6 +164,11 @@ describe("guest account upgrade", () => {
     );
     checkAccountCreationRateLimitMock.mockResolvedValue({ allowed: true });
     checkResendRateLimitMock.mockResolvedValue({ allowed: true });
+  });
+
+  afterEach(() => {
+    dateNowSpy?.mockRestore();
+    dateNowSpy = null;
   });
 
   it("upgrades guest in place, sends OTP magic-link, and redirects to verify", async () => {
@@ -172,7 +183,9 @@ describe("guest account upgrade", () => {
         email: "user@example.com",
         password: "Password!",
       })
-    ).rejects.toThrow("REDIRECT:/login?tab=verify&email=user%40example.com&flow=upgrade");
+    ).rejects.toThrow(
+      "REDIRECT:/login?tab=verify&email=user%40example.com&flow=upgrade&sent_at=1741305600000"
+    );
 
     expect(adminClient.auth.admin.updateUserById).toHaveBeenCalledWith(
       "guest-user-id",
@@ -254,7 +267,7 @@ describe("guest account upgrade", () => {
     formData.set("password", "Password!");
 
     await expect(signUpAction(null, formData)).rejects.toThrow(
-      "REDIRECT:/login?tab=verify&email=user%40example.com&flow=upgrade"
+      "REDIRECT:/login?tab=verify&email=user%40example.com&flow=upgrade&sent_at=1741305600000"
     );
 
     expect(adminClient.auth.admin.updateUserById).toHaveBeenCalledWith(
@@ -271,6 +284,8 @@ describe("guest account upgrade", () => {
 describe("sign up verification flow", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    dateNowSpy?.mockRestore();
+    dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(FIXED_SENT_AT);
 
     headersMock.mockResolvedValue(
       new Headers({
@@ -279,6 +294,11 @@ describe("sign up verification flow", () => {
       })
     );
     checkAccountCreationRateLimitMock.mockResolvedValue({ allowed: true });
+  });
+
+  afterEach(() => {
+    dateNowSpy?.mockRestore();
+    dateNowSpy = null;
   });
 
   it("redirects new signups to the verify tab with flow=signup", async () => {
@@ -301,7 +321,7 @@ describe("sign up verification flow", () => {
     formData.set("password", "Password!");
 
     await expect(signUpAction(null, formData)).rejects.toThrow(
-      "REDIRECT:/login?tab=verify&email=user%40example.com&flow=signup"
+      "REDIRECT:/login?tab=verify&email=user%40example.com&flow=signup&sent_at=1741305600000"
     );
   });
 
@@ -333,7 +353,7 @@ describe("sign up verification flow", () => {
     formData.set("password", "Password!");
 
     await expect(signUpAction(null, formData)).rejects.toThrow(
-      "REDIRECT:/login?tab=verify&email=user%40example.com&flow=signup"
+      "REDIRECT:/login?tab=verify&email=user%40example.com&flow=signup&sent_at=1741305600000"
     );
 
     expect(serverClient.auth.signUp).toHaveBeenCalledWith({
@@ -349,6 +369,8 @@ describe("sign up verification flow", () => {
 describe("resend verification", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    dateNowSpy?.mockRestore();
+    dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(FIXED_SENT_AT);
 
     headersMock.mockResolvedValue(
       new Headers({
@@ -360,46 +382,48 @@ describe("resend verification", () => {
     checkResendRateLimitMock.mockResolvedValue({ allowed: true });
   });
 
+  afterEach(() => {
+    dateNowSpy?.mockRestore();
+    dateNowSpy = null;
+  });
+
   it("uses the standard signup resend flow for unverified accounts", async () => {
-    const serverClient = makeServerClient({ user: null });
     const adminClient = makeAdminClient();
 
-    createClientMock.mockResolvedValue(serverClient);
     createAdminClientMock.mockReturnValue(adminClient);
 
     const formData = new FormData();
     formData.set("email", "user@example.com");
     formData.set("flow", "signup");
 
-    await expect(resendVerificationAction(null, formData)).resolves.toEqual({ success: true });
+    await expect(resendVerificationAction(null, formData)).resolves.toEqual({
+      success: true,
+      cooldownSeconds: 60,
+    });
 
-    expect(serverClient.auth.resend).toHaveBeenCalledWith({
-      type: "signup",
+    expect(adminClient.auth.signInWithOtp).toHaveBeenCalledWith({
       email: "user@example.com",
       options: {
+        shouldCreateUser: false,
         emailRedirectTo: "http://localhost:3000/auth/callback?signup_confirm=1",
       },
     });
-    expect(adminClient.auth.signInWithOtp).not.toHaveBeenCalled();
   });
 
   it("uses an activation magic link directly for guest-upgrade verification", async () => {
-    const serverClient = makeServerClient({
-      user: null,
-      resendError: { message: "Should not be called" },
-    });
     const adminClient = makeAdminClient();
 
-    createClientMock.mockResolvedValue(serverClient);
     createAdminClientMock.mockReturnValue(adminClient);
 
     const formData = new FormData();
     formData.set("email", "user@example.com");
     formData.set("flow", "upgrade");
 
-    await expect(resendVerificationAction(null, formData)).resolves.toEqual({ success: true });
+    await expect(resendVerificationAction(null, formData)).resolves.toEqual({
+      success: true,
+      cooldownSeconds: 60,
+    });
 
-    expect(serverClient.auth.resend).not.toHaveBeenCalled();
     expect(adminClient.auth.signInWithOtp).toHaveBeenCalledWith({
       email: "user@example.com",
       options: {
@@ -418,10 +442,8 @@ describe("resend verification", () => {
       })
     );
 
-    const serverClient = makeServerClient({ user: null });
     const adminClient = makeAdminClient();
 
-    createClientMock.mockResolvedValue(serverClient);
     createAdminClientMock.mockReturnValue(adminClient);
 
     const signupFormData = new FormData();
@@ -430,12 +452,13 @@ describe("resend verification", () => {
 
     await expect(resendVerificationAction(null, signupFormData)).resolves.toEqual({
       success: true,
+      cooldownSeconds: 60,
     });
 
-    expect(serverClient.auth.resend).toHaveBeenCalledWith({
-      type: "signup",
+    expect(adminClient.auth.signInWithOtp).toHaveBeenNthCalledWith(1, {
       email: "user@example.com",
       options: {
+        shouldCreateUser: false,
         emailRedirectTo: "https://factorlab.app/auth/callback?signup_confirm=1",
       },
     });
@@ -446,9 +469,10 @@ describe("resend verification", () => {
 
     await expect(resendVerificationAction(null, upgradeFormData)).resolves.toEqual({
       success: true,
+      cooldownSeconds: 60,
     });
 
-    expect(adminClient.auth.signInWithOtp).toHaveBeenCalledWith({
+    expect(adminClient.auth.signInWithOtp).toHaveBeenNthCalledWith(2, {
       email: "user@example.com",
       options: {
         shouldCreateUser: false,
@@ -458,21 +482,30 @@ describe("resend verification", () => {
   });
 
   it("falls back to an activation magic link when legacy verify links omit flow", async () => {
-    const serverClient = makeServerClient({
-      user: null,
-      resendError: { message: "Email is already confirmed" },
-    });
     const adminClient = makeAdminClient();
+    adminClient.auth.signInWithOtp
+      .mockResolvedValueOnce({ error: { message: "Email is already confirmed" } })
+      .mockResolvedValueOnce({ error: null });
 
-    createClientMock.mockResolvedValue(serverClient);
     createAdminClientMock.mockReturnValue(adminClient);
 
     const formData = new FormData();
     formData.set("email", "user@example.com");
 
-    await expect(resendVerificationAction(null, formData)).resolves.toEqual({ success: true });
+    await expect(resendVerificationAction(null, formData)).resolves.toEqual({
+      success: true,
+      cooldownSeconds: 60,
+    });
 
-    expect(adminClient.auth.signInWithOtp).toHaveBeenCalledWith({
+    expect(adminClient.auth.signInWithOtp).toHaveBeenNthCalledWith(1, {
+      email: "user@example.com",
+      options: {
+        shouldCreateUser: false,
+        emailRedirectTo: "http://localhost:3000/auth/callback?signup_confirm=1",
+      },
+    });
+
+    expect(adminClient.auth.signInWithOtp).toHaveBeenNthCalledWith(2, {
       email: "user@example.com",
       options: {
         shouldCreateUser: false,
@@ -481,20 +514,45 @@ describe("resend verification", () => {
     });
   });
 
-  it("returns the rate-limit error without attempting a resend", async () => {
+  it("returns a cooldown state without attempting a resend when the local limiter blocks it", async () => {
     checkResendRateLimitMock.mockResolvedValue({
       allowed: false,
-      error: "Please wait before requesting another verification email.",
+      error: "Please wait 42 seconds before requesting another verification email.",
+      retryAfterSeconds: 42,
     });
 
     const formData = new FormData();
     formData.set("email", "user@example.com");
 
     await expect(resendVerificationAction(null, formData)).resolves.toEqual({
-      error: "Please wait before requesting another verification email.",
+      rateLimited: true,
+      cooldownSeconds: 42,
+      message: "Please wait 42 seconds before requesting another verification email.",
     });
 
     expect(createClientMock).not.toHaveBeenCalled();
     expect(createAdminClientMock).not.toHaveBeenCalled();
+  });
+
+  it("surfaces provider-side resend throttling as a provider-limited state", async () => {
+    const adminClient = makeAdminClient({
+      otpError: {
+        message: "For security purposes, you can only request this after 60 seconds.",
+        status: 429,
+        code: "over_email_send_rate_limit",
+      },
+    });
+
+    createAdminClientMock.mockReturnValue(adminClient);
+
+    const formData = new FormData();
+    formData.set("email", "user@example.com");
+    formData.set("flow", "signup");
+
+    await expect(resendVerificationAction(null, formData)).resolves.toEqual({
+      providerLimited: true,
+      message:
+        "We've sent too many verification emails recently. Please try again later. Check your inbox and spam for the latest email.",
+    });
   });
 });

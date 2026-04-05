@@ -22,6 +22,7 @@ import { Label } from "@/components/ui/label";
 import { Spinner } from "@/components/ui/spinner";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { subscribeToEmailVerificationComplete } from "@/lib/auth/email-verification-sync";
+import { getRemainingResendCooldownSeconds } from "@/lib/auth/resend-verification";
 import { normalizeVerificationFlow, type VerificationFlow } from "@/lib/auth/verification-flow";
 import { createClient } from "@/lib/supabase/client";
 
@@ -39,11 +40,21 @@ function normalizeAuthTab(tab: string | null | undefined): AuthTab | undefined {
   }
 }
 
+function parseSentAt(value: string | null | undefined) {
+  if (!value) {
+    return undefined;
+  }
+
+  const sentAt = Number(value);
+  return Number.isFinite(sentAt) && sentAt > 0 ? sentAt : undefined;
+}
+
 export function LoginForm({
   authError,
   initialTab,
   initialEmail,
   initialFlow,
+  initialSentAt,
   verifyError,
   forgotError,
   sessionUser,
@@ -52,6 +63,7 @@ export function LoginForm({
   initialTab?: AuthTab;
   initialEmail?: string;
   initialFlow?: VerificationFlow;
+  initialSentAt?: number;
   verifyError?: string;
   forgotError?: string;
   sessionUser?: {
@@ -92,6 +104,7 @@ export function LoginForm({
   const searchEmail = searchParams.get("email") ?? undefined;
   const hasSearchFlow = searchParams.has("flow");
   const searchFlow = normalizeVerificationFlow(searchParams.get("flow"));
+  const searchSentAt = parseSentAt(searchParams.get("sent_at"));
   const [activeTab, setActiveTab] = useState<AuthTab>(searchTab ?? initialTab ?? "signin");
 
   // Optimistic from server prop, validated client-side on mount.
@@ -137,6 +150,8 @@ export function LoginForm({
     searchFlow ?? initialFlow
   );
   const [resendCooldown, setResendCooldown] = useState(0);
+  const [resendBannerMode, setResendBannerMode] = useState<"sent" | "cooldown" | null>(null);
+  const verifySentAt = searchSentAt ?? initialSentAt;
 
   useEffect(() => {
     if (searchTab) {
@@ -211,10 +226,34 @@ export function LoginForm({
     };
   }, [activeTab, router]);
 
-  // Start 60s cooldown after successful resend
   useEffect(() => {
-    if ("success" in (resendState ?? {})) {
-      setResendCooldown(60);
+    if (activeTab !== "verify" || verifyError || verifySentAt === undefined) {
+      return;
+    }
+
+    const remaining = getRemainingResendCooldownSeconds(verifySentAt);
+    if (remaining <= 0) {
+      return;
+    }
+
+    setResendCooldown((current) => Math.max(current, remaining));
+    setResendBannerMode((current) => current ?? "cooldown");
+  }, [activeTab, verifyError, verifySentAt]);
+
+  useEffect(() => {
+    if (!resendState) {
+      return;
+    }
+
+    if ("success" in resendState) {
+      setResendCooldown(resendState.cooldownSeconds);
+      setResendBannerMode("sent");
+      return;
+    }
+
+    if ("rateLimited" in resendState) {
+      setResendCooldown(resendState.cooldownSeconds);
+      setResendBannerMode("cooldown");
     }
   }, [resendState]);
 
@@ -301,6 +340,7 @@ export function LoginForm({
     nextParams.delete("tab");
     nextParams.delete("email");
     nextParams.delete("flow");
+    nextParams.delete("sent_at");
     replaceAuthUrl(nextParams);
   }
 
@@ -314,6 +354,7 @@ export function LoginForm({
     nextParams.set("tab", "verify");
     nextParams.set("email", email);
     nextParams.set("flow", flow);
+    nextParams.delete("sent_at");
     replaceAuthUrl(nextParams);
     const formData = new FormData();
     formData.set("email", email);
@@ -461,6 +502,31 @@ export function LoginForm({
               </p>
             </div>
 
+            {resendCooldown > 0 && resendBannerMode && (
+              <Alert
+                className={
+                  resendBannerMode === "sent"
+                    ? "border-primary/30 bg-primary/10 text-primary"
+                    : "border-amber-500/40 bg-amber-500/10"
+                }
+              >
+                {resendBannerMode === "sent" ? (
+                  <CheckCircle2 className="size-4" />
+                ) : (
+                  <Mail className="size-4 text-amber-300" />
+                )}
+                <AlertDescription
+                  className={
+                    resendBannerMode === "sent" ? "text-primary/90" : "text-amber-200"
+                  }
+                >
+                  {resendBannerMode === "sent"
+                    ? `Verification email sent. You can resend again in ${resendCooldown}s.`
+                    : `A verification email was sent recently. You can resend again in ${resendCooldown}s.`}
+                </AlertDescription>
+              </Alert>
+            )}
+
             {verifyError && (
               <Alert variant="destructive" className="border-destructive/40 bg-destructive/10">
                 <AlertCircle className="size-4" />
@@ -477,14 +543,15 @@ export function LoginForm({
               </Alert>
             )}
 
-            {"success" in (resendState ?? {}) && (
-              <Alert className="border-primary/30 bg-primary/10 text-primary">
-                <CheckCircle2 className="size-4" />
-                <AlertDescription className="text-primary/90">
-                  Verification email resent. Check your inbox.
-                </AlertDescription>
-              </Alert>
-            )}
+            {"providerLimited" in (resendState ?? {}) &&
+              (resendState as { providerLimited: true; message: string } | null)?.message && (
+                <Alert className="border-amber-500/40 bg-amber-500/10">
+                  <Mail className="size-4 text-amber-300" />
+                  <AlertDescription className="text-amber-200">
+                    {(resendState as { providerLimited: true; message: string }).message}
+                  </AlertDescription>
+                </Alert>
+              )}
 
             <form action={resendAction_}>
               {lockedVerifyEmail ? (
@@ -520,7 +587,7 @@ export function LoginForm({
                     Sending...
                   </>
                 ) : resendCooldown > 0 ? (
-                  `Resend in ${resendCooldown}s`
+                  `Resend again in ${resendCooldown}s`
                 ) : (
                   "Resend verification email"
                 )}
