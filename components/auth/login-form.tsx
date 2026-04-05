@@ -22,6 +22,7 @@ import { Label } from "@/components/ui/label";
 import { Spinner } from "@/components/ui/spinner";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { subscribeToEmailVerificationComplete } from "@/lib/auth/email-verification-sync";
+import { normalizeVerificationFlow, type VerificationFlow } from "@/lib/auth/verification-flow";
 import { createClient } from "@/lib/supabase/client";
 
 type AuthTab = "signin" | "signup" | "verify" | "forgot";
@@ -42,6 +43,7 @@ export function LoginForm({
   authError,
   initialTab,
   initialEmail,
+  initialFlow,
   verifyError,
   forgotError,
   sessionUser,
@@ -49,6 +51,7 @@ export function LoginForm({
   authError?: string;
   initialTab?: AuthTab;
   initialEmail?: string;
+  initialFlow?: VerificationFlow;
   verifyError?: string;
   forgotError?: string;
   sessionUser?: {
@@ -87,6 +90,8 @@ export function LoginForm({
   const [guestError, setGuestError] = useState<string | null>(null);
   const searchTab = normalizeAuthTab(searchParams.get("tab"));
   const searchEmail = searchParams.get("email") ?? undefined;
+  const hasSearchFlow = searchParams.has("flow");
+  const searchFlow = normalizeVerificationFlow(searchParams.get("flow"));
   const [activeTab, setActiveTab] = useState<AuthTab>(searchTab ?? initialTab ?? "signin");
 
   // Optimistic from server prop, validated client-side on mount.
@@ -128,6 +133,9 @@ export function LoginForm({
   const [passwordMismatchError, setPasswordMismatchError] = useState<string | null>(null);
   const lockedVerifyEmail = searchEmail ?? initialEmail;
   const [verifyEmail, setVerifyEmail] = useState(lockedVerifyEmail ?? "");
+  const [verifyFlow, setVerifyFlow] = useState<VerificationFlow | undefined>(
+    searchFlow ?? initialFlow
+  );
   const [resendCooldown, setResendCooldown] = useState(0);
 
   useEffect(() => {
@@ -141,6 +149,17 @@ export function LoginForm({
       setVerifyEmail(searchEmail);
     }
   }, [searchEmail]);
+
+  useEffect(() => {
+    if (hasSearchFlow) {
+      setVerifyFlow(searchFlow);
+      return;
+    }
+
+    if (searchTab === "verify" && initialFlow === undefined) {
+      setVerifyFlow(undefined);
+    }
+  }, [hasSearchFlow, initialFlow, searchFlow, searchTab]);
 
   // When on the verify tab, listen for a sign-in from the activation link opened
   // in another tab. Supabase writes the session to localStorage and fires
@@ -277,23 +296,28 @@ export function LoginForm({
     setActiveTab(tab);
     setGuestError(null);
     setPasswordMismatchError(null);
+    setVerifyFlow(undefined);
     const nextParams = new URLSearchParams(searchParams.toString());
     nextParams.delete("tab");
     nextParams.delete("email");
+    nextParams.delete("flow");
     replaceAuthUrl(nextParams);
   }
 
-  function goToVerify(email: string) {
+  function goToVerify(email: string, flow: VerificationFlow = "signup") {
     setVerifyEmail(email);
+    setVerifyFlow(flow);
     setActiveTab("verify");
     setGuestError(null);
     setPasswordMismatchError(null);
     const nextParams = new URLSearchParams(searchParams.toString());
     nextParams.set("tab", "verify");
     nextParams.set("email", email);
+    nextParams.set("flow", flow);
     replaceAuthUrl(nextParams);
     const formData = new FormData();
     formData.set("email", email);
+    formData.set("flow", flow);
     resendAction_(formData);
   }
 
@@ -483,6 +507,7 @@ export function LoginForm({
                   />
                 </div>
               )}
+              {verifyFlow && <input type="hidden" name="flow" value={verifyFlow} />}
               <Button
                 type="submit"
                 disabled={isResendPending || resendCooldown > 0}
@@ -579,9 +604,11 @@ export function LoginForm({
                     onClick={() => {
                       setForgotEmail(signInEmail);
                       setActiveTab("forgot");
+                      setVerifyFlow(undefined);
                       const nextParams = new URLSearchParams(searchParams.toString());
                       nextParams.set("tab", "forgot");
                       nextParams.delete("email");
+                      nextParams.delete("flow");
                       replaceAuthUrl(nextParams);
                     }}
                     className="text-xs text-white/45 hover:text-emerald-400 hover:underline"

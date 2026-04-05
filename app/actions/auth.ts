@@ -6,6 +6,11 @@ import { redirect } from "next/navigation";
 import { z } from "zod";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
+import {
+  buildVerifyUrl,
+  normalizeVerificationFlow,
+  type VerificationFlow,
+} from "@/lib/auth/verification-flow";
 import { checkAccountCreationRateLimit, checkResendRateLimit } from "@/lib/supabase/rate-limit";
 
 async function transferGuestRuns(guestUserId: string, newUserId: string) {
@@ -55,6 +60,38 @@ function getSignupVerificationCallbackUrl(origin: string) {
 
 function getActivationVerificationCallbackUrl(origin: string) {
   return `${origin}/auth/callback?activation=1`;
+}
+
+async function sendVerificationEmail({
+  email,
+  origin,
+  flow,
+}: {
+  email: string;
+  origin: string;
+  flow: VerificationFlow;
+}): Promise<{ error: { message: string } | null }> {
+  if (flow === "upgrade") {
+    const admin = createAdminClient();
+    const { error } = await admin.auth.signInWithOtp({
+      email,
+      options: {
+        shouldCreateUser: false,
+        emailRedirectTo: getActivationVerificationCallbackUrl(origin),
+      },
+    });
+
+    return { error };
+  }
+
+  const supabase = await createClient();
+  const { error } = await supabase.auth.resend({
+    type: "signup",
+    email,
+    options: { emailRedirectTo: getSignupVerificationCallbackUrl(origin) },
+  });
+
+  return { error };
 }
 
 async function checkCreateAccountRateLimit(): Promise<AuthState> {
@@ -175,7 +212,12 @@ async function upgradeGuestUserInPlace({
 
   await supabase.auth.signOut();
 
-  redirect(`/login?tab=verify&email=${encodeURIComponent(email)}`);
+  redirect(
+    buildVerifyUrl({
+      email,
+      flow: "upgrade",
+    })
+  );
 }
 
 export async function upgradeGuestToEmailPassword({
@@ -328,7 +370,10 @@ export async function signUpAction(_prev: AuthState, formData: FormData): Promis
 
   if (!signUpData.session) {
     // Email confirmation required — session will be established when they click the link
-    const verifyUrl = `/login?tab=verify&email=${encodeURIComponent(parsed.data.email)}`;
+    const verifyUrl = buildVerifyUrl({
+      email: parsed.data.email,
+      flow: "signup",
+    });
     redirect(verifyUrl);
   }
 
@@ -400,6 +445,7 @@ export async function resendVerificationAction(
   formData: FormData
 ): Promise<ResendState> {
   const email = String(formData.get("email") ?? "").trim();
+  const flow = normalizeVerificationFlow(String(formData.get("flow") ?? ""));
   if (!email) {
     return { error: "Email address is required." };
   }
@@ -410,33 +456,36 @@ export async function resendVerificationAction(
   }
 
   const origin = await getRequestOrigin();
-  const emailRedirectTo = getSignupVerificationCallbackUrl(origin);
 
-  const supabase = await createClient();
-  const { error } = await supabase.auth.resend({
-    type: "signup",
-    email,
-    options: { emailRedirectTo },
-  });
-
-  if (error) {
-    // resend({ type: 'signup' }) fails for already-confirmed accounts (e.g. guest
-    // upgrades where email_confirm:true was used). Fall back to an admin magic-link
-    // which bypasses OTP rate limits and works regardless of confirmation state.
-    // resend({ type: 'signup' }) fails for already-confirmed accounts (e.g. guest
-    // upgrades). Fall back to admin signInWithOtp which uses the service-role key
-    // and bypasses GoTrue OTP rate limits.
-    const admin = createAdminClient();
-    const { error: otpError } = await admin.auth.signInWithOtp({
+  if (flow) {
+    const { error } = await sendVerificationEmail({
       email,
-      options: {
-        shouldCreateUser: false,
-        emailRedirectTo: getActivationVerificationCallbackUrl(origin),
-      },
+      origin,
+      flow,
     });
-    if (otpError) {
+    if (error) {
       return { error: error.message };
     }
+
+    return { success: true };
+  }
+
+  const { error: signupError } = await sendVerificationEmail({
+    email,
+    origin,
+    flow: "signup",
+  });
+  if (!signupError) {
+    return { success: true };
+  }
+
+  const { error: upgradeError } = await sendVerificationEmail({
+    email,
+    origin,
+    flow: "upgrade",
+  });
+  if (upgradeError) {
+    return { error: signupError.message };
   }
 
   return { success: true };

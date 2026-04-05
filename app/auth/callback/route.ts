@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 import type { EmailOtpType } from "@supabase/supabase-js";
+import { type VerificationFlow } from "@/lib/auth/verification-flow";
 
 export async function GET(request: NextRequest) {
   const { searchParams, origin } = new URL(request.url);
@@ -25,10 +26,20 @@ export async function GET(request: NextRequest) {
   const shouldRouteToVerifiedPage =
     !isResetFlow &&
     ((tokenHash != null && verificationType != null) || isActivation || isSignupConfirm);
+  const verificationFlow: VerificationFlow | undefined = isResetFlow
+    ? undefined
+    : isActivation
+      ? "upgrade"
+      : isSignupConfirm || verificationType === "signup"
+        ? "signup"
+        : undefined;
 
   function errorRedirect(message?: string) {
     const loginUrl = new URL("/login", origin);
     loginUrl.searchParams.set("tab", isResetFlow ? "forgot" : "verify");
+    if (verificationFlow) {
+      loginUrl.searchParams.set("flow", verificationFlow);
+    }
     loginUrl.searchParams.set(
       "error",
       message ??
@@ -42,6 +53,9 @@ export async function GET(request: NextRequest) {
   function hashForwardResponse() {
     const loginUrl = new URL("/login", origin);
     loginUrl.searchParams.set("tab", isResetFlow ? "forgot" : "verify");
+    if (verificationFlow) {
+      loginUrl.searchParams.set("flow", verificationFlow);
+    }
     loginUrl.searchParams.set(
       "error",
       isResetFlow

@@ -66,7 +66,7 @@ function makeServerClient(options?: {
   refreshError?: { message: string } | null;
   resendError?: { message: string } | null;
 }) {
-  const user = options?.user ?? makeGuestUser();
+  const user = options?.user === undefined ? makeGuestUser() : options.user;
   const refreshedUser = options?.refreshedUser ?? {
     id: "guest-user-id",
     email: "user@example.com",
@@ -172,7 +172,7 @@ describe("guest account upgrade", () => {
         email: "user@example.com",
         password: "Password!",
       })
-    ).rejects.toThrow("REDIRECT:/login?tab=verify&email=user%40example.com");
+    ).rejects.toThrow("REDIRECT:/login?tab=verify&email=user%40example.com&flow=upgrade");
 
     expect(adminClient.auth.admin.updateUserById).toHaveBeenCalledWith(
       "guest-user-id",
@@ -207,7 +207,7 @@ describe("guest account upgrade", () => {
         email: "user@example.com",
         password: "Password!",
       })
-    ).rejects.toThrow("REDIRECT:/login?tab=verify&email=user%40example.com");
+    ).rejects.toThrow("REDIRECT:/login?tab=verify&email=user%40example.com&flow=upgrade");
 
     expect(adminClient.auth.signInWithOtp).toHaveBeenCalledTimes(1);
     expect(serverClient.auth.signOut).toHaveBeenCalledTimes(1);
@@ -254,7 +254,7 @@ describe("guest account upgrade", () => {
     formData.set("password", "Password!");
 
     await expect(signUpAction(null, formData)).rejects.toThrow(
-      "REDIRECT:/login?tab=verify&email=user%40example.com"
+      "REDIRECT:/login?tab=verify&email=user%40example.com&flow=upgrade"
     );
 
     expect(adminClient.auth.admin.updateUserById).toHaveBeenCalledWith(
@@ -265,6 +265,44 @@ describe("guest account upgrade", () => {
       })
     );
     expect(serverClient.auth.signUp).not.toHaveBeenCalled();
+  });
+});
+
+describe("sign up verification flow", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+
+    headersMock.mockResolvedValue(
+      new Headers({
+        "x-forwarded-for": "127.0.0.1",
+        origin: "http://localhost:3000",
+      })
+    );
+    checkAccountCreationRateLimitMock.mockResolvedValue({ allowed: true });
+  });
+
+  it("redirects new signups to the verify tab with flow=signup", async () => {
+    const serverClient = makeServerClient({ user: null });
+    serverClient.auth.signUp.mockResolvedValue({
+      data: {
+        user: {
+          id: "new-user-id",
+          identities: [{ id: "identity-1" }],
+        },
+        session: null,
+      },
+      error: null,
+    });
+
+    createClientMock.mockResolvedValue(serverClient);
+
+    const formData = new FormData();
+    formData.set("email", "user@example.com");
+    formData.set("password", "Password!");
+
+    await expect(signUpAction(null, formData)).rejects.toThrow(
+      "REDIRECT:/login?tab=verify&email=user%40example.com&flow=signup"
+    );
   });
 });
 
@@ -291,6 +329,7 @@ describe("resend verification", () => {
 
     const formData = new FormData();
     formData.set("email", "user@example.com");
+    formData.set("flow", "signup");
 
     await expect(resendVerificationAction(null, formData)).resolves.toEqual({ success: true });
 
@@ -304,7 +343,33 @@ describe("resend verification", () => {
     expect(adminClient.auth.signInWithOtp).not.toHaveBeenCalled();
   });
 
-  it("falls back to an activation magic link when signup resend fails", async () => {
+  it("uses an activation magic link directly for guest-upgrade verification", async () => {
+    const serverClient = makeServerClient({
+      user: null,
+      resendError: { message: "Should not be called" },
+    });
+    const adminClient = makeAdminClient();
+
+    createClientMock.mockResolvedValue(serverClient);
+    createAdminClientMock.mockReturnValue(adminClient);
+
+    const formData = new FormData();
+    formData.set("email", "user@example.com");
+    formData.set("flow", "upgrade");
+
+    await expect(resendVerificationAction(null, formData)).resolves.toEqual({ success: true });
+
+    expect(serverClient.auth.resend).not.toHaveBeenCalled();
+    expect(adminClient.auth.signInWithOtp).toHaveBeenCalledWith({
+      email: "user@example.com",
+      options: {
+        shouldCreateUser: false,
+        emailRedirectTo: "http://localhost:3000/auth/callback?activation=1",
+      },
+    });
+  });
+
+  it("falls back to an activation magic link when legacy verify links omit flow", async () => {
     const serverClient = makeServerClient({
       user: null,
       resendError: { message: "Email is already confirmed" },

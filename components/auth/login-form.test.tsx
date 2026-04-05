@@ -198,7 +198,7 @@ describe("LoginForm guest-upgrade mode", () => {
     });
   });
 
-  it("7) syncs to the verify tab when the page rerenders with new search params", async () => {
+  it("7) syncs to the verify tab and flow when the page rerenders with new search params", async () => {
     mockGetUser.mockResolvedValue({
       data: { user: null },
       error: null,
@@ -210,13 +210,15 @@ describe("LoginForm guest-upgrade mode", () => {
       expect(screen.getByRole("heading", { name: "Sign in" })).toBeInTheDocument();
     });
 
-    mockSearchParams = new URLSearchParams("tab=verify&email=user%40example.com");
+    mockSearchParams = new URLSearchParams("tab=verify&email=user%40example.com&flow=upgrade");
     rerender(<LoginForm sessionUser={null} />);
 
     await waitFor(() => {
       expect(screen.getByRole("heading", { name: "Verify your email" })).toBeInTheDocument();
       expect(screen.getByText("user@example.com")).toBeInTheDocument();
     });
+
+    expect(document.querySelector('input[name="flow"]')).toHaveAttribute("value", "upgrade");
   });
 
   it("8) proceeds to the dashboard if the verify tab finds an existing session", async () => {
@@ -235,5 +237,20 @@ describe("LoginForm guest-upgrade mode", () => {
       expect(mockRouterRefresh).toHaveBeenCalledTimes(1);
       expect(mockRouterReplace).toHaveBeenCalledWith("/dashboard");
     });
+  });
+
+  it("9) leaves flow unset for legacy verify URLs so resend can use compatibility fallback", async () => {
+    mockGetUser.mockResolvedValue({
+      data: { user: null },
+      error: null,
+    });
+
+    render(<LoginForm sessionUser={null} initialTab="verify" initialEmail="user@example.com" />);
+
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: "Verify your email" })).toBeInTheDocument();
+    });
+
+    expect(document.querySelector('input[name="flow"]')).toBeNull();
   });
 });

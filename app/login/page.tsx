@@ -3,18 +3,25 @@ import { redirect } from "next/navigation";
 import { LoginForm } from "@/components/auth/login-form";
 import { LoginVisual } from "@/components/auth/login-visual";
 import { Card } from "@/components/ui/card";
+import { normalizeVerificationFlow } from "@/lib/auth/verification-flow";
 import { createClient } from "@/lib/supabase/server";
 
 export default async function LoginPage({
   searchParams,
 }: {
-  searchParams: Promise<{ error?: string; tab?: string; email?: string; upgrade?: string }>;
+  searchParams: Promise<{
+    error?: string;
+    tab?: string;
+    email?: string;
+    flow?: string;
+    upgrade?: string;
+  }>;
 }) {
   const supabase = await createClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();
-  const { error, tab, email, upgrade } = await searchParams;
+  const { error, tab, email, flow, upgrade } = await searchParams;
 
   const isVerify = tab === "verify";
   const isForgot = tab === "forgot";
@@ -44,6 +51,7 @@ export default async function LoginPage({
               authError={isVerify || isForgot ? undefined : error}
               initialTab={initialTab}
               initialEmail={email}
+              initialFlow={isVerify ? normalizeVerificationFlow(flow) : undefined}
               verifyError={isVerify ? error : undefined}
               forgotError={isForgot ? error : undefined}
               sessionUser={

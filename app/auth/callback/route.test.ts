@@ -64,6 +64,17 @@ describe("/auth/callback", () => {
     );
   });
 
+  it("redirects guest-upgrade activations to the verified page", async () => {
+    const response = await GET(
+      new NextRequest("https://factorlab.test/auth/callback?code=pkce-code&activation=1")
+    );
+
+    expect(mockExchangeCodeForSession).toHaveBeenCalledWith("pkce-code");
+    expect(response.headers.get("location")).toBe(
+      "https://factorlab.test/auth/verified?verified=1"
+    );
+  });
+
   it("redirects token-hash signup confirmations to the verified page", async () => {
     const response = await GET(
       new NextRequest("https://factorlab.test/auth/callback?token_hash=signup-token&type=signup")
@@ -78,6 +89,30 @@ describe("/auth/callback", () => {
     );
   });
 
+  it("sends invalid signup confirmations back to the verify tab with flow=signup", async () => {
+    mockVerifyOtp.mockResolvedValueOnce({ error: { message: "Expired link" } });
+
+    const response = await GET(
+      new NextRequest("https://factorlab.test/auth/callback?token_hash=signup-token&type=signup")
+    );
+
+    expect(response.headers.get("location")).toBe(
+      "https://factorlab.test/login?tab=verify&flow=signup&error=Expired+link"
+    );
+  });
+
+  it("sends invalid guest-upgrade activations back to the verify tab with flow=upgrade", async () => {
+    const response = await GET(
+      new NextRequest(
+        "https://factorlab.test/auth/callback?activation=1&error=access_denied&error_description=Expired%20link"
+      )
+    );
+
+    expect(response.headers.get("location")).toBe(
+      "https://factorlab.test/login?tab=verify&flow=upgrade&error=Expired+link"
+    );
+  });
+
   it("keeps reset-password hash forwarding pointed at /reset-password", async () => {
     const response = await GET(
       new NextRequest("https://factorlab.test/auth/callback?next=/reset-password")
@@ -89,7 +124,7 @@ describe("/auth/callback", () => {
     expect(body).toContain("https://factorlab.test/reset-password");
   });
 
-  it("sends invalid verification links back to the verify tab", async () => {
+  it("sends generic invalid verification links back to the verify tab", async () => {
     const response = await GET(
       new NextRequest(
         "https://factorlab.test/auth/callback?error=access_denied&error_description=Expired%20link"
