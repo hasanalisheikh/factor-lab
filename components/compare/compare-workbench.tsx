@@ -16,6 +16,7 @@ import { Line, LineChart, CartesianGrid, XAxis, YAxis } from "recharts";
 import type { CompareRunBundle, RunWithMetrics, RunMetricsRow } from "@/lib/supabase/types";
 import { STRATEGY_LABELS, type StrategyId } from "@/lib/types";
 import { getRunBenchmark } from "@/lib/benchmark";
+import { alignEquityCurveByDate, type EquityCurvePoint } from "@/lib/equity-curve";
 
 function extractMetrics(run: RunWithMetrics): RunMetricsRow | null {
   if (!run.run_metrics) return null;
@@ -52,7 +53,7 @@ const METRICS: MetricDef[] = [
   },
 ];
 
-function normalizeSeries(equity: CompareRunBundle["equity"]) {
+function normalizeSeries(equity: EquityCurvePoint[]) {
   if (equity.length === 0) return [];
   const firstP = equity[0].portfolio;
   const firstB = equity[0].benchmark;
@@ -115,23 +116,38 @@ export function CompareWorkbench({ bundles, strategyRuns = [] }: Props) {
 
   const chartData = useMemo(() => {
     if (!runA || !runB) return [];
-    const a = normalizeSeries(runA.equity);
-    const b = normalizeSeries(runB.equity);
-    const dates = Array.from(new Set([...a.map((x) => x.date), ...b.map((x) => x.date)])).sort();
+
+    // Clean each series the same way the run-detail chart does: remove invalid
+    // portfolio values and forward-fill benchmark gaps.
+    const aClean = alignEquityCurveByDate(runA.equity);
+    const bClean = alignEquityCurveByDate(runB.equity);
+
+    if (aClean.length === 0 || bClean.length === 0) return [];
+
+    // Use the INTERSECTION of both date sets so neither line has null gaps.
+    // A union merge with null produces a visual cliff where one run ends before
+    // the other — Recharts draws nothing at null values, making the shorter
+    // series appear to flatline and cut off mid-chart.
+    const bDateSet = new Set(bClean.map((x) => x.date));
+    const aDateSet = new Set(aClean.map((x) => x.date));
+    const aIntersection = aClean.filter((x) => bDateSet.has(x.date));
+    const bIntersection = bClean.filter((x) => aDateSet.has(x.date));
+
+    if (aIntersection.length === 0) return [];
+
+    // Normalize each filtered series to 100 at the shared start date.
+    const a = normalizeSeries(aIntersection);
+    const b = normalizeSeries(bIntersection);
     const aByDate = new Map(a.map((x) => [x.date, x]));
     const bByDate = new Map(b.map((x) => [x.date, x]));
 
-    return dates.map((date) => {
-      const av = aByDate.get(date);
-      const bv = bByDate.get(date);
-      return {
-        date,
-        runA: av?.portfolio ?? null,
-        runB: bv?.portfolio ?? null,
-        benchA: av?.benchmark ?? null,
-        benchB: bv?.benchmark ?? null,
-      };
-    });
+    return aIntersection.map(({ date }) => ({
+      date,
+      runA: aByDate.get(date)?.portfolio ?? null,
+      runB: bByDate.get(date)?.portfolio ?? null,
+      benchA: aByDate.get(date)?.benchmark ?? null,
+      benchB: bByDate.get(date)?.benchmark ?? null,
+    }));
   }, [runA, runB]);
 
   if (bundles.length < 2) {
