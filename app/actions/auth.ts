@@ -48,10 +48,36 @@ const emailPasswordSchema = z.object({
 const ACCOUNT_EXISTS_ERROR =
   "An account with this email already exists. Sign in to that account instead.";
 
+function normalizeOrigin(origin: string) {
+  return origin.replace(/\/+$/, "");
+}
+
 async function getRequestOrigin() {
-  return (
-    process.env.NEXT_PUBLIC_SITE_URL ?? (await headers()).get("origin") ?? "http://localhost:3000"
-  );
+  if (process.env.NEXT_PUBLIC_SITE_URL) {
+    return normalizeOrigin(process.env.NEXT_PUBLIC_SITE_URL);
+  }
+
+  const headersList = await headers();
+  const origin = headersList.get("origin");
+  if (origin) {
+    return normalizeOrigin(origin);
+  }
+
+  const forwardedHost = headersList.get("x-forwarded-host")?.split(",")[0]?.trim();
+  const forwardedProto = headersList.get("x-forwarded-proto")?.split(",")[0]?.trim();
+  if (forwardedHost) {
+    return normalizeOrigin(`${forwardedProto ?? "https"}://${forwardedHost}`);
+  }
+
+  const host = headersList.get("host")?.split(",")[0]?.trim();
+  if (host) {
+    const protocol =
+      forwardedProto ??
+      (host.startsWith("localhost") || host.startsWith("127.0.0.1") ? "http" : "https");
+    return normalizeOrigin(`${protocol}://${host}`);
+  }
+
+  return "http://localhost:3000";
 }
 
 function getSignupVerificationCallbackUrl(origin: string) {

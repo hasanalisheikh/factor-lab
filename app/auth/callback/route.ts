@@ -4,6 +4,12 @@ import { cookies } from "next/headers";
 import type { EmailOtpType } from "@supabase/supabase-js";
 import { type VerificationFlow } from "@/lib/auth/verification-flow";
 
+function isVerificationEmailOtpType(
+  verificationType: string | null
+): verificationType is Extract<EmailOtpType, "signup" | "email_change"> {
+  return verificationType === "signup" || verificationType === "email_change";
+}
+
 export async function GET(request: NextRequest) {
   const { searchParams, origin } = new URL(request.url);
   const code = searchParams.get("code");
@@ -21,11 +27,12 @@ export async function GET(request: NextRequest) {
   const isSignupConfirm = searchParams.get("signup_confirm") === "1";
   const isResetFlow = next.startsWith("/reset-password");
   const verifiedPagePath = "/auth/verified?verified=1";
+  const isVerificationEmailFlow = isVerificationEmailOtpType(verificationType);
   const verificationCompletePath =
-    !isResetFlow && (isActivation || isSignupConfirm) ? verifiedPagePath : null;
-  const shouldRouteToVerifiedPage =
-    !isResetFlow &&
-    ((tokenHash != null && verificationType != null) || isActivation || isSignupConfirm);
+    !isResetFlow && (isActivation || isSignupConfirm || isVerificationEmailFlow)
+      ? verifiedPagePath
+      : null;
+  const successPath = verificationCompletePath ?? (isResetFlow ? "/reset-password" : next);
   const verificationFlow: VerificationFlow | undefined = isResetFlow
     ? undefined
     : isActivation
@@ -63,11 +70,8 @@ export async function GET(request: NextRequest) {
         : "Verification link expired. Please request a new one."
     );
 
-    const successUrl = new URL(
-      verificationCompletePath ?? (isResetFlow ? "/reset-password" : "/login"),
-      origin
-    );
-    const destination = successUrl.toString();
+    const defaultSuccessUrl = new URL(successPath, origin).toString();
+    const verifiedUrl = new URL(verifiedPagePath, origin).toString();
     const fallback = loginUrl.toString();
     const html = `<!doctype html>
 <html lang="en">
@@ -79,8 +83,18 @@ export async function GET(request: NextRequest) {
   <body>
     <script>
       const hash = window.location.hash || "";
-      const hasAuthTokens = /(access_token|refresh_token|type=)/.test(hash);
-      window.location.replace(hasAuthTokens ? ${JSON.stringify(destination)} + hash : ${JSON.stringify(fallback)});
+      const params = new URLSearchParams(hash.replace(/^#/, ""));
+      const hasAuthTokens = params.has("access_token") && params.has("refresh_token");
+      const type = params.get("type");
+      const shouldUseVerifiedPage =
+        ${JSON.stringify(!isResetFlow)} &&
+        (${JSON.stringify(isActivation || isSignupConfirm)} ||
+          type === "signup" ||
+          type === "email_change");
+      const destination = shouldUseVerifiedPage
+        ? ${JSON.stringify(verifiedUrl)}
+        : ${JSON.stringify(defaultSuccessUrl)};
+      window.location.replace(hasAuthTokens ? destination + hash : ${JSON.stringify(fallback)});
     </script>
   </body>
 </html>`;
@@ -132,6 +146,5 @@ export async function GET(request: NextRequest) {
   // - Email OTP (signup/email_change) → verified page
   // - Activation magic link (isActivation) → verified page
   // - Everything else (password reset, normal magic link) → follow `next`
-  const successDest = shouldRouteToVerifiedPage ? verifiedPagePath : next;
-  return NextResponse.redirect(new URL(successDest, origin));
+  return NextResponse.redirect(new URL(successPath, origin));
 }

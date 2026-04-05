@@ -89,6 +89,18 @@ describe("/auth/callback", () => {
     );
   });
 
+  it("keeps token-hash magic-link sign-ins on the normal post-auth path", async () => {
+    const response = await GET(
+      new NextRequest("https://factorlab.test/auth/callback?token_hash=magic-token&type=magiclink")
+    );
+
+    expect(mockVerifyOtp).toHaveBeenCalledWith({
+      token_hash: "magic-token",
+      type: "magiclink",
+    });
+    expect(response.headers.get("location")).toBe("https://factorlab.test/dashboard");
+  });
+
   it("sends invalid signup confirmations back to the verify tab with flow=signup", async () => {
     mockVerifyOtp.mockResolvedValueOnce({ error: { message: "Expired link" } });
 
@@ -122,6 +134,17 @@ describe("/auth/callback", () => {
     const body = await response.text();
 
     expect(body).toContain("https://factorlab.test/reset-password");
+  });
+
+  it("keeps generic hash-based sign-ins pointed at the normal post-auth destination", async () => {
+    const response = await GET(new NextRequest("https://factorlab.test/auth/callback?next=/runs"));
+
+    expect(response.headers.get("content-type")).toContain("text/html");
+    const body = await response.text();
+
+    expect(body).toContain("https://factorlab.test/runs");
+    expect(body).toContain('type === "signup"');
+    expect(body).toContain('type === "email_change"');
   });
 
   it("sends generic invalid verification links back to the verify tab", async () => {

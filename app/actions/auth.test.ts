@@ -304,6 +304,46 @@ describe("sign up verification flow", () => {
       "REDIRECT:/login?tab=verify&email=user%40example.com&flow=signup"
     );
   });
+
+  it("builds signup verification links from forwarded deployment headers when origin is absent", async () => {
+    headersMock.mockResolvedValue(
+      new Headers({
+        "x-forwarded-for": "127.0.0.1",
+        "x-forwarded-host": "factorlab.app",
+        "x-forwarded-proto": "https",
+      })
+    );
+
+    const serverClient = makeServerClient({ user: null });
+    serverClient.auth.signUp.mockResolvedValue({
+      data: {
+        user: {
+          id: "new-user-id",
+          identities: [{ id: "identity-1" }],
+        },
+        session: null,
+      },
+      error: null,
+    });
+
+    createClientMock.mockResolvedValue(serverClient);
+
+    const formData = new FormData();
+    formData.set("email", "user@example.com");
+    formData.set("password", "Password!");
+
+    await expect(signUpAction(null, formData)).rejects.toThrow(
+      "REDIRECT:/login?tab=verify&email=user%40example.com&flow=signup"
+    );
+
+    expect(serverClient.auth.signUp).toHaveBeenCalledWith({
+      email: "user@example.com",
+      password: "Password!",
+      options: {
+        emailRedirectTo: "https://factorlab.app/auth/callback?signup_confirm=1",
+      },
+    });
+  });
 });
 
 describe("resend verification", () => {
@@ -365,6 +405,54 @@ describe("resend verification", () => {
       options: {
         shouldCreateUser: false,
         emailRedirectTo: "http://localhost:3000/auth/callback?activation=1",
+      },
+    });
+  });
+
+  it("builds resend and activation links from forwarded deployment headers when origin is absent", async () => {
+    headersMock.mockResolvedValue(
+      new Headers({
+        "x-forwarded-for": "127.0.0.1",
+        "x-forwarded-host": "factorlab.app",
+        "x-forwarded-proto": "https",
+      })
+    );
+
+    const serverClient = makeServerClient({ user: null });
+    const adminClient = makeAdminClient();
+
+    createClientMock.mockResolvedValue(serverClient);
+    createAdminClientMock.mockReturnValue(adminClient);
+
+    const signupFormData = new FormData();
+    signupFormData.set("email", "user@example.com");
+    signupFormData.set("flow", "signup");
+
+    await expect(resendVerificationAction(null, signupFormData)).resolves.toEqual({
+      success: true,
+    });
+
+    expect(serverClient.auth.resend).toHaveBeenCalledWith({
+      type: "signup",
+      email: "user@example.com",
+      options: {
+        emailRedirectTo: "https://factorlab.app/auth/callback?signup_confirm=1",
+      },
+    });
+
+    const upgradeFormData = new FormData();
+    upgradeFormData.set("email", "user@example.com");
+    upgradeFormData.set("flow", "upgrade");
+
+    await expect(resendVerificationAction(null, upgradeFormData)).resolves.toEqual({
+      success: true,
+    });
+
+    expect(adminClient.auth.signInWithOtp).toHaveBeenCalledWith({
+      email: "user@example.com",
+      options: {
+        shouldCreateUser: false,
+        emailRedirectTo: "https://factorlab.app/auth/callback?activation=1",
       },
     });
   });
