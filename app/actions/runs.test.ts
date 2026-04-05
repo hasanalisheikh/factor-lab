@@ -176,11 +176,13 @@ function makeSnapshot(options?: {
 function makeAuthenticatedClient(userId = "user-1") {
   const runInsertPayloads: Record<string, unknown>[] = [];
   const jobInsertPayloads: Record<string, unknown>[] = [];
+  const notificationInsertPayloads: Record<string, unknown>[] = [];
   const deletedRunIds: string[] = [];
 
   return {
     runInsertPayloads,
     jobInsertPayloads,
+    notificationInsertPayloads,
     deletedRunIds,
     auth: {
       getUser: vi.fn().mockResolvedValue({
@@ -214,8 +216,24 @@ function makeAuthenticatedClient(userId = "user-1") {
 
       if (table === "jobs") {
         return {
-          insert: async (payload: Record<string, unknown>) => {
+          insert: (payload: Record<string, unknown>) => {
             jobInsertPayloads.push(payload);
+            return {
+              select: () => ({
+                single: async () => ({
+                  data: { id: `job-${jobInsertPayloads.length}` },
+                  error: null,
+                }),
+              }),
+            };
+          },
+        };
+      }
+
+      if (table === "notifications") {
+        return {
+          insert: async (payload: Record<string, unknown>) => {
+            notificationInsertPayloads.push(payload);
             return { error: null };
           },
         };
@@ -786,9 +804,18 @@ describe("run actions preflight gating", () => {
 
     expect(serverClient.runInsertPayloads).toHaveLength(strategies.length);
     expect(serverClient.jobInsertPayloads).toHaveLength(strategies.length);
+    expect(serverClient.notificationInsertPayloads).toHaveLength(strategies.length);
     expect(serverClient.runInsertPayloads[0]).toMatchObject({
       user_id: "user-1",
       status: "queued",
+    });
+    expect(serverClient.notificationInsertPayloads[0]).toMatchObject({
+      user_id: "user-1",
+      run_id: "run-123",
+      job_id: "job-1",
+      title: "Job queued: Clean equal_weight",
+      level: "info",
+      read_at: null,
     });
   });
 
@@ -845,6 +872,13 @@ describe("run actions preflight gating", () => {
       user_id: "user-1",
     });
     expect(serverClient.jobInsertPayloads).toHaveLength(1);
+    expect(serverClient.notificationInsertPayloads).toHaveLength(1);
+    expect(serverClient.notificationInsertPayloads[0]).toMatchObject({
+      user_id: "user-1",
+      run_id: "run-123",
+      title: "Job queued: Warn acked",
+      level: "info",
+    });
   });
 });
 

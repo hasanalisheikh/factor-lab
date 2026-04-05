@@ -1,25 +1,30 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Bell, CheckCheck, CheckCircle, XCircle, Loader2, Clock } from "lucide-react";
+import { Bell, CheckCheck, CheckCircle, Clock, Loader2, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { inferJobNotificationStatus } from "@/lib/notifications";
 import { createClient } from "@/lib/supabase/client";
+import type { NotificationRow } from "@/lib/supabase/types";
 import { cn } from "@/lib/utils";
 
-const LS_KEY = "fl_notifs_last_seen";
+const POLL_INTERVAL_MS = 30_000;
 
 type NotifItem = {
   id: string;
   runId: string | null;
+  jobId: string | null;
   title: string;
+  body: string | null;
   createdAt: string;
-  status: string;
+  level: NotificationRow["level"];
+  readAt: string | null;
 };
 
-function statusIcon(status: string) {
-  switch (status) {
+function statusIcon(item: Pick<NotifItem, "title" | "level">) {
+  switch (inferJobNotificationStatus(item)) {
     case "completed":
       return <CheckCircle className="h-3.5 w-3.5 shrink-0 text-emerald-500" />;
     case "failed":
@@ -28,25 +33,9 @@ function statusIcon(status: string) {
       return <XCircle className="h-3.5 w-3.5 shrink-0 text-amber-400" />;
     case "running":
       return <Loader2 className="text-primary h-3.5 w-3.5 shrink-0 animate-spin" />;
+    case "queued":
     default:
       return <Clock className="text-muted-foreground h-3.5 w-3.5 shrink-0" />;
-  }
-}
-
-function statusTitle(status: string, name: string): string {
-  switch (status) {
-    case "completed":
-      return `Run completed: ${name}`;
-    case "failed":
-      return `Run failed: ${name}`;
-    case "blocked":
-      return `Run blocked: ${name}`;
-    case "running":
-      return `Job running: ${name}`;
-    case "pending":
-      return `Job queued: ${name}`;
-    default:
-      return `${name}: ${status}`;
   }
 }
 
@@ -63,8 +52,6 @@ function relativeTime(iso: string): string {
 export function TopbarNotifications() {
   const [open, setOpen] = useState(false);
   const [items, setItems] = useState<NotifItem[]>([]);
-  const [storageKey, setStorageKey] = useState<string>(LS_KEY);
-  const [lastSeen, setLastSeen] = useState<string>("");
   const [loading, setLoading] = useState(false);
   const router = useRouter();
 
@@ -72,88 +59,108 @@ export function TopbarNotifications() {
     let cancelled = false;
     const supabase = createClient();
 
-    supabase.auth
-      .getUser()
-      .then(({ data }) => {
-        if (cancelled) return;
-        const nextKey = data.user?.id ? `${LS_KEY}:${data.user.id}` : LS_KEY;
-        setStorageKey(nextKey);
-        setLastSeen(typeof window !== "undefined" ? (localStorage.getItem(nextKey) ?? "") : "");
-      })
-      .catch(() => {
-        if (cancelled) return;
-        setStorageKey(LS_KEY);
-        setLastSeen(typeof window !== "undefined" ? (localStorage.getItem(LS_KEY) ?? "") : "");
-      });
+    async function load(showSpinner: boolean) {
+      if (showSpinner) {
+        setLoading(true);
+      }
 
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  // Fetch notifications whenever popover opens
-  useEffect(() => {
-    if (!open) return;
-    let cancelled = false;
-
-    async function load() {
-      setLoading(true);
-      const supabase = createClient();
-
-      // Fetch jobs + matching run names in two lightweight queries
-      const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
-      const { data: jobs } = await supabase
-        .from("jobs")
-        .select("id, run_id, name, status, created_at")
-        .gte("created_at", since)
+      const { data, error } = await supabase
+        .from("notifications")
+        .select("id, run_id, job_id, title, body, level, read_at, created_at")
         .order("created_at", { ascending: false })
-        .limit(10);
+        .limit(20);
 
-      if (cancelled || !jobs) {
+      if (cancelled) return;
+
+      if (error) {
+        console.warn("[notifications] load warning:", error.message);
         setLoading(false);
         return;
       }
 
-      const runIds = jobs.map((j) => j.run_id).filter(Boolean) as string[];
-      let runNames: Record<string, string> = {};
+      setItems(
+        (data ?? []).map((item) => ({
+          id: item.id,
+          runId: item.run_id,
+          jobId: item.job_id,
+          title: item.title,
+          body: item.body,
+          createdAt: item.created_at,
+          level: item.level,
+          readAt: item.read_at,
+        }))
+      );
 
-      if (runIds.length > 0) {
-        const { data: runs } = await supabase.from("runs").select("id, name").in("id", runIds);
-        if (runs) {
-          runNames = Object.fromEntries(runs.map((r) => [r.id, r.name]));
-        }
-      }
-
-      if (!cancelled) {
-        setItems(
-          jobs.map((j) => ({
-            id: j.id,
-            runId: j.run_id,
-            title: statusTitle(j.status, j.run_id ? (runNames[j.run_id] ?? j.name) : j.name),
-            createdAt: j.created_at,
-            status: j.status,
-          }))
-        );
-      }
-      if (!cancelled) setLoading(false);
+      setLoading(false);
     }
 
-    load();
+    void load(open);
+
+    const intervalId = window.setInterval(() => {
+      void load(false);
+    }, POLL_INTERVAL_MS);
+
     return () => {
       cancelled = true;
+      window.clearInterval(intervalId);
     };
   }, [open]);
 
-  const hasUnread = items.some((i) => !lastSeen || i.createdAt > lastSeen);
+  const hasUnread = items.some((item) => item.readAt == null);
 
-  function markAllRead() {
+  async function markAllRead() {
+    if (items.length === 0 || !hasUnread) return;
+
     const now = new Date().toISOString();
-    localStorage.setItem(storageKey, now);
-    setLastSeen(now);
+    const supabase = createClient();
+    const { error } = await supabase
+      .from("notifications")
+      .update({ read_at: now })
+      .is("read_at", null);
+
+    if (error) {
+      console.warn("[notifications] markAllRead warning:", error.message);
+      return;
+    }
+
+    setItems((current) =>
+      current.map((item) => ({
+        ...item,
+        readAt: item.readAt ?? now,
+      }))
+    );
+  }
+
+  async function markOneRead(notificationId: string) {
+    const now = new Date().toISOString();
+    setItems((current) =>
+      current.map((item) =>
+        item.id === notificationId
+          ? {
+              ...item,
+              readAt: item.readAt ?? now,
+            }
+          : item
+      )
+    );
+
+    const supabase = createClient();
+    const { error } = await supabase
+      .from("notifications")
+      .update({ read_at: now })
+      .eq("id", notificationId)
+      .is("read_at", null);
+
+    if (error) {
+      console.warn("[notifications] markOneRead warning:", error.message);
+    }
   }
 
   function handleClick(item: NotifItem) {
     setOpen(false);
+    if (item.readAt == null) {
+      void markOneRead(item.id);
+    }
     router.push(item.runId ? `/runs/${item.runId}` : "/jobs");
   }
 
@@ -181,13 +188,13 @@ export function TopbarNotifications() {
         collisionPadding={12}
         className="w-80 max-w-[90vw] p-0"
       >
-        {/* Header */}
         <div className="border-border flex items-center justify-between border-b px-4 py-2.5">
           <span className="text-foreground text-[13px] font-semibold">Notifications</span>
           <Button
             variant="ghost"
             size="sm"
-            onClick={markAllRead}
+            onClick={() => void markAllRead()}
+            disabled={!hasUnread}
             className="text-muted-foreground hover:text-foreground h-6 px-2 text-[11px]"
           >
             <CheckCheck className="mr-1 h-3 w-3" />
@@ -195,7 +202,6 @@ export function TopbarNotifications() {
           </Button>
         </div>
 
-        {/* Body */}
         {loading ? (
           <div className="flex items-center justify-center py-8">
             <Loader2 className="text-muted-foreground h-4 w-4 animate-spin" />
@@ -205,7 +211,7 @@ export function TopbarNotifications() {
         ) : (
           <ul className="max-h-[340px] overflow-y-auto">
             {items.map((item) => {
-              const isUnread = !lastSeen || item.createdAt > lastSeen;
+              const isUnread = item.readAt == null;
               return (
                 <li
                   key={item.id}
@@ -216,11 +222,16 @@ export function TopbarNotifications() {
                     isUnread && "bg-primary/[0.04]"
                   )}
                 >
-                  <div className="mt-0.5">{statusIcon(item.status)}</div>
+                  <div className="mt-0.5">{statusIcon(item)}</div>
                   <div className="min-w-0 flex-1">
                     <p className="text-foreground truncate text-[12px] leading-snug">
                       {item.title}
                     </p>
+                    {item.body && (
+                      <p className="text-muted-foreground/80 truncate text-[11px] leading-snug">
+                        {item.body}
+                      </p>
+                    )}
                     <p className="text-muted-foreground mt-0.5 text-[11px]">
                       {relativeTime(item.createdAt)}
                     </p>
@@ -234,7 +245,6 @@ export function TopbarNotifications() {
           </ul>
         )}
 
-        {/* Footer */}
         <div className="border-border border-t px-4 py-2">
           <button
             onClick={() => {

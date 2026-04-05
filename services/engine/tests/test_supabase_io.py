@@ -195,6 +195,62 @@ class _FakeRunsClient:
         return self._runs_table
 
 
+class _NotificationsTable:
+    def __init__(self, select_rows: list[dict[str, Any]] | None = None) -> None:
+        self._select_rows = select_rows or []
+        self.insert_payloads: list[dict[str, Any]] = []
+        self.update_payloads: list[dict[str, Any]] = []
+        self._pending_insert: dict[str, Any] | None = None
+        self._pending_update: dict[str, Any] | None = None
+
+    def select(self, _fields: str) -> "_NotificationsTable":
+        return self
+
+    def eq(self, _column: str, _value: Any) -> "_NotificationsTable":
+        return self
+
+    def insert(self, payload: dict[str, Any]) -> "_NotificationsTable":
+        self._pending_insert = dict(payload)
+        return self
+
+    def update(self, payload: dict[str, Any]) -> "_NotificationsTable":
+        self._pending_update = dict(payload)
+        return self
+
+    def execute(self) -> _Result:
+        if self._pending_insert is not None:
+            self.insert_payloads.append(self._pending_insert)
+            self._pending_insert = None
+            return _Result([{"id": "notif-1"}])
+        if self._pending_update is not None:
+            self.update_payloads.append(self._pending_update)
+            self._pending_update = None
+            return _Result([{"id": "notif-1"}])
+        return _Result(self._select_rows)
+
+
+class _MultiTableClient:
+    def __init__(
+        self,
+        *,
+        jobs_table: _JobsTable | None = None,
+        runs_table: _RunsTable | None = None,
+        notifications_table: _NotificationsTable | None = None,
+    ) -> None:
+        self._jobs_table = jobs_table or _JobsTable()
+        self._runs_table = runs_table or _RunsTable()
+        self._notifications_table = notifications_table or _NotificationsTable()
+
+    def table(self, name: str) -> Any:
+        if name == "jobs":
+            return self._jobs_table
+        if name == "runs":
+            return self._runs_table
+        if name == "notifications":
+            return self._notifications_table
+        raise AssertionError(f"unexpected table: {name}")
+
+
 def test_requeue_due_for_retry_resets_legacy_jobs_to_ingest_stage() -> None:
     jobs_table = _JobsTable()
     io = object.__new__(SupabaseIO)
@@ -210,6 +266,99 @@ def test_requeue_due_for_retry_resets_legacy_jobs_to_ingest_stage() -> None:
     assert payload["next_retry_at"] is None
     assert payload["error_message"] is None
     assert isinstance(payload["updated_at"], str)
+
+
+def test_upsert_job_notification_inserts_unread_notification_rows() -> None:
+    notifications_table = _NotificationsTable()
+    io = object.__new__(SupabaseIO)
+    io.client = _MultiTableClient(notifications_table=notifications_table)
+    io._notifications_available = None
+
+    io._upsert_job_notification(
+        job_id="job-1",
+        run_id="run-1",
+        user_id="user-1",
+        name="Alpha",
+        status="queued",
+    )
+
+    assert len(notifications_table.insert_payloads) == 1
+    payload = notifications_table.insert_payloads[0]
+    assert payload["user_id"] == "user-1"
+    assert payload["run_id"] == "run-1"
+    assert payload["job_id"] == "job-1"
+    assert payload["title"] == "Job queued: Alpha"
+    assert payload["level"] == "info"
+    assert payload["body"] == "Your run is queued and will start soon."
+    assert payload["read_at"] is None
+    assert isinstance(payload["created_at"], str)
+
+
+def test_upsert_job_notification_updates_existing_rows_and_resets_read_state() -> None:
+    notifications_table = _NotificationsTable(select_rows=[{"id": "notif-1"}])
+    io = object.__new__(SupabaseIO)
+    io.client = _MultiTableClient(notifications_table=notifications_table)
+    io._notifications_available = None
+
+    io._upsert_job_notification(
+        job_id="job-1",
+        run_id="run-1",
+        user_id="user-1",
+        name="Alpha",
+        status="failed",
+        error_message="Backtest timed out.",
+    )
+
+    assert len(notifications_table.update_payloads) == 1
+    payload = notifications_table.update_payloads[0]
+    assert payload["title"] == "Run failed: Alpha"
+    assert payload["level"] == "error"
+    assert payload["body"] == "Backtest timed out."
+    assert payload["read_at"] is None
+    assert isinstance(payload["created_at"], str)
+
+
+def test_claim_job_refreshes_running_notification() -> None:
+    jobs_table = _JobsTable()
+    runs_table = _RunsTable()
+    io = object.__new__(SupabaseIO)
+    io.client = _MultiTableClient(jobs_table=jobs_table, runs_table=runs_table)
+
+    calls: list[tuple[str, str | None]] = []
+    io._sync_backtest_notification = lambda job, *, status, error_message=None: calls.append(  # type: ignore[method-assign]
+        (status, error_message)
+    )
+
+    claimed = io.claim_job(
+        type("JobLike", (), {"id": "job-1", "run_id": "run-1", "name": "Alpha"})()
+    )
+
+    assert claimed is True
+    assert len(jobs_table.update_payloads) == 1
+    assert len(runs_table.update_payloads) == 1
+    assert calls == [("running", None)]
+
+
+def test_save_failure_refreshes_failed_notification() -> None:
+    runs_table = _RunsTable()
+    io = object.__new__(SupabaseIO)
+    io.client = _MultiTableClient(runs_table=runs_table)
+    io._update_job_row = lambda *_args, **_kwargs: None  # type: ignore[method-assign]
+
+    calls: list[tuple[str, str | None]] = []
+    io._sync_backtest_notification = lambda job, *, status, error_message=None: calls.append(  # type: ignore[method-assign]
+        (status, error_message)
+    )
+
+    io.save_failure(
+        type("JobLike", (), {"id": "job-1", "run_id": "run-1", "name": "Alpha"})(),
+        12,
+        "Backtest timed out.",
+    )
+
+    assert len(runs_table.update_payloads) == 1
+    assert runs_table.update_payloads[0]["status"] == "failed"
+    assert calls == [("failed", "Backtest timed out.")]
 
 
 def test_requeue_due_data_ingest_resets_retrying_jobs_to_queued() -> None:

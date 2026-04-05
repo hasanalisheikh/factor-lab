@@ -83,6 +83,7 @@ class SupabaseIO:
             raise RuntimeError("Missing NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY")
         self.client: Client = create_client(url, key)
         self._legacy_data_ingest_schema: bool | None = None
+        self._notifications_available: bool | None = None
 
     def _is_missing_data_ingest_column_error(self, exc: Exception | str) -> bool:
         message = str(exc).lower()
@@ -148,6 +149,139 @@ class SupabaseIO:
 
     def _legacy_data_ingest_mode(self) -> bool | None:
         return getattr(self, "_legacy_data_ingest_schema", None)
+
+    def _is_missing_notifications_error(self, exc: Exception | str) -> bool:
+        message = str(exc).lower()
+        return "notifications" in message and (
+            "does not exist" in message or "schema cache" in message or "could not find" in message
+        )
+
+    def _build_job_notification(
+        self,
+        *,
+        status: str,
+        name: str,
+        error_message: str | None = None,
+    ) -> dict[str, str]:
+        if status == "completed":
+            return {
+                "title": f"Run completed: {name}",
+                "body": "Your run finished successfully.",
+                "level": "success",
+            }
+        if status == "failed":
+            return {
+                "title": f"Run failed: {name}",
+                "body": error_message
+                or "Your run failed. Open the job details for more information.",
+                "level": "error",
+            }
+        if status == "blocked":
+            return {
+                "title": f"Run blocked: {name}",
+                "body": error_message
+                or "Your run was blocked. Open the job details for more information.",
+                "level": "warning",
+            }
+        if status == "running":
+            return {
+                "title": f"Job running: {name}",
+                "body": "Your run is now processing.",
+                "level": "info",
+            }
+        return {
+            "title": f"Job queued: {name}",
+            "body": "Your run is queued and will start soon.",
+            "level": "info",
+        }
+
+    def _get_run_owner_id(self, run_id: str) -> str | None:
+        try:
+            result = self.client.table("runs").select("user_id").eq("id", run_id).execute()
+        except Exception as exc:
+            print(f"[supabase_io] run owner lookup warning run={run_id}: {exc}")
+            return None
+
+        rows = result.data or []
+        if not rows:
+            return None
+
+        user_id = rows[0].get("user_id")
+        return str(user_id) if user_id else None
+
+    def _upsert_job_notification(
+        self,
+        *,
+        job_id: str,
+        run_id: str,
+        user_id: str | None,
+        name: str,
+        status: str,
+        error_message: str | None = None,
+    ) -> None:
+        if not user_id or self._notifications_available is False:
+            return
+
+        payload = self._build_job_notification(
+            status=status, name=name, error_message=error_message
+        )
+        now = datetime.now(timezone.utc).isoformat()
+
+        try:
+            existing = (
+                self.client.table("notifications").select("id").eq("job_id", job_id).execute()
+            )
+            rows = existing.data or []
+
+            values = {
+                "user_id": user_id,
+                "run_id": run_id,
+                "job_id": job_id,
+                "title": payload["title"],
+                "body": payload["body"],
+                "level": payload["level"],
+                "read_at": None,
+                "created_at": now,
+            }
+
+            if rows and rows[0].get("id"):
+                (
+                    self.client.table("notifications")
+                    .update(values)
+                    .eq("id", rows[0]["id"])
+                    .execute()
+                )
+            else:
+                self.client.table("notifications").insert(values).execute()
+
+            self._notifications_available = True
+        except Exception as exc:
+            if self._is_missing_notifications_error(exc):
+                if self._notifications_available is not False:
+                    print(f"[supabase_io] notifications unavailable; skipping writes: {exc}")
+                self._notifications_available = False
+                return
+            print(f"[supabase_io] notification write warning job={job_id}: {exc}")
+
+    def _sync_backtest_notification(
+        self,
+        job: Job,
+        *,
+        status: str,
+        error_message: str | None = None,
+    ) -> None:
+        if not job.run_id:
+            return
+
+        user_id = self._get_run_owner_id(job.run_id)
+        self._upsert_job_notification(
+            job_id=job.id,
+            run_id=job.run_id,
+            user_id=user_id,
+            name=job.name,
+            status=status,
+            error_message=error_message,
+        )
 
     def _legacy_data_ingest_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
         compat = dict(payload)
@@ -308,6 +442,7 @@ class SupabaseIO:
                 .eq("status", "queued")
                 .execute()
             )
+            self._sync_backtest_notification(job, status="running")
         return True
 
     def fetch_run(self, run_id: str) -> dict[str, Any] | None:
@@ -761,6 +896,7 @@ class SupabaseIO:
             lambda: self.client.table("runs").update(runs_update).eq("id", job.run_id).execute(),
             context=f"finalize_run_success run_id={job.run_id}",
         )
+        self._sync_backtest_notification(job, status="completed")
 
     def save_failure(
         self,
@@ -796,6 +932,7 @@ class SupabaseIO:
         )
         if job.run_id:
             (self.client.table("runs").update({"status": "failed"}).eq("id", job.run_id).execute())
+            self._sync_backtest_notification(job, status="failed", error_message=message)
 
     def save_data_ingest_success(
         self,
@@ -909,6 +1046,8 @@ class SupabaseIO:
             fallback_stage=fallback_stage,
         )
         print(f"[supabase_io] ingest job={job.id} BLOCKED: {error_message[:200]}")
+        if job.run_id:
+            self._sync_backtest_notification(job, status="blocked", error_message=error_message)
         self.try_chain_preflight_backtest(job)
 
     def _replace_equity_curve(
@@ -1041,7 +1180,7 @@ class SupabaseIO:
             # Guard: only act if run is still waiting_for_data (idempotency check)
             run_result = (
                 self.client.table("runs")
-                .select("id,name,status")
+                .select("id,name,status,user_id")
                 .eq("id", run_id)
                 .eq("status", "waiting_for_data")
                 .execute()
@@ -1067,29 +1206,58 @@ class SupabaseIO:
                 )
                 (self.client.table("runs").update({"status": "blocked"}).eq("id", run_id).execute())
                 # Sentinel job so the run detail page shows the failure message
-                self.client.table("jobs").insert(
-                    {
-                        "run_id": run_id,
-                        "name": run["name"],
-                        "status": "blocked",
-                        "stage": "ingest",
-                        "progress": 0,
-                        "error_message": error_msg[:2000],
-                    }
-                ).execute()
+                blocked_job = (
+                    self.client.table("jobs")
+                    .insert(
+                        {
+                            "run_id": run_id,
+                            "name": run["name"],
+                            "status": "blocked",
+                            "stage": "ingest",
+                            "progress": 0,
+                            "error_message": error_msg[:2000],
+                        }
+                    )
+                    .select("id")
+                    .execute()
+                )
+                blocked_rows = blocked_job.data or []
+                if blocked_rows and blocked_rows[0].get("id"):
+                    self._upsert_job_notification(
+                        job_id=str(blocked_rows[0]["id"]),
+                        run_id=run_id,
+                        user_id=str(run.get("user_id")) if run.get("user_id") else None,
+                        name=str(run["name"]),
+                        status="blocked",
+                        error_message=error_msg,
+                    )
                 print(f"[supabase_io] preflight blocked for run={run_id}: {error_msg}")
                 return
 
             # All ingest jobs completed — enqueue the backtest job
-            self.client.table("jobs").insert(
-                {
-                    "run_id": run_id,
-                    "name": run["name"],
-                    "status": "queued",
-                    "stage": "ingest",
-                    "progress": 0,
-                }
-            ).execute()
+            queued_job = (
+                self.client.table("jobs")
+                .insert(
+                    {
+                        "run_id": run_id,
+                        "name": run["name"],
+                        "status": "queued",
+                        "stage": "ingest",
+                        "progress": 0,
+                    }
+                )
+                .select("id")
+                .execute()
+            )
+            queued_rows = queued_job.data or []
+            if queued_rows and queued_rows[0].get("id"):
+                self._upsert_job_notification(
+                    job_id=str(queued_rows[0]["id"]),
+                    run_id=run_id,
+                    user_id=str(run.get("user_id")) if run.get("user_id") else None,
+                    name=str(run["name"]),
+                    status="queued",
+                )
             (self.client.table("runs").update({"status": "queued"}).eq("id", run_id).execute())
             print(f"[supabase_io] chained backtest for run={run_id} after preflight ingest")
 
@@ -1782,7 +1950,7 @@ class SupabaseIO:
             # Guard: only act if run is still waiting_for_data
             run_result = (
                 self.client.table("runs")
-                .select("id,name,status")
+                .select("id,name,status,user_id")
                 .eq("id", run_id)
                 .eq("status", "waiting_for_data")
                 .execute()
@@ -1806,29 +1974,58 @@ class SupabaseIO:
                     "Visit the Data page to retry or check the logs."
                 )
                 self.client.table("runs").update({"status": "blocked"}).eq("id", run_id).execute()
-                self.client.table("jobs").insert(
-                    {
-                        "run_id": run_id,
-                        "name": run["name"],
-                        "status": "blocked",
-                        "stage": "ingest",
-                        "progress": 0,
-                        "error_message": error_msg[:2000],
-                    }
-                ).execute()
+                blocked_job = (
+                    self.client.table("jobs")
+                    .insert(
+                        {
+                            "run_id": run_id,
+                            "name": run["name"],
+                            "status": "blocked",
+                            "stage": "ingest",
+                            "progress": 0,
+                            "error_message": error_msg[:2000],
+                        }
+                    )
+                    .select("id")
+                    .execute()
+                )
+                blocked_rows = blocked_job.data or []
+                if blocked_rows and blocked_rows[0].get("id"):
+                    self._upsert_job_notification(
+                        job_id=str(blocked_rows[0]["id"]),
+                        run_id=run_id,
+                        user_id=str(run.get("user_id")) if run.get("user_id") else None,
+                        name=str(run["name"]),
+                        status="blocked",
+                        error_message=error_msg,
+                    )
                 print(f"[supabase_io] preflight v2 blocked for run={run_id}: {error_msg}")
                 return
 
             # All succeeded — enqueue backtest
-            self.client.table("jobs").insert(
-                {
-                    "run_id": run_id,
-                    "name": run["name"],
-                    "status": "queued",
-                    "stage": "ingest",
-                    "progress": 0,
-                }
-            ).execute()
+            queued_job = (
+                self.client.table("jobs")
+                .insert(
+                    {
+                        "run_id": run_id,
+                        "name": run["name"],
+                        "status": "queued",
+                        "stage": "ingest",
+                        "progress": 0,
+                    }
+                )
+                .select("id")
+                .execute()
+            )
+            queued_rows = queued_job.data or []
+            if queued_rows and queued_rows[0].get("id"):
+                self._upsert_job_notification(
+                    job_id=str(queued_rows[0]["id"]),
+                    run_id=run_id,
+                    user_id=str(run.get("user_id")) if run.get("user_id") else None,
+                    name=str(run["name"]),
+                    status="queued",
+                )
             self.client.table("runs").update({"status": "queued"}).eq("id", run_id).execute()
             print(f"[supabase_io] chained backtest (v2) for run={run_id} after preflight ingest")
 

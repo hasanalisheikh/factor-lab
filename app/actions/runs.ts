@@ -26,6 +26,7 @@ import {
   type RunPreflightResult,
   type RunPreflightSnapshot,
 } from "@/lib/coverage-check";
+import { buildJobNotification } from "@/lib/notifications";
 import { UNIVERSE_PRESETS, type UniverseId } from "@/lib/universe-config";
 import { TICKER_INCEPTION_DATES } from "@/lib/supabase/types";
 import type { StrategyId } from "@/lib/types";
@@ -1423,18 +1424,36 @@ export async function createRun(input: z.input<typeof createRunSchema>): Promise
     };
   }
 
-  const { error: jobError } = await serverClient.from("jobs").insert({
-    run_id: run.id,
-    name,
-    status: "queued",
-    stage: "ingest",
-    progress: 0,
-  });
+  const { data: job, error: jobError } = await serverClient
+    .from("jobs")
+    .insert({
+      run_id: run.id,
+      name,
+      status: "queued",
+      stage: "ingest",
+      progress: 0,
+    })
+    .select("id")
+    .single();
 
-  if (jobError) {
-    console.error("createRun job insert error:", jobError.message);
+  if (jobError || !job) {
+    console.error("createRun job insert error:", jobError?.message ?? "missing job row");
     await serverClient.from("runs").delete().eq("id", run.id);
     return { ok: false, error: "Failed to queue run for processing. Please try again.", preflight };
+  }
+
+  const { error: notificationError } = await serverClient.from("notifications").insert({
+    user_id: userId,
+    run_id: run.id,
+    job_id: job.id,
+    read_at: null,
+    ...buildJobNotification({
+      status: "queued",
+      name,
+    }),
+  });
+  if (notificationError) {
+    console.warn("createRun notification insert warning:", notificationError.message);
   }
 
   triggerWorker();
