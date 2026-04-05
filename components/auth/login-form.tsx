@@ -516,9 +516,7 @@ export function LoginForm({
                   <Mail className="size-4 text-amber-300" />
                 )}
                 <AlertDescription
-                  className={
-                    resendBannerMode === "sent" ? "text-primary/90" : "text-amber-200"
-                  }
+                  className={resendBannerMode === "sent" ? "text-primary/90" : "text-amber-200"}
                 >
                   {resendBannerMode === "sent"
                     ? `Verification email sent. You can resend again in ${resendCooldown}s.`

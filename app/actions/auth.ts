@@ -124,7 +124,10 @@ async function sendVerificationEmail({
   return { error };
 }
 
-function buildResendSuccessState(): Extract<ResendState, { success: true; cooldownSeconds: number }> {
+function buildResendSuccessState(): Extract<
+  ResendState,
+  { success: true; cooldownSeconds: number }
+> {
   return {
     success: true,
     cooldownSeconds: RESEND_VERIFICATION_COOLDOWN_SECONDS,
@@ -526,9 +529,7 @@ export async function resendVerificationAction(
     return buildResendRateLimitedState(
       retryAfterSeconds,
       rateLimitError ??
-        buildResendCooldownMessage(
-          retryAfterSeconds ?? RESEND_VERIFICATION_COOLDOWN_SECONDS
-        )
+        buildResendCooldownMessage(retryAfterSeconds ?? RESEND_VERIFICATION_COOLDOWN_SECONDS)
     );
   }
 
