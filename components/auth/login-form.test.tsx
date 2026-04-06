@@ -287,7 +287,38 @@ describe("LoginForm guest-upgrade mode", () => {
     }
   });
 
-  it("11) returns the original forgot-password tab to sign-in after a reset completes elsewhere", async () => {
+  it("11) shows a resend countdown banner after a fresh password reset email send", async () => {
+    const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(FIXED_SENT_AT);
+
+    try {
+      mockGetUser.mockResolvedValue({
+        data: { user: null },
+        error: null,
+      });
+
+      render(
+        <LoginForm
+          sessionUser={null}
+          initialTab="forgot"
+          initialEmail="user@example.com"
+          initialSentAt={FIXED_SENT_AT}
+        />
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText(/If an account exists for/i)).toBeInTheDocument();
+        expect(
+          screen.getByText("A password reset email was sent recently. You can resend again in 60s.")
+        ).toBeInTheDocument();
+      });
+
+      expect(screen.getByRole("button", { name: "Resend again in 60s" })).toBeDisabled();
+    } finally {
+      dateNowSpy.mockRestore();
+    }
+  });
+
+  it("12) returns the original forgot-password tab to sign-in after a reset completes elsewhere", async () => {
     mockGetUser.mockResolvedValue({
       data: { user: null },
       error: null,

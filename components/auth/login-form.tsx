@@ -104,7 +104,6 @@ export function LoginForm({
     ForgotPasswordState,
     FormData
   >(forgotPasswordAction, null);
-  const [forgotEmail, setForgotEmail] = useState("");
   const [passwordResetComplete, setPasswordResetComplete] = useState(false);
 
   const [isGuestPending, setIsGuestPending] = useState(false);
@@ -153,6 +152,11 @@ export function LoginForm({
   const [signUpPassword, setSignUpPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [passwordMismatchError, setPasswordMismatchError] = useState<string | null>(null);
+  const initialForgotEmail = initialTab === "forgot" ? initialEmail : undefined;
+  const initialForgotSentAt = initialTab === "forgot" ? initialSentAt : undefined;
+  const [forgotEmail, setForgotEmail] = useState(
+    searchTab === "forgot" ? (searchEmail ?? initialForgotEmail ?? "") : (initialForgotEmail ?? "")
+  );
   const lockedVerifyEmail = searchEmail ?? initialEmail;
   const [verifyEmail, setVerifyEmail] = useState(lockedVerifyEmail ?? "");
   const [verifyFlow, setVerifyFlow] = useState<VerificationFlow | undefined>(
@@ -160,7 +164,10 @@ export function LoginForm({
   );
   const [resendCooldown, setResendCooldown] = useState(0);
   const [resendBannerMode, setResendBannerMode] = useState<"sent" | "cooldown" | null>(null);
+  const [forgotCooldown, setForgotCooldown] = useState(0);
+  const [forgotBannerMode, setForgotBannerMode] = useState<"sent" | "cooldown" | null>(null);
   const verifySentAt = searchSentAt ?? initialSentAt;
+  const forgotSentAt = searchTab === "forgot" ? searchSentAt : initialForgotSentAt;
 
   useEffect(() => {
     if (searchTab) {
@@ -173,6 +180,12 @@ export function LoginForm({
       setVerifyEmail(searchEmail);
     }
   }, [searchEmail]);
+
+  useEffect(() => {
+    if (searchTab === "forgot") {
+      setForgotEmail(searchEmail ?? initialForgotEmail ?? "");
+    }
+  }, [initialForgotEmail, searchEmail, searchTab]);
 
   useEffect(() => {
     if (hasSearchFlow) {
@@ -250,6 +263,20 @@ export function LoginForm({
   }, [activeTab, verifyError, verifySentAt]);
 
   useEffect(() => {
+    if (activeTab !== "forgot" || forgotError || forgotSentAt === undefined) {
+      return;
+    }
+
+    const remaining = getRemainingResendCooldownSeconds(forgotSentAt);
+    if (remaining <= 0) {
+      return;
+    }
+
+    setForgotCooldown((current) => Math.max(current, remaining));
+    setForgotBannerMode((current) => current ?? "cooldown");
+  }, [activeTab, forgotError, forgotSentAt]);
+
+  useEffect(() => {
     if (!resendState) {
       return;
     }
@@ -265,6 +292,23 @@ export function LoginForm({
       setResendBannerMode("cooldown");
     }
   }, [resendState]);
+
+  useEffect(() => {
+    if (!forgotState) {
+      return;
+    }
+
+    if ("success" in forgotState) {
+      setForgotCooldown(forgotState.cooldownSeconds);
+      setForgotBannerMode("sent");
+      return;
+    }
+
+    if ("rateLimited" in forgotState) {
+      setForgotCooldown(forgotState.cooldownSeconds);
+      setForgotBannerMode("cooldown");
+    }
+  }, [forgotState]);
 
   useEffect(() => {
     if (activeTab !== "verify" || !verifyEmail || !resendState) {
@@ -318,10 +362,63 @@ export function LoginForm({
   ]);
 
   useEffect(() => {
+    const trimmedForgotEmail = forgotEmail.trim();
+    if (activeTab !== "forgot" || !trimmedForgotEmail || !forgotState) {
+      return;
+    }
+
+    if (!("success" in forgotState) && !("rateLimited" in forgotState)) {
+      return;
+    }
+
+    const currentCooldown =
+      forgotSentAt === undefined ? undefined : getRemainingResendCooldownSeconds(forgotSentAt);
+    const searchAlreadyMatchesForgotState =
+      searchTab === "forgot" &&
+      searchEmail === trimmedForgotEmail &&
+      currentCooldown !== undefined &&
+      currentCooldown >= forgotState.cooldownSeconds - 1;
+
+    if (searchAlreadyMatchesForgotState) {
+      return;
+    }
+
+    const sentAt =
+      "success" in forgotState
+        ? forgotState.sentAt
+        : getSentAtForCooldown(forgotState.cooldownSeconds);
+
+    const nextParams = new URLSearchParams(searchParams.toString());
+    nextParams.set("tab", "forgot");
+    nextParams.set("email", trimmedForgotEmail);
+    nextParams.delete("flow");
+    nextParams.delete("error");
+    nextParams.set("sent_at", String(sentAt));
+    const query = nextParams.toString();
+    router.replace(query ? `${pathname}?${query}` : pathname);
+  }, [
+    activeTab,
+    forgotEmail,
+    forgotSentAt,
+    forgotState,
+    pathname,
+    router,
+    searchEmail,
+    searchParams,
+    searchTab,
+  ]);
+
+  useEffect(() => {
     if (resendCooldown <= 0) return;
     const id = setInterval(() => setResendCooldown((n) => Math.max(0, n - 1)), 1000);
     return () => clearInterval(id);
   }, [resendCooldown]);
+
+  useEffect(() => {
+    if (forgotCooldown <= 0) return;
+    const id = setInterval(() => setForgotCooldown((n) => Math.max(0, n - 1)), 1000);
+    return () => clearInterval(id);
+  }, [forgotCooldown]);
 
   function replaceAuthUrl(nextParams: URLSearchParams) {
     const query = nextParams.toString();
@@ -397,6 +494,8 @@ export function LoginForm({
     setPasswordMismatchError(null);
     setPasswordResetComplete(false);
     setVerifyFlow(undefined);
+    setForgotCooldown(0);
+    setForgotBannerMode(null);
     const nextParams = new URLSearchParams(searchParams.toString());
     nextParams.delete("tab");
     nextParams.delete("email");
@@ -464,6 +563,18 @@ export function LoginForm({
     createAccountRawError != null && isExistingAccountError(createAccountRawError);
   const signUpError =
     createAccountRawError != null ? getCreateAccountErrorMessage(createAccountRawError) : null;
+  const forgotInlineError = forgotState && "error" in forgotState ? forgotState.error : null;
+  const forgotProviderLimitedMessage =
+    forgotState && "providerLimited" in forgotState ? forgotState.message : null;
+  const forgotEmailValue = forgotEmail.trim();
+  const shouldShowForgotSuccessState =
+    activeTab === "forgot" &&
+    forgotEmailValue.length > 0 &&
+    forgotError == null &&
+    forgotInlineError == null &&
+    (forgotSentAt !== undefined ||
+      Boolean(forgotState && "success" in forgotState) ||
+      Boolean(forgotState && "rateLimited" in forgotState));
 
   const inputClassName =
     "h-9 border-white/10 bg-white/5 text-white/90 placeholder:text-white/45 focus-visible:border-primary/70 focus-visible:ring-primary/40";
@@ -505,16 +616,70 @@ export function LoginForm({
 
         {activeTab === "forgot" ? (
           <div className="space-y-3">
-            {"success" in (forgotState ?? {}) ? (
+            {shouldShowForgotSuccessState ? (
               <>
                 <div className="flex flex-col items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-4 py-5 text-center">
                   <Mail className="text-primary/80 size-8" />
                   <p className="text-sm text-white/70">
                     If an account exists for{" "}
-                    <span className="font-medium text-white/90">{forgotEmail}</span>, you&apos;ll
-                    receive a password reset email shortly.
+                    <span className="font-medium text-white/90">{forgotEmailValue}</span>,
+                    you&apos;ll receive a password reset email shortly.
                   </p>
                 </div>
+
+                {forgotCooldown > 0 && forgotBannerMode && (
+                  <Alert
+                    className={
+                      forgotBannerMode === "sent"
+                        ? "border-primary/30 bg-primary/10 text-primary"
+                        : "border-amber-500/40 bg-amber-500/10"
+                    }
+                  >
+                    {forgotBannerMode === "sent" ? (
+                      <CheckCircle2 className="size-4" />
+                    ) : (
+                      <Mail className="size-4 text-amber-300" />
+                    )}
+                    <AlertDescription
+                      className={forgotBannerMode === "sent" ? "text-primary/90" : "text-amber-200"}
+                    >
+                      {forgotBannerMode === "sent"
+                        ? `Password reset email sent. You can resend again in ${forgotCooldown}s.`
+                        : `A password reset email was sent recently. You can resend again in ${forgotCooldown}s.`}
+                    </AlertDescription>
+                  </Alert>
+                )}
+
+                {forgotProviderLimitedMessage && (
+                  <Alert className="border-amber-500/40 bg-amber-500/10">
+                    <Mail className="size-4 text-amber-300" />
+                    <AlertDescription className="text-amber-200">
+                      {forgotProviderLimitedMessage}
+                    </AlertDescription>
+                  </Alert>
+                )}
+
+                <form action={forgotAction_}>
+                  <input type="hidden" name="email" value={forgotEmailValue} />
+                  <Button
+                    type="submit"
+                    disabled={isForgotPending || forgotCooldown > 0}
+                    aria-disabled={isForgotPending || forgotCooldown > 0}
+                    className={primaryButtonClassName}
+                  >
+                    {isForgotPending ? (
+                      <>
+                        <Spinner className="size-4" />
+                        Sending...
+                      </>
+                    ) : forgotCooldown > 0 ? (
+                      `Resend again in ${forgotCooldown}s`
+                    ) : (
+                      "Resend reset email"
+                    )}
+                  </Button>
+                </form>
+
                 <Button
                   variant="ghost"
                   onClick={() => switchTab("signin")}
@@ -525,13 +690,17 @@ export function LoginForm({
               </>
             ) : (
               <>
-                {(forgotError ||
-                  ("error" in (forgotState ?? {}) &&
-                    (forgotState as { error: string } | null)?.error)) && (
+                {(forgotError || forgotInlineError) && (
                   <Alert variant="destructive" className="border-destructive/40 bg-destructive/10">
                     <AlertCircle className="size-4" />
-                    <AlertDescription>
-                      {forgotError ?? (forgotState as { error: string }).error}
+                    <AlertDescription>{forgotError ?? forgotInlineError}</AlertDescription>
+                  </Alert>
+                )}
+                {forgotProviderLimitedMessage && (
+                  <Alert className="border-amber-500/40 bg-amber-500/10">
+                    <Mail className="size-4 text-amber-300" />
+                    <AlertDescription className="text-amber-200">
+                      {forgotProviderLimitedMessage}
                     </AlertDescription>
                   </Alert>
                 )}

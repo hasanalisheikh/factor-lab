@@ -62,7 +62,7 @@ export default async function LoginPage({
               initialTab={initialTab}
               initialEmail={email}
               initialFlow={isVerify ? normalizeVerificationFlow(flow) : undefined}
-              initialSentAt={isVerify ? parseSentAt(sentAt) : undefined}
+              initialSentAt={isVerify || isForgot ? parseSentAt(sentAt) : undefined}
               verifyError={isVerify ? error : undefined}
               forgotError={isForgot ? error : undefined}
               sessionUser={

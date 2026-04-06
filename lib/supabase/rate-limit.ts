@@ -15,11 +15,20 @@ export type RateLimitResult = {
  * Check the per-email resend rate limit using Upstash Redis.
  * Allows 1 resend per 60 seconds per email address.
  */
-export async function checkResendRateLimit(email: string): Promise<RateLimitResult> {
+export async function checkResendRateLimit(
+  email: string,
+  options?: {
+    prefix?: string;
+    emailLabel?: string;
+  }
+): Promise<RateLimitResult> {
   if (!process.env.UPSTASH_REDIS_REST_URL || !process.env.UPSTASH_REDIS_REST_TOKEN) {
     console.warn("[rate-limit] UPSTASH_REDIS_REST_URL/TOKEN not set — skipping rate limit");
     return { allowed: true };
   }
+
+  const prefix = options?.prefix ?? "factorlab:resend-verify";
+  const emailLabel = options?.emailLabel ?? "verification email";
 
   try {
     const { Ratelimit } = await import("@upstash/ratelimit");
@@ -28,7 +37,7 @@ export async function checkResendRateLimit(email: string): Promise<RateLimitResu
     const ratelimit = new Ratelimit({
       redis: Redis.fromEnv(),
       limiter: Ratelimit.slidingWindow(1, "60 s"),
-      prefix: "factorlab:resend-verify",
+      prefix,
       analytics: false,
     });
 
@@ -42,7 +51,7 @@ export async function checkResendRateLimit(email: string): Promise<RateLimitResu
 
       return {
         allowed: false,
-        error: buildResendCooldownMessage(retryAfterSeconds),
+        error: buildResendCooldownMessage(retryAfterSeconds, emailLabel),
         retryAfterSeconds,
       };
     }

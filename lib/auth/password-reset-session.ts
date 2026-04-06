@@ -67,30 +67,19 @@ export async function finalizePasswordResetSession(
   }
 ) {
   const timeoutMs = options?.timeoutMs ?? AUTH_SIGN_OUT_TIMEOUT_MS;
+  const usedFallback = clearSupabaseBrowserSession(options?.storageKey);
 
-  try {
-    const signOutResult = await Promise.race([
-      supabase.auth
-        .signOut({ scope: "local" })
-        .then(({ error }) => ({ kind: "signout" as const, error })),
-      new Promise<{ kind: "timeout" }>((resolve) => {
-        window.setTimeout(() => resolve({ kind: "timeout" }), timeoutMs);
-      }),
-    ]);
-
-    if (signOutResult.kind === "signout" && !signOutResult.error) {
-      return { error: null, usedFallback: false };
-    }
-  } catch {
-    // Fall back to direct browser storage cleanup below.
-  }
-
-  const cleared = clearSupabaseBrowserSession(options?.storageKey);
+  // Ask the Supabase client to clear any in-memory auth state too, but do not
+  // block the UI on this step. The browser storage has already been cleared.
+  void Promise.race([
+    supabase.auth.signOut({ scope: "local" }),
+    new Promise((resolve) => {
+      window.setTimeout(resolve, timeoutMs);
+    }),
+  ]).catch(() => undefined);
 
   return {
-    error: cleared
-      ? null
-      : "Your password was updated, but we couldn't finish signing you out. Close this tab, then return to the login page and sign in again.",
-    usedFallback: true,
+    error: null,
+    usedFallback,
   };
 }

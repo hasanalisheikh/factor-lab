@@ -1,9 +1,15 @@
 "use client";
 
 import Link from "next/link";
-import { useActionState, useEffect, useState } from "react";
-import { AlertCircle, CheckCircle2 } from "lucide-react";
-import { resetPasswordAction, type ResetPasswordState } from "@/app/actions/auth";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { useActionState, useEffect, useRef, useState } from "react";
+import { AlertCircle, CheckCircle2, Mail } from "lucide-react";
+import {
+  forgotPasswordAction,
+  resetPasswordAction,
+  type ForgotPasswordState,
+  type ResetPasswordState,
+} from "@/app/actions/auth";
 import { Logo } from "@/components/logo";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -17,30 +23,60 @@ import {
 } from "@/lib/auth/client-session-hydration";
 import { broadcastPasswordResetComplete } from "@/lib/auth/password-reset-sync";
 import { finalizePasswordResetSession } from "@/lib/auth/password-reset-session";
+import {
+  getRemainingResendCooldownSeconds,
+  RESEND_VERIFICATION_COOLDOWN_SECONDS,
+} from "@/lib/auth/resend-verification";
 import { createClient } from "@/lib/supabase/client";
 
-type ResetCompletionState =
-  | { status: "idle"; error: null }
-  | { status: "pending"; error: null }
-  | { status: "success"; error: null }
-  | { status: "failed"; error: string };
+function parseSentAt(value: string | null | undefined) {
+  if (!value) {
+    return undefined;
+  }
 
-export function ResetPasswordForm() {
+  const sentAt = Number(value);
+  return Number.isFinite(sentAt) && sentAt > 0 ? sentAt : undefined;
+}
+
+function getSentAtForCooldown(cooldownSeconds: number) {
+  return Date.now() - Math.max(0, RESEND_VERIFICATION_COOLDOWN_SECONDS - cooldownSeconds) * 1000;
+}
+
+export function ResetPasswordForm({
+  initialEmail,
+  initialSentAt,
+}: {
+  initialEmail?: string;
+  initialSentAt?: number;
+}) {
+  const pathname = usePathname();
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const [formState, action_, isPending] = useActionState<ResetPasswordState, FormData>(
     resetPasswordAction,
     null
   );
+  const [resendState, resendAction_, isResendPending] = useActionState<
+    ForgotPasswordState,
+    FormData
+  >(forgotPasswordAction, null);
   const [sessionState, setSessionState] = useState<BrowserSessionHydrationState>({
     status: "pending",
-    error: null,
-  });
-  const [completionState, setCompletionState] = useState<ResetCompletionState>({
-    status: "idle",
     error: null,
   });
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [mismatchError, setMismatchError] = useState<string | null>(null);
+  const [resetEmail, setResetEmail] = useState(initialEmail ?? "");
+  const [resendCooldown, setResendCooldown] = useState(0);
+  const [resendBannerMode, setResendBannerMode] = useState<"sent" | "cooldown" | null>(null);
+  const hasHandledSuccessfulReset = useRef(false);
+  const isResetSuccessful = Boolean(formState && "success" in formState);
+  const searchEmail = searchParams.get("email") ?? undefined;
+  const searchSentAt = parseSentAt(searchParams.get("sent_at"));
+  const effectiveSentAt = searchSentAt ?? initialSentAt;
+  const lockedResetEmail = searchEmail ?? initialEmail;
+  const resetEmailValue = (lockedResetEmail ?? resetEmail).trim();
 
   useEffect(() => {
     let cancelled = false;
@@ -65,42 +101,110 @@ export function ResetPasswordForm() {
   }, []);
 
   useEffect(() => {
-    if (!formState || !("success" in formState) || completionState.status !== "idle") {
+    if (!isResetSuccessful || hasHandledSuccessfulReset.current) {
       return;
     }
 
-    let cancelled = false;
+    hasHandledSuccessfulReset.current = true;
+    broadcastPasswordResetComplete();
+
     const supabase = createClient();
+    void finalizePasswordResetSession(supabase);
+  }, [isResetSuccessful]);
 
-    async function finalizeReset() {
-      setCompletionState({ status: "pending", error: null });
-
-      const { error } = await finalizePasswordResetSession(supabase);
-      if (cancelled) {
-        return;
-      }
-
-      if (error) {
-        setCompletionState({
-          status: "failed",
-          error:
-            "Your password was updated, but we couldn't finish signing you out. Close this tab, then return to the login page and sign in again.",
-        });
-        return;
-      }
-
-      setPassword("");
-      setConfirmPassword("");
-      broadcastPasswordResetComplete();
-      setCompletionState({ status: "success", error: null });
+  useEffect(() => {
+    if (searchEmail === undefined) {
+      return;
     }
 
-    void finalizeReset();
+    const timeoutId = window.setTimeout(() => {
+      setResetEmail(searchEmail);
+    }, 0);
 
-    return () => {
-      cancelled = true;
-    };
-  }, [completionState.status, formState]);
+    return () => window.clearTimeout(timeoutId);
+  }, [searchEmail]);
+
+  useEffect(() => {
+    if (sessionState.status !== "failed" || effectiveSentAt === undefined) {
+      return;
+    }
+
+    const remaining = getRemainingResendCooldownSeconds(effectiveSentAt);
+    if (remaining <= 0) {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      setResendCooldown((current) => Math.max(current, remaining));
+      setResendBannerMode((current) => current ?? "cooldown");
+    }, 0);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [effectiveSentAt, sessionState.status]);
+
+  useEffect(() => {
+    if (!resendState) {
+      return;
+    }
+
+    if ("success" in resendState || "rateLimited" in resendState) {
+      const timeoutId = window.setTimeout(() => {
+        setResendCooldown(resendState.cooldownSeconds);
+        setResendBannerMode("success" in resendState ? "sent" : "cooldown");
+      }, 0);
+
+      return () => window.clearTimeout(timeoutId);
+    }
+  }, [resendState]);
+
+  useEffect(() => {
+    if (sessionState.status !== "failed" || !resetEmailValue || !resendState) {
+      return;
+    }
+
+    if (!("success" in resendState) && !("rateLimited" in resendState)) {
+      return;
+    }
+
+    const currentCooldown =
+      effectiveSentAt === undefined
+        ? undefined
+        : getRemainingResendCooldownSeconds(effectiveSentAt);
+    const searchAlreadyMatchesResendState =
+      searchEmail === resetEmailValue &&
+      currentCooldown !== undefined &&
+      currentCooldown >= resendState.cooldownSeconds - 1;
+
+    if (searchAlreadyMatchesResendState) {
+      return;
+    }
+
+    const sentAt =
+      "success" in resendState
+        ? resendState.sentAt
+        : getSentAtForCooldown(resendState.cooldownSeconds);
+
+    const nextParams = new URLSearchParams(searchParams.toString());
+    nextParams.set("email", resetEmailValue);
+    nextParams.set("sent_at", String(sentAt));
+    const query = nextParams.toString();
+    router.replace(query ? `${pathname}?${query}` : pathname);
+  }, [
+    effectiveSentAt,
+    pathname,
+    resendState,
+    resetEmailValue,
+    router,
+    searchEmail,
+    searchParams,
+    sessionState.status,
+  ]);
+
+  useEffect(() => {
+    if (resendCooldown <= 0) return;
+    const id = window.setInterval(() => setResendCooldown((n) => Math.max(0, n - 1)), 1000);
+    return () => window.clearInterval(id);
+  }, [resendCooldown]);
 
   const inputClassName =
     "h-9 border-white/10 bg-white/5 text-white/90 placeholder:text-white/45 focus-visible:border-primary/70 focus-visible:ring-primary/40";
@@ -108,6 +212,9 @@ export function ResetPasswordForm() {
     "h-9 w-full bg-primary text-primary-foreground shadow-[0_14px_28px_-14px_rgba(40,199,130,0.7)] hover:bg-primary/90";
   const actionError = formState && "error" in formState ? formState.error : null;
   const formError = mismatchError ?? actionError;
+  const resendError = resendState && "error" in resendState ? resendState.error : null;
+  const resendProviderLimitedMessage =
+    resendState && "providerLimited" in resendState ? resendState.message : null;
 
   return (
     <Card className="bg-card/95 border-white/10 p-6 shadow-[0_28px_75px_-36px_rgba(0,0,0,0.95)]">
@@ -120,21 +227,17 @@ export function ResetPasswordForm() {
           </div>
         </div>
 
-        {sessionState.status === "pending" || completionState.status === "pending" ? (
+        {sessionState.status === "pending" ? (
           <div className="space-y-3">
             <div className="bg-primary/10 text-primary mx-auto flex h-10 w-10 items-center justify-center rounded-full">
               <Spinner className="size-4" />
             </div>
             <div className="space-y-1 text-center">
               <h2 className="text-base font-semibold tracking-tight text-white/90">
-                {sessionState.status === "pending"
-                  ? "Preparing reset session..."
-                  : "Finishing password reset..."}
+                Preparing reset session...
               </h2>
               <p className="text-sm text-white/60">
-                {sessionState.status === "pending"
-                  ? "We're validating your reset link so you can choose a new password."
-                  : "We're signing you out now so you can return to your original sign-in tab."}
+                We&apos;re validating your reset link so you can choose a new password.
               </p>
             </div>
           </div>
@@ -144,18 +247,118 @@ export function ResetPasswordForm() {
               <AlertCircle className="size-4" />
               <AlertDescription>{sessionState.error}</AlertDescription>
             </Alert>
+            <div className="flex flex-col items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-4 py-5 text-center">
+              <Mail className="text-primary/80 size-8" />
+              <p className="text-sm text-white/70">
+                {resetEmailValue ? (
+                  <>
+                    We can send a fresh password reset email to{" "}
+                    <span className="font-medium text-white/90">{resetEmailValue}</span>.
+                  </>
+                ) : (
+                  "Enter your email below and we'll send you a fresh password reset link."
+                )}
+              </p>
+            </div>
+
+            {resendCooldown > 0 && resendBannerMode && (
+              <Alert
+                className={
+                  resendBannerMode === "sent"
+                    ? "border-primary/30 bg-primary/10 text-primary"
+                    : "border-amber-500/40 bg-amber-500/10"
+                }
+              >
+                {resendBannerMode === "sent" ? (
+                  <CheckCircle2 className="size-4" />
+                ) : (
+                  <Mail className="size-4 text-amber-300" />
+                )}
+                <AlertDescription
+                  className={resendBannerMode === "sent" ? "text-primary/90" : "text-amber-200"}
+                >
+                  {resendBannerMode === "sent"
+                    ? `Password reset email sent. You can resend again in ${resendCooldown}s.`
+                    : `A password reset email was sent recently. You can resend again in ${resendCooldown}s.`}
+                </AlertDescription>
+              </Alert>
+            )}
+
+            {resendError && (
+              <Alert variant="destructive" className="border-destructive/40 bg-destructive/10">
+                <AlertCircle className="size-4" />
+                <AlertDescription>{resendError}</AlertDescription>
+              </Alert>
+            )}
+
+            {resendProviderLimitedMessage && (
+              <Alert className="border-amber-500/40 bg-amber-500/10">
+                <Mail className="size-4 text-amber-300" />
+                <AlertDescription className="text-amber-200">
+                  {resendProviderLimitedMessage}
+                </AlertDescription>
+              </Alert>
+            )}
+
+            <form action={resendAction_} className="space-y-2.5">
+              {lockedResetEmail ? (
+                <input type="hidden" name="email" value={resetEmailValue} />
+              ) : (
+                <div className="space-y-1.5">
+                  <Label
+                    htmlFor="expired-reset-email"
+                    className="text-xs font-medium text-white/60"
+                  >
+                    Email
+                  </Label>
+                  <Input
+                    id="expired-reset-email"
+                    name="email"
+                    type="email"
+                    autoComplete="email"
+                    required
+                    value={resetEmail}
+                    onChange={(e) => setResetEmail(e.target.value)}
+                    disabled={isResendPending}
+                    className={inputClassName}
+                  />
+                </div>
+              )}
+              <Button
+                type="submit"
+                disabled={isResendPending || resendCooldown > 0}
+                aria-disabled={isResendPending || resendCooldown > 0}
+                className={primaryButtonClassName}
+              >
+                {isResendPending ? (
+                  <>
+                    <Spinner className="size-4" />
+                    Sending...
+                  </>
+                ) : resendCooldown > 0 ? (
+                  `Resend again in ${resendCooldown}s`
+                ) : (
+                  "Resend reset email"
+                )}
+              </Button>
+            </form>
+
             <p className="text-xs text-white/55">
-              Go back to{" "}
+              Or go back to{" "}
               <Link
-                href="/login?tab=forgot"
+                href={
+                  resetEmailValue
+                    ? `/login?tab=forgot&email=${encodeURIComponent(resetEmailValue)}`
+                    : "/login?tab=forgot"
+                }
                 className="text-primary underline-offset-2 hover:underline"
               >
                 reset password
-              </Link>{" "}
-              and request a new link.
+              </Link>
+              .
             </p>
           </div>
-        ) : completionState.status === "success" ? (
+        ) : isResetSuccessful ? (
           <div className="space-y-3">
             <div className="flex flex-col items-center gap-2 rounded-lg border border-emerald-400/20 bg-emerald-500/10 px-4 py-5 text-center">
               <CheckCircle2 className="size-8 text-emerald-300" />
@@ -167,11 +370,6 @@ export function ResetPasswordForm() {
               Your original tab will ask you to sign in again with the new password.
             </p>
           </div>
-        ) : completionState.status === "failed" ? (
-          <Alert variant="destructive" className="border-destructive/40 bg-destructive/10">
-            <AlertCircle className="size-4" />
-            <AlertDescription>{completionState.error}</AlertDescription>
-          </Alert>
         ) : (
           <form
             action={action_}

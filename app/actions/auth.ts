@@ -41,7 +41,12 @@ export type ResendState =
   | { rateLimited: true; cooldownSeconds: number; message: string }
   | { providerLimited: true; message: string }
   | null;
-export type ForgotPasswordState = { success: true } | { error: string } | null;
+export type ForgotPasswordState =
+  | { error: string }
+  | { success: true; cooldownSeconds: number; sentAt: number }
+  | { rateLimited: true; cooldownSeconds: number; message: string }
+  | { providerLimited: true; message: string }
+  | null;
 export type ResetPasswordState = { success: true } | { error: string } | null;
 
 const passwordSchema = z
@@ -57,6 +62,8 @@ const emailPasswordSchema = z.object({
 
 const ACCOUNT_EXISTS_ERROR =
   "An account with this email already exists. Sign in to that account instead.";
+const PASSWORD_RESET_EMAIL_LABEL = "password reset email";
+const PASSWORD_RESET_RESEND_PREFIX = "factorlab:resend-reset";
 
 type AuthApiError = { message: string; status?: number; code?: string };
 
@@ -100,8 +107,26 @@ function getActivationVerificationCallbackUrl(origin: string) {
   return `${origin}/auth/callback?activation=1`;
 }
 
-function getResetPasswordCallbackUrl(origin: string) {
-  return `${origin}/auth/callback?next=/reset-password`;
+function getResetPasswordCallbackUrl(
+  origin: string,
+  options?: {
+    email?: string;
+    sentAt?: number;
+  }
+) {
+  const params = new URLSearchParams({
+    next: "/reset-password",
+  });
+
+  if (options?.email) {
+    params.set("email", options.email);
+  }
+
+  if (options?.sentAt !== undefined) {
+    params.set("sent_at", String(options.sentAt));
+  }
+
+  return `${origin}/auth/callback?${params.toString()}`;
 }
 
 async function sendVerificationEmail({
@@ -152,6 +177,36 @@ function buildResendRateLimitedState(
 function buildResendProviderLimitedState(
   message = "We've sent too many verification emails recently. Please try again later. Check your inbox and spam for the latest email."
 ): Extract<ResendState, { providerLimited: true; message: string }> {
+  return {
+    providerLimited: true,
+    message,
+  };
+}
+
+function buildForgotPasswordSuccessState(
+  sentAt: number
+): Extract<ForgotPasswordState, { success: true; cooldownSeconds: number; sentAt: number }> {
+  return {
+    success: true,
+    cooldownSeconds: RESEND_VERIFICATION_COOLDOWN_SECONDS,
+    sentAt,
+  };
+}
+
+function buildForgotPasswordRateLimitedState(
+  retryAfterSeconds = RESEND_VERIFICATION_COOLDOWN_SECONDS,
+  message = buildResendCooldownMessage(retryAfterSeconds, PASSWORD_RESET_EMAIL_LABEL)
+): Extract<ForgotPasswordState, { rateLimited: true; cooldownSeconds: number; message: string }> {
+  return {
+    rateLimited: true,
+    cooldownSeconds: retryAfterSeconds,
+    message,
+  };
+}
+
+function buildForgotPasswordProviderLimitedState(
+  message = "We've sent too many password reset emails recently. Please try again later. Check your inbox and spam for the latest email."
+): Extract<ForgotPasswordState, { providerLimited: true; message: string }> {
   return {
     providerLimited: true,
     message,
@@ -478,23 +533,37 @@ export async function forgotPasswordAction(
   }
 
   const origin = await getRequestOrigin();
+  const {
+    allowed,
+    error: rateLimitError,
+    retryAfterSeconds,
+  } = await checkResendRateLimit(email, {
+    prefix: PASSWORD_RESET_RESEND_PREFIX,
+    emailLabel: PASSWORD_RESET_EMAIL_LABEL,
+  });
+  if (!allowed) {
+    return buildForgotPasswordRateLimitedState(
+      retryAfterSeconds,
+      rateLimitError ??
+        buildResendCooldownMessage(retryAfterSeconds ?? 60, PASSWORD_RESET_EMAIL_LABEL)
+    );
+  }
 
   const supabase = await createClient();
+  const sentAt = Date.now();
   const { error } = await supabase.auth.resetPasswordForEmail(email, {
-    redirectTo: getResetPasswordCallbackUrl(origin),
+    redirectTo: getResetPasswordCallbackUrl(origin, {
+      email,
+      sentAt,
+    }),
   });
   if (error) {
     if (isProviderEmailSendLimitError(error)) {
-      return {
-        error:
-          "We've sent too many password reset emails recently. Please try again later. Check your inbox and spam for the latest email.",
-      };
+      return buildForgotPasswordProviderLimitedState();
     }
 
     if (isAuthRateLimitError(error)) {
-      return {
-        error: "Too many reset email requests right now. Please wait a bit and try again.",
-      };
+      return buildForgotPasswordRateLimitedState();
     }
 
     console.warn("[auth] forgotPasswordAction: resetPasswordForEmail failed:", error.message);
@@ -504,7 +573,7 @@ export async function forgotPasswordAction(
   }
 
   // Always return success — don't reveal whether the email exists
-  return { success: true };
+  return buildForgotPasswordSuccessState(sentAt);
 }
 
 // ─── Reset Password ───────────────────────────────────────────────────────────

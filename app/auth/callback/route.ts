@@ -10,6 +10,21 @@ function isVerificationEmailOtpType(
   return verificationType === "signup" || verificationType === "email_change";
 }
 
+function buildResetPasswordPath(email: string | null, sentAt: string | null) {
+  const params = new URLSearchParams();
+
+  if (email) {
+    params.set("email", email);
+  }
+
+  if (sentAt) {
+    params.set("sent_at", sentAt);
+  }
+
+  const query = params.toString();
+  return query ? `/reset-password?${query}` : "/reset-password";
+}
+
 export async function GET(request: NextRequest) {
   const { searchParams, origin } = new URL(request.url);
   const code = searchParams.get("code");
@@ -26,13 +41,17 @@ export async function GET(request: NextRequest) {
   // PKCE code-exchange confirmations also land on /auth/verified instead of /dashboard
   const isSignupConfirm = searchParams.get("signup_confirm") === "1";
   const isResetFlow = next.startsWith("/reset-password");
+  const resetEmail = isResetFlow ? searchParams.get("email") : null;
+  const resetSentAt = isResetFlow ? searchParams.get("sent_at") : null;
   const verifiedPagePath = "/auth/verified?verified=1";
   const isVerificationEmailFlow = isVerificationEmailOtpType(verificationType);
   const verificationCompletePath =
     !isResetFlow && (isActivation || isSignupConfirm || isVerificationEmailFlow)
       ? verifiedPagePath
       : null;
-  const successPath = verificationCompletePath ?? (isResetFlow ? "/reset-password" : next);
+  const successPath =
+    verificationCompletePath ??
+    (isResetFlow ? buildResetPasswordPath(resetEmail, resetSentAt) : next);
   const verificationFlow: VerificationFlow | undefined = isResetFlow
     ? undefined
     : isActivation
@@ -44,6 +63,12 @@ export async function GET(request: NextRequest) {
   function errorRedirect(message?: string) {
     const loginUrl = new URL("/login", origin);
     loginUrl.searchParams.set("tab", isResetFlow ? "forgot" : "verify");
+    if (isResetFlow && resetEmail) {
+      loginUrl.searchParams.set("email", resetEmail);
+    }
+    if (isResetFlow && resetSentAt) {
+      loginUrl.searchParams.set("sent_at", resetSentAt);
+    }
     if (verificationFlow) {
       loginUrl.searchParams.set("flow", verificationFlow);
     }
@@ -60,6 +85,12 @@ export async function GET(request: NextRequest) {
   function hashForwardResponse() {
     const loginUrl = new URL("/login", origin);
     loginUrl.searchParams.set("tab", isResetFlow ? "forgot" : "verify");
+    if (isResetFlow && resetEmail) {
+      loginUrl.searchParams.set("email", resetEmail);
+    }
+    if (isResetFlow && resetSentAt) {
+      loginUrl.searchParams.set("sent_at", resetSentAt);
+    }
     if (verificationFlow) {
       loginUrl.searchParams.set("flow", verificationFlow);
     }

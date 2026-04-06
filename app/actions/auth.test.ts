@@ -381,12 +381,20 @@ describe("sign up verification flow", () => {
 describe("forgot password", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    dateNowSpy?.mockRestore();
+    dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(FIXED_SENT_AT);
     headersMock.mockResolvedValue(
       new Headers({
         "x-forwarded-for": "127.0.0.1",
         origin: "http://localhost:3000",
       })
     );
+    checkResendRateLimitMock.mockResolvedValue({ allowed: true });
+  });
+
+  afterEach(() => {
+    dateNowSpy?.mockRestore();
+    dateNowSpy = null;
   });
 
   it("builds password reset links from forwarded deployment headers when origin is absent", async () => {
@@ -406,10 +414,17 @@ describe("forgot password", () => {
 
     await expect(forgotPasswordAction(null, formData)).resolves.toEqual({
       success: true,
+      cooldownSeconds: 60,
+      sentAt: FIXED_SENT_AT,
     });
 
+    expect(checkResendRateLimitMock).toHaveBeenCalledWith("user@example.com", {
+      prefix: "factorlab:resend-reset",
+      emailLabel: "password reset email",
+    });
     expect(serverClient.auth.resetPasswordForEmail).toHaveBeenCalledWith("user@example.com", {
-      redirectTo: "https://factorlab.app/auth/callback?next=/reset-password",
+      redirectTo:
+        "https://factorlab.app/auth/callback?next=%2Freset-password&email=user%40example.com&sent_at=1741305600000",
     });
   });
 
@@ -428,9 +443,32 @@ describe("forgot password", () => {
     formData.set("email", "user@example.com");
 
     await expect(forgotPasswordAction(null, formData)).resolves.toEqual({
-      error:
+      providerLimited: true,
+      message:
         "We've sent too many password reset emails recently. Please try again later. Check your inbox and spam for the latest email.",
     });
+  });
+
+  it("returns a cooldown state without attempting a resend when the local limiter blocks it", async () => {
+    checkResendRateLimitMock.mockResolvedValue({
+      allowed: false,
+      retryAfterSeconds: 42,
+      error: "Please wait 42 seconds before requesting another password reset email.",
+    });
+
+    const serverClient = makeServerClient({ user: null });
+    createClientMock.mockResolvedValue(serverClient);
+
+    const formData = new FormData();
+    formData.set("email", "user@example.com");
+
+    await expect(forgotPasswordAction(null, formData)).resolves.toEqual({
+      rateLimited: true,
+      cooldownSeconds: 42,
+      message: "Please wait 42 seconds before requesting another password reset email.",
+    });
+
+    expect(serverClient.auth.resetPasswordForEmail).not.toHaveBeenCalled();
   });
 });
 

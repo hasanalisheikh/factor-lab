@@ -37,7 +37,7 @@ describe("password reset session cleanup", () => {
     expect(document.cookie).not.toContain(STORAGE_KEY);
   });
 
-  it("falls back to direct storage cleanup if Supabase signOut never resolves", async () => {
+  it("clears browser auth storage immediately even if Supabase signOut never resolves", async () => {
     vi.useFakeTimers();
 
     const supabase = {
@@ -58,14 +58,15 @@ describe("password reset session cleanup", () => {
       timeoutMs: 25,
     });
 
-    await vi.advanceTimersByTimeAsync(25);
-
     await expect(resultPromise).resolves.toEqual({
       error: null,
       usedFallback: true,
     });
 
+    expect(supabase.auth.signOut).toHaveBeenCalledWith({ scope: "local" });
     expect(window.localStorage.getItem(STORAGE_KEY)).toBeNull();
     expect(document.cookie).not.toContain(STORAGE_KEY);
+
+    await vi.advanceTimersByTimeAsync(25);
   });
 });

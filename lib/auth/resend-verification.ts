@@ -1,7 +1,7 @@
 export const RESEND_VERIFICATION_COOLDOWN_SECONDS = 60;
 
-export function buildResendCooldownMessage(seconds: number) {
-  return `Please wait ${seconds} seconds before requesting another verification email.`;
+export function buildResendCooldownMessage(seconds: number, emailLabel = "verification email") {
+  return `Please wait ${seconds} seconds before requesting another ${emailLabel}.`;
 }
 
 export function getRemainingResendCooldownSeconds(sentAt: number, now = Date.now()) {

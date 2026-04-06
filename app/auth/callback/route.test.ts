@@ -127,13 +127,17 @@ describe("/auth/callback", () => {
 
   it("keeps reset-password hash forwarding pointed at /reset-password", async () => {
     const response = await GET(
-      new NextRequest("https://factorlab.test/auth/callback?next=/reset-password")
+      new NextRequest(
+        "https://factorlab.test/auth/callback?next=/reset-password&email=user%40example.com&sent_at=1741305600000"
+      )
     );
 
     expect(response.headers.get("content-type")).toContain("text/html");
     const body = await response.text();
 
-    expect(body).toContain("https://factorlab.test/reset-password");
+    expect(body).toContain(
+      "https://factorlab.test/reset-password?email=user%40example.com&sent_at=1741305600000"
+    );
   });
 
   it("keeps generic hash-based sign-ins pointed at the normal post-auth destination", async () => {
@@ -156,6 +160,18 @@ describe("/auth/callback", () => {
 
     expect(response.headers.get("location")).toBe(
       "https://factorlab.test/login?tab=verify&error=Expired+link"
+    );
+  });
+
+  it("sends invalid reset links back to forgot with the email preserved", async () => {
+    const response = await GET(
+      new NextRequest(
+        "https://factorlab.test/auth/callback?next=/reset-password&email=user%40example.com&sent_at=1741305600000&error=access_denied&error_description=Expired%20link"
+      )
+    );
+
+    expect(response.headers.get("location")).toBe(
+      "https://factorlab.test/login?tab=forgot&email=user%40example.com&sent_at=1741305600000&error=Expired+link"
     );
   });
 });
