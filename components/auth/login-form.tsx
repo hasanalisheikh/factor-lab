@@ -22,6 +22,7 @@ import { Label } from "@/components/ui/label";
 import { Spinner } from "@/components/ui/spinner";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { subscribeToEmailVerificationComplete } from "@/lib/auth/email-verification-sync";
+import { subscribeToPasswordResetComplete } from "@/lib/auth/password-reset-sync";
 import {
   getRemainingResendCooldownSeconds,
   RESEND_VERIFICATION_COOLDOWN_SECONDS,
@@ -104,6 +105,7 @@ export function LoginForm({
     FormData
   >(forgotPasswordAction, null);
   const [forgotEmail, setForgotEmail] = useState("");
+  const [passwordResetComplete, setPasswordResetComplete] = useState(false);
 
   const [isGuestPending, setIsGuestPending] = useState(false);
   const [guestError, setGuestError] = useState<string | null>(null);
@@ -393,6 +395,7 @@ export function LoginForm({
     setActiveTab(tab);
     setGuestError(null);
     setPasswordMismatchError(null);
+    setPasswordResetComplete(false);
     setVerifyFlow(undefined);
     const nextParams = new URLSearchParams(searchParams.toString());
     nextParams.delete("tab");
@@ -408,6 +411,7 @@ export function LoginForm({
     setActiveTab("verify");
     setGuestError(null);
     setPasswordMismatchError(null);
+    setPasswordResetComplete(false);
     const nextParams = new URLSearchParams(searchParams.toString());
     nextParams.set("tab", "verify");
     nextParams.set("email", email);
@@ -421,6 +425,34 @@ export function LoginForm({
       resendAction_(formData);
     });
   }
+
+  useEffect(() => {
+    if (activeTab !== "signin" && activeTab !== "forgot") {
+      return;
+    }
+
+    return subscribeToPasswordResetComplete(() => {
+      const nextEmail = forgotEmail.trim() || signInEmail.trim();
+
+      setActiveTab("signin");
+      setGuestError(null);
+      setPasswordMismatchError(null);
+      setPasswordResetComplete(true);
+      setVerifyFlow(undefined);
+      setSignInPassword("");
+      if (nextEmail) {
+        setSignInEmail(nextEmail);
+      }
+
+      const nextParams = new URLSearchParams(searchParams.toString());
+      nextParams.delete("tab");
+      nextParams.delete("email");
+      nextParams.delete("flow");
+      nextParams.delete("sent_at");
+      const query = nextParams.toString();
+      router.replace(query ? `${pathname}?${query}` : pathname);
+    });
+  }, [activeTab, forgotEmail, pathname, router, searchParams, signInEmail]);
 
   const unverifiedEmail =
     signInState && "unverifiedEmail" in signInState ? signInState.unverifiedEmail : null;
@@ -728,6 +760,7 @@ export function LoginForm({
                     type="button"
                     onClick={() => {
                       setForgotEmail(signInEmail);
+                      setPasswordResetComplete(false);
                       setActiveTab("forgot");
                       setVerifyFlow(undefined);
                       const nextParams = new URLSearchParams(searchParams.toString());
@@ -762,6 +795,15 @@ export function LoginForm({
                   <Alert variant="destructive" className="border-destructive/40 bg-destructive/10">
                     <AlertCircle className="size-4" />
                     <AlertDescription>{signInError}</AlertDescription>
+                  </Alert>
+                )}
+
+                {passwordResetComplete && (
+                  <Alert className="border-primary/30 bg-primary/10 text-primary">
+                    <CheckCircle2 className="size-4" />
+                    <AlertDescription className="text-primary/90">
+                      Password reset successful. Sign in again with your new password.
+                    </AlertDescription>
                   </Alert>
                 )}
 

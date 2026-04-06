@@ -42,7 +42,7 @@ export type ResendState =
   | { providerLimited: true; message: string }
   | null;
 export type ForgotPasswordState = { success: true } | { error: string } | null;
-export type ResetPasswordState = { error: string } | null;
+export type ResetPasswordState = { success: true } | { error: string } | null;
 
 const passwordSchema = z
   .string()
@@ -532,7 +532,7 @@ export async function resetPasswordAction(
     return { error: error.message };
   }
 
-  redirect("/dashboard");
+  return { success: true };
 }
 
 // ─── Resend Verification Email ────────────────────────────────────────────────

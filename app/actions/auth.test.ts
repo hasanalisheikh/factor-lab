@@ -46,6 +46,7 @@ vi.mock("@/lib/supabase/rate-limit", () => ({
 import {
   forgotPasswordAction,
   resendVerificationAction,
+  resetPasswordAction,
   signUpAction,
   upgradeGuestToEmailPassword,
 } from "@/app/actions/auth";
@@ -71,6 +72,7 @@ function makeServerClient(options?: {
   refreshError?: { message: string } | null;
   resendError?: { message: string; status?: number } | null;
   resetPasswordError?: { message: string; status?: number; code?: string } | null;
+  updateUserError?: { message: string; status?: number; code?: string } | null;
 }) {
   const user = options?.user === undefined ? makeGuestUser() : options.user;
   const refreshedUser = options?.refreshedUser ?? {
@@ -119,6 +121,10 @@ function makeServerClient(options?: {
       resetPasswordForEmail: vi.fn().mockResolvedValue({
         data: {},
         error: options?.resetPasswordError ?? null,
+      }),
+      updateUser: vi.fn().mockResolvedValue({
+        data: { user: refreshedUser },
+        error: options?.updateUserError ?? null,
       }),
       signOut: vi.fn().mockResolvedValue({ error: null }),
     },
@@ -424,6 +430,48 @@ describe("forgot password", () => {
     await expect(forgotPasswordAction(null, formData)).resolves.toEqual({
       error:
         "We've sent too many password reset emails recently. Please try again later. Check your inbox and spam for the latest email.",
+    });
+  });
+});
+
+describe("reset password", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("returns success after updating the password instead of redirecting into the app", async () => {
+    const serverClient = makeServerClient({ user: null });
+    createClientMock.mockResolvedValue(serverClient);
+
+    const formData = new FormData();
+    formData.set("password", "Password!");
+    formData.set("confirmPassword", "Password!");
+
+    await expect(resetPasswordAction(null, formData)).resolves.toEqual({
+      success: true,
+    });
+
+    expect(serverClient.auth.updateUser).toHaveBeenCalledWith({
+      password: "Password!",
+    });
+    expect(redirectMock).not.toHaveBeenCalled();
+  });
+
+  it("returns the auth error when password update fails", async () => {
+    const serverClient = makeServerClient({
+      user: null,
+      updateUserError: {
+        message: "Auth session missing!",
+      },
+    });
+    createClientMock.mockResolvedValue(serverClient);
+
+    const formData = new FormData();
+    formData.set("password", "Password!");
+    formData.set("confirmPassword", "Password!");
+
+    await expect(resetPasswordAction(null, formData)).resolves.toEqual({
+      error: "Auth session missing!",
     });
   });
 });

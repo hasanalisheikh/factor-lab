@@ -1,7 +1,8 @@
-import { render, screen, cleanup, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import React from "react";
 import { EMAIL_VERIFICATION_SYNC_STORAGE_KEY } from "@/lib/auth/email-verification-sync";
+import { PASSWORD_RESET_SYNC_STORAGE_KEY } from "@/lib/auth/password-reset-sync";
 import { LoginForm } from "./login-form";
 
 // ---------------------------------------------------------------------------
@@ -284,5 +285,38 @@ describe("LoginForm guest-upgrade mode", () => {
     } finally {
       dateNowSpy.mockRestore();
     }
+  });
+
+  it("11) returns the original forgot-password tab to sign-in after a reset completes elsewhere", async () => {
+    mockGetUser.mockResolvedValue({
+      data: { user: null },
+      error: null,
+    });
+
+    render(<LoginForm sessionUser={null} initialTab="forgot" />);
+
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: "Reset password" })).toBeInTheDocument();
+    });
+
+    fireEvent.change(screen.getByLabelText("Email"), {
+      target: { value: "user@example.com" },
+    });
+
+    window.dispatchEvent(
+      new StorageEvent("storage", {
+        key: PASSWORD_RESET_SYNC_STORAGE_KEY,
+        newValue: JSON.stringify({ completedAt: Date.now() }),
+      })
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: "Sign in" })).toBeInTheDocument();
+      expect(
+        screen.getByText("Password reset successful. Sign in again with your new password.")
+      ).toBeInTheDocument();
+    });
+
+    expect(screen.getByLabelText("Email")).toHaveValue("user@example.com");
   });
 });
