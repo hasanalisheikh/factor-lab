@@ -16,6 +16,7 @@ import {
   type BrowserSessionHydrationState,
 } from "@/lib/auth/client-session-hydration";
 import { broadcastPasswordResetComplete } from "@/lib/auth/password-reset-sync";
+import { finalizePasswordResetSession } from "@/lib/auth/password-reset-session";
 import { createClient } from "@/lib/supabase/client";
 
 type ResetCompletionState =
@@ -74,7 +75,7 @@ export function ResetPasswordForm() {
     async function finalizeReset() {
       setCompletionState({ status: "pending", error: null });
 
-      const { error } = await supabase.auth.signOut({ scope: "local" });
+      const { error } = await finalizePasswordResetSession(supabase);
       if (cancelled) {
         return;
       }
