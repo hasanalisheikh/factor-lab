@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useEffect, useRef, useState } from "react";
+import { startTransition, useActionState, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { AlertCircle, CheckCircle2, Mail } from "lucide-react";
@@ -22,7 +22,10 @@ import { Label } from "@/components/ui/label";
 import { Spinner } from "@/components/ui/spinner";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { subscribeToEmailVerificationComplete } from "@/lib/auth/email-verification-sync";
-import { getRemainingResendCooldownSeconds } from "@/lib/auth/resend-verification";
+import {
+  getRemainingResendCooldownSeconds,
+  RESEND_VERIFICATION_COOLDOWN_SECONDS,
+} from "@/lib/auth/resend-verification";
 import { normalizeVerificationFlow, type VerificationFlow } from "@/lib/auth/verification-flow";
 import { createClient } from "@/lib/supabase/client";
 
@@ -47,6 +50,10 @@ function parseSentAt(value: string | null | undefined) {
 
   const sentAt = Number(value);
   return Number.isFinite(sentAt) && sentAt > 0 ? sentAt : undefined;
+}
+
+function getSentAtForCooldown(cooldownSeconds: number) {
+  return Date.now() - Math.max(0, RESEND_VERIFICATION_COOLDOWN_SECONDS - cooldownSeconds) * 1000;
 }
 
 export function LoginForm({
@@ -258,6 +265,57 @@ export function LoginForm({
   }, [resendState]);
 
   useEffect(() => {
+    if (activeTab !== "verify" || !verifyEmail || !resendState) {
+      return;
+    }
+
+    if (!("success" in resendState) && !("rateLimited" in resendState)) {
+      return;
+    }
+
+    const currentCooldown =
+      searchSentAt === undefined ? undefined : getRemainingResendCooldownSeconds(searchSentAt);
+    const searchFlowMatches = (searchFlow ?? undefined) === verifyFlow;
+    const searchAlreadyMatchesVerifyState =
+      searchTab === "verify" &&
+      searchEmail === verifyEmail &&
+      searchFlowMatches &&
+      currentCooldown !== undefined &&
+      currentCooldown >= resendState.cooldownSeconds - 1;
+
+    if (searchAlreadyMatchesVerifyState) {
+      return;
+    }
+
+    const sentAt =
+      "success" in resendState ? Date.now() : getSentAtForCooldown(resendState.cooldownSeconds);
+
+    const nextParams = new URLSearchParams(searchParams.toString());
+    nextParams.set("tab", "verify");
+    nextParams.set("email", verifyEmail);
+    if (verifyFlow) {
+      nextParams.set("flow", verifyFlow);
+    } else {
+      nextParams.delete("flow");
+    }
+    nextParams.set("sent_at", String(sentAt));
+    const query = nextParams.toString();
+    router.replace(query ? `${pathname}?${query}` : pathname);
+  }, [
+    activeTab,
+    pathname,
+    resendState,
+    router,
+    searchEmail,
+    searchFlow,
+    searchParams,
+    searchSentAt,
+    searchTab,
+    verifyEmail,
+    verifyFlow,
+  ]);
+
+  useEffect(() => {
     if (resendCooldown <= 0) return;
     const id = setInterval(() => setResendCooldown((n) => Math.max(0, n - 1)), 1000);
     return () => clearInterval(id);
@@ -359,7 +417,9 @@ export function LoginForm({
     const formData = new FormData();
     formData.set("email", email);
     formData.set("flow", flow);
-    resendAction_(formData);
+    startTransition(() => {
+      resendAction_(formData);
+    });
   }
 
   const unverifiedEmail =

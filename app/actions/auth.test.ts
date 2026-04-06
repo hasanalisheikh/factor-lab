@@ -44,6 +44,7 @@ vi.mock("@/lib/supabase/rate-limit", () => ({
 }));
 
 import {
+  forgotPasswordAction,
   resendVerificationAction,
   signUpAction,
   upgradeGuestToEmailPassword,
@@ -69,6 +70,7 @@ function makeServerClient(options?: {
   } | null;
   refreshError?: { message: string } | null;
   resendError?: { message: string; status?: number } | null;
+  resetPasswordError?: { message: string; status?: number; code?: string } | null;
 }) {
   const user = options?.user === undefined ? makeGuestUser() : options.user;
   const refreshedUser = options?.refreshedUser ?? {
@@ -113,6 +115,10 @@ function makeServerClient(options?: {
       resend: vi.fn().mockResolvedValue({
         data: {},
         error: options?.resendError ?? null,
+      }),
+      resetPasswordForEmail: vi.fn().mockResolvedValue({
+        data: {},
+        error: options?.resetPasswordError ?? null,
       }),
       signOut: vi.fn().mockResolvedValue({ error: null }),
     },
@@ -362,6 +368,62 @@ describe("sign up verification flow", () => {
       options: {
         emailRedirectTo: "https://factorlab.app/auth/callback?signup_confirm=1",
       },
+    });
+  });
+});
+
+describe("forgot password", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    headersMock.mockResolvedValue(
+      new Headers({
+        "x-forwarded-for": "127.0.0.1",
+        origin: "http://localhost:3000",
+      })
+    );
+  });
+
+  it("builds password reset links from forwarded deployment headers when origin is absent", async () => {
+    headersMock.mockResolvedValue(
+      new Headers({
+        "x-forwarded-for": "127.0.0.1",
+        "x-forwarded-host": "factorlab.app",
+        "x-forwarded-proto": "https",
+      })
+    );
+
+    const serverClient = makeServerClient({ user: null });
+    createClientMock.mockResolvedValue(serverClient);
+
+    const formData = new FormData();
+    formData.set("email", "user@example.com");
+
+    await expect(forgotPasswordAction(null, formData)).resolves.toEqual({
+      success: true,
+    });
+
+    expect(serverClient.auth.resetPasswordForEmail).toHaveBeenCalledWith("user@example.com", {
+      redirectTo: "https://factorlab.app/auth/callback?next=/reset-password",
+    });
+  });
+
+  it("surfaces provider-side reset throttling with a user-friendly error", async () => {
+    const serverClient = makeServerClient({
+      user: null,
+      resetPasswordError: {
+        message: "email rate limit exceeded",
+        status: 429,
+        code: "over_email_send_rate_limit",
+      },
+    });
+    createClientMock.mockResolvedValue(serverClient);
+
+    const formData = new FormData();
+    formData.set("email", "user@example.com");
+
+    await expect(forgotPasswordAction(null, formData)).resolves.toEqual({
+      error:
+        "We've sent too many password reset emails recently. Please try again later. Check your inbox and spam for the latest email.",
     });
   });
 });

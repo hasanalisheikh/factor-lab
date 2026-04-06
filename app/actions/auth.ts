@@ -100,6 +100,10 @@ function getActivationVerificationCallbackUrl(origin: string) {
   return `${origin}/auth/callback?activation=1`;
 }
 
+function getResetPasswordCallbackUrl(origin: string) {
+  return `${origin}/auth/callback?next=/reset-password`;
+}
+
 async function sendVerificationEmail({
   email,
   origin,
@@ -476,9 +480,28 @@ export async function forgotPasswordAction(
   const origin = await getRequestOrigin();
 
   const supabase = await createClient();
-  await supabase.auth.resetPasswordForEmail(email, {
-    redirectTo: `${origin}/auth/callback?next=/reset-password`,
+  const { error } = await supabase.auth.resetPasswordForEmail(email, {
+    redirectTo: getResetPasswordCallbackUrl(origin),
   });
+  if (error) {
+    if (isProviderEmailSendLimitError(error)) {
+      return {
+        error:
+          "We've sent too many password reset emails recently. Please try again later. Check your inbox and spam for the latest email.",
+      };
+    }
+
+    if (isAuthRateLimitError(error)) {
+      return {
+        error: "Too many reset email requests right now. Please wait a bit and try again.",
+      };
+    }
+
+    console.warn("[auth] forgotPasswordAction: resetPasswordForEmail failed:", error.message);
+    return {
+      error: "We couldn't send a password reset email right now. Please try again in a moment.",
+    };
+  }
 
   // Always return success — don't reveal whether the email exists
   return { success: true };
