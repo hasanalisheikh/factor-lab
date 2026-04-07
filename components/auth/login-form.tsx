@@ -213,9 +213,21 @@ export function LoginForm({
 
     const supabase = createClient();
     const checkForExistingSession = async () => {
+      if (hasHandledCrossTabSignIn.current) {
+        return;
+      }
+
       const { data, error } = await supabase.auth.getSession();
       if (!error && data.session) {
         completeCrossTabSignIn();
+      }
+    };
+    const handleWindowFocus = () => {
+      void checkForExistingSession();
+    };
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        void checkForExistingSession();
       }
     };
     const {
@@ -226,6 +238,10 @@ export function LoginForm({
       }
     });
     void checkForExistingSession();
+
+    // Keep polling while the user is waiting on the verify tab. A short
+    // timeout can miss real-world email round-trips, and some browsers delay
+    // cross-tab storage events while the original tab is in the background.
     const sessionPollId = window.setInterval(() => {
       if (hasHandledCrossTabSignIn.current) {
         window.clearInterval(sessionPollId);
@@ -233,15 +249,15 @@ export function LoginForm({
       }
       void checkForExistingSession();
     }, 1000);
-    const stopPollingId = window.setTimeout(() => {
-      window.clearInterval(sessionPollId);
-    }, 5000);
     const unsubscribeCrossTabVerification = subscribeToEmailVerificationComplete(() => {
-      completeCrossTabSignIn();
+      void checkForExistingSession();
     });
+    window.addEventListener("focus", handleWindowFocus);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
     return () => {
       window.clearInterval(sessionPollId);
-      window.clearTimeout(stopPollingId);
+      window.removeEventListener("focus", handleWindowFocus);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
       subscription.unsubscribe();
       unsubscribeCrossTabVerification();
       hasHandledCrossTabSignIn.current = false;

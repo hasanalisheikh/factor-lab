@@ -180,6 +180,15 @@ describe("LoginForm guest-upgrade mode", () => {
       data: { user: null },
       error: null,
     });
+    mockGetSession
+      .mockResolvedValueOnce({
+        data: { session: null },
+        error: null,
+      })
+      .mockResolvedValueOnce({
+        data: { session: { access_token: "session-token" } },
+        error: null,
+      });
 
     render(<LoginForm sessionUser={null} initialTab="verify" initialEmail="user@example.com" />);
 
@@ -200,7 +209,32 @@ describe("LoginForm guest-upgrade mode", () => {
     });
   });
 
-  it("7) syncs to the verify tab and flow when the page rerenders with new search params", async () => {
+  it("7) re-checks for a verified session when the verify tab regains focus", async () => {
+    mockGetUser.mockResolvedValue({
+      data: { user: null },
+      error: null,
+    });
+    mockGetSession
+      .mockResolvedValueOnce({
+        data: { session: null },
+        error: null,
+      })
+      .mockResolvedValueOnce({
+        data: { session: { access_token: "session-token" } },
+        error: null,
+      });
+
+    render(<LoginForm sessionUser={null} initialTab="verify" initialEmail="user@example.com" />);
+
+    window.dispatchEvent(new Event("focus"));
+
+    await waitFor(() => {
+      expect(mockRouterRefresh).toHaveBeenCalledTimes(1);
+      expect(mockRouterReplace).toHaveBeenCalledWith("/dashboard");
+    });
+  });
+
+  it("8) syncs to the verify tab and flow when the page rerenders with new search params", async () => {
     mockGetUser.mockResolvedValue({
       data: { user: null },
       error: null,
@@ -223,7 +257,7 @@ describe("LoginForm guest-upgrade mode", () => {
     expect(document.querySelector('input[name="flow"]')).toHaveAttribute("value", "upgrade");
   });
 
-  it("8) proceeds to the dashboard if the verify tab finds an existing session", async () => {
+  it("9) proceeds to the dashboard if the verify tab finds an existing session", async () => {
     mockGetUser.mockResolvedValue({
       data: { user: null },
       error: null,
@@ -241,7 +275,7 @@ describe("LoginForm guest-upgrade mode", () => {
     });
   });
 
-  it("9) leaves flow unset for legacy verify URLs so resend can use compatibility fallback", async () => {
+  it("10) leaves flow unset for legacy verify URLs so resend can use compatibility fallback", async () => {
     mockGetUser.mockResolvedValue({
       data: { user: null },
       error: null,
@@ -256,7 +290,7 @@ describe("LoginForm guest-upgrade mode", () => {
     expect(document.querySelector('input[name="flow"]')).toBeNull();
   });
 
-  it("10) shows a resend countdown banner after a fresh verification email send", async () => {
+  it("11) shows a resend countdown banner after a fresh verification email send", async () => {
     const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(FIXED_SENT_AT);
 
     try {
@@ -287,7 +321,7 @@ describe("LoginForm guest-upgrade mode", () => {
     }
   });
 
-  it("11) shows a resend countdown banner after a fresh password reset email send", async () => {
+  it("12) shows a resend countdown banner after a fresh password reset email send", async () => {
     const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(FIXED_SENT_AT);
 
     try {
@@ -318,7 +352,7 @@ describe("LoginForm guest-upgrade mode", () => {
     }
   });
 
-  it("12) returns the original forgot-password tab to sign-in after a reset completes elsewhere", async () => {
+  it("13) returns the original forgot-password tab to sign-in after a reset completes elsewhere", async () => {
     mockGetUser.mockResolvedValue({
       data: { user: null },
       error: null,
