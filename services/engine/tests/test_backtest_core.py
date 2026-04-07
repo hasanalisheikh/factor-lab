@@ -5,11 +5,15 @@ from collections import defaultdict
 import numpy as np
 import pandas as pd
 
+from factorlab_engine.turnover import annualize_turnover
 from factorlab_engine.worker import (
+    _annualize_turnover_from_rebalances,
     _apply_rebalance_costs,
     _compute_metrics,
     _equal_weight,
     _momentum_12_1,
+    _rebalance_turnover_points,
+    _slice_series_to_run_window,
 )
 
 
@@ -108,3 +112,67 @@ def test_momentum_12_1_default_top_half_backward_compat():
         assert a["date"] == b["date"]
         assert a["symbol"] == b["symbol"]
         assert abs(a["weight"] - b["weight"]) < 1e-12
+
+
+def test_equal_weight_has_nonzero_turnover_after_init():
+    """Equal weight on a stable universe must show > 0 annualized turnover.
+
+    With the drift-reset fix, each monthly rebalance computes turnover against the
+    actual drifted (non-equal) weights, so even with an unchanged universe the
+    annualized turnover is strictly positive.
+    """
+    # 520 trading days ≈ 2 years — enough for >12 rebalances after init
+    prices = _prices(periods=520)
+    _, annual_turnover, rebalance_turnover, _ = _equal_weight(prices)
+
+    # The annualized KPI should be positive after drift-reset fix
+    assert annual_turnover > 0.0, (
+        f"Expected equal_weight turnover > 0 after drift-reset fix, got {annual_turnover}"
+    )
+
+    # Every per-rebalance value should be non-negative
+    assert (rebalance_turnover >= 0).all()
+
+    # After the initial rebalance the subsequent rebalances should have non-zero turnover
+    non_init = rebalance_turnover[rebalance_turnover > 0]
+    assert len(non_init) >= 5, (
+        f"Expected at least 5 non-zero rebalance turnover values after init, got {len(non_init)}"
+    )
+
+
+def test_equal_weight_turnover_excludes_warmup():
+    """KPI turnover must be recomputed from the sliced run-window series, not the full warmup window.
+
+    The production path in _build_baseline_result:
+      1. Calls _equal_weight on the full warmup+run price history.
+      2. Slices rebalance_turnover to the run window.
+      3. Recomputes `turnover` from the sliced series with exclude_initial=False.
+
+    This test replicates that logic and verifies the run-window-only KPI differs from
+    the full-window KPI when warmup rebalances are present.
+    """
+    # 320 bdays: treat the first 60 as warmup, the rest as the run window.
+    prices = _prices(periods=320)
+    run_prices = prices.iloc[60:]
+
+    _, ann_full, rebal_full, _ = _equal_weight(prices)
+
+    run_start = str(run_prices.index[0].date())
+    run_end = str(run_prices.index[-1].date())
+    sliced = _slice_series_to_run_window(rebal_full, run_start, run_end)
+    pts = _rebalance_turnover_points(sliced, periods_per_year=12.0)
+    kpi_fixed = annualize_turnover(pts, periods_per_year=12.0, exclude_initial=False)
+
+    # Fixed KPI must be positive
+    assert kpi_fixed > 0.0, f"Run-window-only KPI should be > 0, got {kpi_fixed}"
+
+    # Fixed KPI must differ from the full-window KPI (warmup rebalances dilute the average)
+    assert abs(kpi_fixed - ann_full) > 1e-6, (
+        f"Run-window KPI ({kpi_fixed:.6f}) should differ from full-window KPI ({ann_full:.6f})"
+    )
+
+    # Convenience: _annualize_turnover_from_rebalances with exclude_initial=False should match
+    kpi_via_helper = _annualize_turnover_from_rebalances(
+        sliced, periods_per_year=12.0, exclude_initial=False
+    )
+    assert abs(kpi_fixed - kpi_via_helper) < 1e-12

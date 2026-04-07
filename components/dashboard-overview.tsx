@@ -129,7 +129,7 @@ export function DashboardOverview({
         sparkline: sp?.drawdown ?? [],
       },
       {
-        label: "Turnover (Ann.)",
+        label: "Turnover (Ann., drift-adj.)",
         // Turnover is stored as an annualized run-level metric, not re-computed from equity.
         // No timeframe-adjusted delta is possible without per-rebalance data.
         value: storedTurnover != null ? formatPct(storedTurnover) : "—",

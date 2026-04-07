@@ -43,7 +43,7 @@ const sections = [
           {[
             {
               label: "Strategy",
-              desc: "The portfolio construction algorithm. Equal Weight holds everything at 1/N. Momentum 12-1 picks the top half by 12-month return. ML strategies use walk-forward machine learning to rank assets. See the Strategies page for full details.",
+              desc: "The portfolio construction algorithm. Equal Weight holds everything at 1/N. Momentum 12-1 picks the top N (run.top_n) assets with a positive 12-month momentum score. ML strategies use walk-forward machine learning to rank assets. See the Strategies page for full details.",
             },
             {
               label: "Universe",

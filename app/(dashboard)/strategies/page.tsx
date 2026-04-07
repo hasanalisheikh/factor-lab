@@ -18,7 +18,7 @@ const strategies = [
     selection: "All assets in the universe — no filtering.",
     weightScheme: "1/N per asset (e.g., 12.5% each for the 8-asset ETF8 universe).",
     turnover:
-      "Low under the rebalance-target convention. Turnover only appears when holdings or target weights change.",
+      "Moderate. Even with a stable universe, monthly price drift causes weights to deviate from 1/N. The drift-reset at each rebalance generates ongoing turnover (~15–30% annualized for a broad ETF universe).",
     signal: null,
     mlDetails: null,
     expectations:
@@ -43,7 +43,7 @@ const strategies = [
       "score = price(t−21 trading days) / price(t−252 trading days) − 1\n\nThe 1-month skip (t−21) removes short-term price reversal contamination. Momentum is a 2–12 month phenomenon.",
     mlDetails: null,
     expectations:
-      "Outperforms in trending markets. Sharp reversals (e.g., crisis recoveries) cause outsized drawdowns — a known property of momentum strategies.",
+      "Outperforms in trending markets. Sharp reversals (e.g., crisis recoveries) cause outsized drawdowns — a known property of momentum strategies. When no asset has a positive momentum score, the strategy holds no equities (effectively cash) — flat equity-curve segments in the chart indicate these all-cash periods.",
     reference: "Jegadeesh & Titman (1993); Fama & French (1996).",
   },
   {
@@ -52,51 +52,54 @@ const strategies = [
     tag: "ML · Walk-Forward",
     tagVariant: "outline" as const,
     summary:
-      "Walk-forward Ridge regression trained on 7 cross-sectional features. Retrained each month using all available history.",
-    rule: "Each month, retrain a Ridge regressor on all past data, rank assets by predicted next-month return, and hold the top N equal-weighted.",
-    selection: `Top N assets by predicted return (N = run.top_n, default 10). Requires ≥ 24 months of training history before first prediction.`,
+      "Daily walk-forward Ridge regression trained on 8 cross-sectional features using a rolling 2-year training window. Portfolio is rebalanced every trading day; model is refitted every 5 trading days.",
+    rule: "Each trading day, rank assets by predicted next-day return and hold the top N equal-weighted. Model refitted every 5 trading days on the most recent 504 trading days of data.",
+    selection: `Top N assets by predicted return (N = run.top_n). Requires ≥ 252 trading days (~1 year) of training history before first prediction.`,
     weightScheme: "Equal weight among the top-N selected assets.",
-    turnover:
-      "Variable. Daily one-way turnover annualized at 252; initial portfolio establishment is excluded.",
+    turnover: "High. Daily rebalancing drives nominal turnover; annualized at 252 periods/year.",
     signal: null,
     mlDetails: {
       features: [
         {
-          name: "momentum_12_1",
-          desc: "12-month momentum: price(t−1mo) / price(t−12mo) − 1. The 1-month skip removes short-term reversal contamination.",
+          name: "mom_5d",
+          desc: "5-day momentum: price / price.shift(5) − 1. Short-term price continuation signal.",
         },
         {
-          name: "momentum_6_1",
-          desc: "6-month momentum: price(t−1mo) / price(t−6mo) − 1. Captures intermediate-term trends at a shorter horizon.",
+          name: "mom_20d",
+          desc: "~1-month momentum: price / price.shift(20) − 1.",
         },
         {
-          name: "reversal_1m",
-          desc: "Short-term reversal: −(prior-month return). Negative sign exploits mean-reversion of the most recent month.",
+          name: "mom_60d",
+          desc: "~3-month momentum: price / price.shift(60) − 1.",
+        },
+        {
+          name: "mom_252d",
+          desc: "~12-month momentum: price / price.shift(252) − 1. No 1-month skip applied.",
         },
         {
           name: "vol_20d",
-          desc: "20-day rolling daily return standard deviation, sampled at month-end. Short-term risk proxy.",
+          desc: "20-day rolling standard deviation of daily returns. Short-term risk proxy.",
         },
         {
           name: "vol_60d",
-          desc: "60-day rolling daily return standard deviation, sampled at month-end. Medium-term risk proxy.",
+          desc: "60-day rolling standard deviation of daily returns. Medium-term risk proxy.",
+        },
+        {
+          name: "drawdown_252d",
+          desc: "252-day trailing drawdown: price / rolling_max(252d) − 1. Captures recent price weakness relative to peak.",
         },
         {
           name: "beta_60d",
           desc: "60-day rolling beta to the benchmark. Measures recent systematic risk exposure.",
         },
-        {
-          name: "drawdown_6m",
-          desc: "6-month (126-day) max drawdown: price / rolling_max(126d) − 1. Captures recent price weakness.",
-        },
       ],
-      target: "Next month total return.",
+      target: "Next-day total return.",
       model:
         "Ridge(α=1.0) with StandardScaler preprocessing. L2 regularization shrinks coefficients to reduce cross-sectional overfitting.",
       warmup:
-        "Requires ≥ 24 months of training history before the first prediction. Price data is fetched with a 5-year lookback before run.start_date to build the initial training set.",
+        "Requires ≥ 252 trading days (~1 year) of training history before the first prediction. Price data is fetched with a 5-year lookback before run.start_date.",
       walkForward:
-        "The model is retrained from scratch at every rebalance date, using all available history up to (but not including) that date. There is no look-ahead bias.",
+        "Refitted every 5 trading days using a rolling 504-trading-day (~2-year) window; portfolio selection is performed daily. No look-ahead bias.",
     },
     expectations:
       "Aims to combine multiple factor signals with a regularized model. Performance depends on regime stability; walk-forward discipline ensures realistic out-of-sample simulation.",
@@ -108,32 +111,34 @@ const strategies = [
     tag: "ML · Walk-Forward",
     tagVariant: "outline" as const,
     summary:
-      "Same walk-forward framework as ML Ridge, but uses gradient-boosted trees to capture non-linear feature interactions.",
-    rule: "Identical to ML Ridge, substituting a LightGBM regressor for the Ridge model.",
-    selection: "Top N assets by predicted return.",
+      "Same daily walk-forward framework as ML Ridge, but uses gradient-boosted trees to capture non-linear feature interactions.",
+    rule: "Identical to ML Ridge, substituting a LightGBM regressor for the Ridge model. Refitted every 5 trading days on a rolling 504-day window.",
+    selection:
+      "Top N assets by predicted next-day return (N = run.top_n). Requires ≥ 252 trading days (~1 year) of training history before first prediction.",
     weightScheme: "Equal weight among selected assets.",
-    turnover:
-      "Variable. Daily one-way turnover annualized at 252; initial portfolio establishment is excluded.",
+    turnover: "High. Daily rebalancing drives nominal turnover; annualized at 252 periods/year.",
     signal: null,
     mlDetails: {
       features: [
-        { name: "momentum_12_1", desc: "12-month momentum: price(t−1mo) / price(t−12mo) − 1." },
-        { name: "momentum_6_1", desc: "6-month momentum: price(t−1mo) / price(t−6mo) − 1." },
-        { name: "reversal_1m", desc: "Short-term reversal: −(prior-month return)." },
-        { name: "vol_20d", desc: "20-day rolling daily return std, sampled at month-end." },
-        { name: "vol_60d", desc: "60-day rolling daily return std, sampled at month-end." },
-        { name: "beta_60d", desc: "60-day rolling beta to benchmark." },
+        { name: "mom_5d", desc: "5-day momentum: price / price.shift(5) − 1." },
+        { name: "mom_20d", desc: "~1-month momentum: price / price.shift(20) − 1." },
+        { name: "mom_60d", desc: "~3-month momentum: price / price.shift(60) − 1." },
+        { name: "mom_252d", desc: "~12-month momentum: price / price.shift(252) − 1." },
+        { name: "vol_20d", desc: "20-day rolling standard deviation of daily returns." },
+        { name: "vol_60d", desc: "60-day rolling standard deviation of daily returns." },
         {
-          name: "drawdown_6m",
-          desc: "6-month (126-day) max drawdown: price / rolling_max(126d) − 1.",
+          name: "drawdown_252d",
+          desc: "252-day trailing drawdown: price / rolling_max(252d) − 1.",
         },
+        { name: "beta_60d", desc: "60-day rolling beta to benchmark." },
       ],
-      target: "Next month total return.",
+      target: "Next-day total return.",
       model:
-        "LGBMRegressor(n_estimators=300, learning_rate=0.05, num_leaves=31, min_child_samples=20). Fails with a clear error if LightGBM is not installed — no silent fallback occurs. Install with: pip install 'lightgbm>=4.5.0'.",
+        "LGBMRegressor(n_estimators=200, learning_rate=0.05, num_leaves=31, min_child_samples=10). Fails with a clear error if LightGBM is not installed — no silent fallback occurs. Install with: pip install 'lightgbm>=4.5.0'.",
       warmup:
-        "Requires ≥ 24 months of training history before the first prediction. Price data fetched with 5-year lookback before run.start_date.",
-      walkForward: "Same expanding-window walk-forward as ML Ridge. No look-ahead bias.",
+        "Requires ≥ 252 trading days (~1 year) of training history before the first prediction. Price data fetched with 5-year lookback before run.start_date.",
+      walkForward:
+        "Refitted every 5 trading days using a rolling 504-trading-day (~2-year) window; portfolio selection is performed daily. No look-ahead bias.",
     },
     expectations:
       "May outperform Ridge when factor relationships are non-linear or interaction effects are important. More sensitive to small dataset sizes.",
@@ -383,22 +388,28 @@ export default function StrategiesPage() {
             <CardContent className="text-foreground/90 space-y-3 px-4 py-4 text-[13px] leading-relaxed">
               <p>
                 On each <strong>rebalance date</strong>, the engine computes new target weights and
-                calculates one-way turnover from the previous rebalance target:
+                calculates one-way turnover from the actual pre-rebalance portfolio weights
+                (accounting for price drift since the last rebalance):
                 <code className="bg-secondary mx-1 rounded px-1 text-[12px]">
-                  0.5 × sum(abs(new_weights − old_weights))
+                  0.5 × sum(abs(new_weights − drifted_weights))
                 </code>
                 . Initial portfolio establishment is excluded from the turnover KPI, and no-change
                 rebalance dates count as 0.
               </p>
               <p>
-                <strong>Example:</strong> In a 5-position equal-weight portfolio, swapping one name
-                means selling 20% of the old holding and buying 20% of the new one. The one-way
-                turnover is therefore 20%, and at 10 bps costs the rebalance drag is 0.02%.
+                <strong>Example:</strong> In a 5-position equal-weight portfolio, even with
+                unchanged holdings, price drift causes weights to deviate from 1/5. Resetting them
+                back to equal weight costs ~1–5% one-way turnover per month.
+              </p>
+              <p>
+                The <strong>Trades tab</strong> chart shows constituent-change turnover from
+                position records (useful for understanding which assets rotate in/out). The
+                annualized Turnover KPI in the Overview combines both constituent changes and
+                drift-reset cost.
               </p>
               <p>
                 Daily ML strategies annualize turnover with 252 rebalances/year; monthly strategies
-                use 12. The turnover chart shows per-rebalance one-way turnover, not an annualized
-                value.
+                use 12.
               </p>
             </CardContent>
           </Card>

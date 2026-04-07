@@ -477,12 +477,12 @@ export function buildReportHtml(params: {
       <p><strong>Window:</strong> ${escapeHtml(windowDisplay)}</p>
       <p><strong>Universe:</strong> ${escapeHtml(universeLabel)}</p>
       <p><strong>Rebalance frequency:</strong> ${escapeHtml(rebalanceFreq)}</p>
-      <p><strong>Top N:</strong> ${topN}</p>
+      ${strategyId !== "equal_weight" ? `<p><strong>Top N:</strong> ${topN}</p>` : ""}
       <p><strong>Transaction costs:</strong> ${escapeHtml(costsDisplay)}</p>
       ${typeof slippageBps === "number" && slippageBps > 0 ? `<p><strong>Slippage:</strong> ${slippageBps} bps (configured)</p>` : ""}
       ${initialCapital !== null ? `<p><strong>Initial capital:</strong> ${fmtMoney(initialCapital)}</p>` : ""}
       <p><strong>Equity curve points:</strong> ${chartSeries.length}${chartSeries.length < chartRawSeries.length ? ` (from ${chartRawSeries.length} raw)` : ""}</p>
-      ${warmupPoints > 0 ? `<p><strong>Warmup before first active position:</strong> ${warmupPoints} trading day(s) at starting NAV.</p>` : ""}
+      ${ML_STRATEGIES.has(strategyId) ? `<p>Model active from first equity date (${escapeHtml(effectiveStart)}). 5-year price lookback loaded before backtest start for model training.</p>` : warmupPoints > 0 ? `<p><strong>Note:</strong> Portfolio established at starting NAV on the first trading day (day-1 return excluded from performance by convention). Active positions are held from day 1.</p>` : ""}
       ${benchmarkOverlapDetected ? `<p><strong>Benchmark overlap:</strong> portfolio holds ${escapeHtml(benchmarkTicker)} at some rebalances.</p>` : ""}
       ${universeSymbols?.includes("GOOGL") && universeSymbols?.includes("GOOG") ? `<p><strong>Dual-class shares:</strong> GOOGL and GOOG are both held &mdash; these are dual-class shares of Alphabet Inc. and move nearly identically; their combined weight is roughly double a single-class holding.</p>` : ""}
       ${runMetadata.predictionsDigest ? `<p><strong>Predictions digest:</strong> <span style="font-size:12px">${escapeHtml(runMetadata.predictionsDigest.slice(0, 16))}</span></p>` : ""}
@@ -499,7 +499,7 @@ export function buildReportHtml(params: {
       <div class="kpi"><div class="label">Volatility</div><div class="value">${fmtPercent(metrics.volatility)}</div></div>
       <div class="kpi"><div class="label">Win Rate</div><div class="value">${fmtPercent(metrics.win_rate)}</div></div>
       <div class="kpi"><div class="label">Profit Factor</div><div class="value">${fmtRatio(metrics.profit_factor)}</div></div>
-      <div class="kpi"><div class="label">Turnover (Ann.)</div><div class="value">${fmtPercent(metrics.turnover)}</div></div>
+      <div class="kpi"><div class="label">Turnover (Ann., drift-adj.)</div><div class="value">${fmtPercent(metrics.turnover)}</div></div>
       <div class="kpi"><div class="label">Calmar</div><div class="value">${fmtRatio(metrics.calmar)}</div></div>
     </div>
     <div class="kpi-defs">
@@ -524,7 +524,7 @@ export function buildReportHtml(params: {
       ${eqXAxis}
       <p style="margin-top:6px;"><strong>Start NAV:</strong> ${fmtMoney(first?.portfolio ?? 0)} | <strong>End NAV:</strong> ${fmtMoney(last?.portfolio ?? 0)}</p>
       <p><strong>Benchmark End:</strong> ${fmtMoney(last?.benchmark ?? 0)}</p>
-      ${warmupPoints > 0 ? `<p><strong>Warmup:</strong> First ${warmupPoints} trading day(s) remained at starting NAV before the first active position.</p>` : ""}
+      ${ML_STRATEGIES.has(strategyId) ? `<p>Model active from first equity date (${escapeHtml(effectiveStart)}). 5-year price lookback loaded before backtest start for model training. Start NAV reflects portfolio value after the first prediction day&rsquo;s live return${initialCapital !== null ? `; configured initial capital was ${fmtMoney(initialCapital)}` : ""}.</p>` : warmupPoints > 0 ? `<p><strong>Note:</strong> First trading day shows starting NAV (day-1 return excluded from performance by convention; active positions held from day 1).</p>` : ""}
     </div>
 
     <h2>Drawdown</h2>
@@ -542,8 +542,9 @@ export function buildReportHtml(params: {
     <div class="panel">
       <ul>
         <li>Turnover KPI shown is annualized one-way turnover: ${fmtPercent(annualizedTurnoverFrac, 2)}.</li>
-        <li>Average one-way turnover per rebalance: ${averageTurnoverPerRebalance != null ? fmtPercent(averageTurnoverPerRebalance, 2) : "Unavailable (positions history required)"}.</li>
+        <li>Average one-way turnover per rebalance (constituent changes only): ${averageTurnoverPerRebalance != null ? fmtPercent(averageTurnoverPerRebalance, 2) : "Unavailable (positions history required)"}.</li>
         <li>Initial portfolio establishment is excluded from turnover. No-change rebalance dates count as 0.</li>
+        <li>Note: the per-rebalance figure above reflects constituent-change turnover from position records. The annualized Turnover KPI additionally includes weight drift accumulated between rebalances and reset at each rebalance.</li>
         <li>Transaction cost rate: ${costsBps} bps per 100% one-way turnover (cost_rate = ${(costRate * 100).toFixed(4)}%).</li>
         <li>Per-rebalance cost drag: ${perRebalanceCostDrag != null ? `${fmtCostDrag(perRebalanceCostDrag)} (= ${fmtPercent(averageTurnoverPerRebalance ?? 0, 2)} turnover &times; ${costsBps} bps).` : "Unavailable (positions history required)."}</li>
         <li>Annualized cost drag (${escapeHtml(rebalanceFreq.toLowerCase())} rebalancing, ${periods} periods/year): ${annualizedCostDrag != null ? fmtCostDrag(annualizedCostDrag) : "Unavailable (positions history required)"}.</li>
@@ -559,7 +560,7 @@ export function buildReportHtml(params: {
     <div class="panel">
       <ul>
         <li>Risk-on when benchmark &gt; 200D SMA; risk-off allocates to TLT.</li>
-        <li>Risk-on holdings: top 50% of universe by Momentum 12-1 score (positive scores only). Falls back to equal-weight universe when no asset qualifies.</li>
+        <li>Risk-on holdings: top ${topN} asset${topN !== 1 ? "s" : ""} (N = run.top_n = ${topN}) by Momentum 12-1 score (positive scores only). Falls back to equal-weight universe when no asset qualifies.</li>
         <li>Risk-off defensive asset: TLT (falls back to BIL if TLT data is unavailable).</li>
         <li>Regime transitions generate near-full-portfolio turnover; sustained regimes produce normal momentum-level turnover.</li>
       </ul>

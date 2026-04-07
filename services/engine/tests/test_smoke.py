@@ -75,6 +75,7 @@ def _fake_run(
     end: str = _SMOKE_END,
     top_n: int = 3,
     costs_bps: float = 10.0,
+    initial_capital: float = 100_000.0,
 ) -> dict:
     return {
         "id": f"smoke-{strategy_id}",
@@ -86,6 +87,7 @@ def _fake_run(
         "top_n": top_n,
         "start_date": start,
         "end_date": end,
+        "run_params": {"initial_capital": initial_capital},
     }
 
 
@@ -150,11 +152,21 @@ def _assert_smoke(result, strategy_id: str) -> None:
         assert "portfolio" in row and "benchmark" in row
         assert np.isfinite(row["portfolio"]), f"{strategy_id}: non-finite portfolio value"
         assert np.isfinite(row["benchmark"]), f"{strategy_id}: non-finite benchmark value"
-    totals: dict[str, float] = defaultdict(float)
+    from factorlab_engine.worker import _ALL_CASH_SENTINEL
+
+    # Group positions by date; dates covered solely by the _CASH sentinel are
+    # valid all-cash rebalances (weight=0 is expected; no 1.0 sum required).
+    by_date: dict[str, list[dict]] = defaultdict(list)
     for pos in result.position_rows:
-        totals[pos["date"]] += pos["weight"]
-    for dt, total in totals.items():
-        assert abs(total - 1.0) < 1e-8, f"{strategy_id}: weights sum to {total:.9f} on {dt}"
+        by_date[pos["date"]].append(pos)
+    for dt, rows in by_date.items():
+        if len(rows) == 1 and rows[0]["symbol"] == _ALL_CASH_SENTINEL:
+            assert rows[0]["weight"] == 0.0, (
+                f"{strategy_id}: _CASH sentinel must have weight=0 on {dt}"
+            )
+        else:
+            total = sum(r["weight"] for r in rows)
+            assert abs(total - 1.0) < 1e-8, f"{strategy_id}: weights sum to {total:.9f} on {dt}"
 
 
 # ---------------------------------------------------------------------------
@@ -454,3 +466,96 @@ def test_smoke_ml_lightgbm():
         totals[pos["date"]] += pos["weight"]
     for dt, total in totals.items():
         assert abs(total - 1.0) < 1e-8, f"ml_lightgbm: weights sum to {total:.9f} on {dt}"
+
+
+# ---------------------------------------------------------------------------
+# P1 Regression: initial_capital truly scales the equity curve
+# ---------------------------------------------------------------------------
+
+
+def test_initial_capital_scales_equity_curve(monkeypatch):
+    """Equity curve start NAV must equal initial_capital, not always $100K.
+
+    Two equal_weight runs with different initial_capital values must produce
+    equity curves that are an exact scalar multiple of each other on every date.
+    Both the portfolio and benchmark series must scale identically.
+    """
+    import factorlab_engine.worker as w
+
+    tickers = ["A", "B", "C", "BENCH"]
+    prices = _make_prices(tickers, seed=42)
+    io = _FakeIO(prices)
+    monkeypatch.setattr(w, "_download_prices", lambda *a, **kw: prices)
+
+    run_100k = _fake_run("equal_weight", ["A", "B", "C"], initial_capital=100_000.0)
+    run_250k = _fake_run("equal_weight", ["A", "B", "C"], initial_capital=250_000.0)
+
+    result_100k = _build_baseline_result(io, run_100k)
+    result_250k = _build_baseline_result(io, run_250k)
+
+    # Starting NAV must equal configured capital exactly (first day return is zeroed)
+    assert result_100k.equity_rows[0]["portfolio"] == pytest.approx(100_000.0)
+    assert result_250k.equity_rows[0]["portfolio"] == pytest.approx(250_000.0)
+
+    # Benchmark must also be rebased to the same capital
+    assert result_100k.equity_rows[0]["benchmark"] == pytest.approx(100_000.0)
+    assert result_250k.equity_rows[0]["benchmark"] == pytest.approx(250_000.0)
+
+    # Every row must be exactly 2.5× larger for the 250K run
+    scale = 250_000.0 / 100_000.0
+    assert len(result_100k.equity_rows) == len(result_250k.equity_rows)
+    for r100, r250 in zip(result_100k.equity_rows, result_250k.equity_rows):
+        assert r100["date"] == r250["date"]
+        assert r250["portfolio"] == pytest.approx(r100["portfolio"] * scale, rel=1e-9)
+        assert r250["benchmark"] == pytest.approx(r100["benchmark"] * scale, rel=1e-9)
+
+    # Percentage metrics must be unchanged
+    m100 = result_100k.metrics
+    m250 = result_250k.metrics
+    for key in ("cagr", "sharpe", "max_drawdown", "volatility", "win_rate", "calmar"):
+        assert m100[key] == pytest.approx(m250[key], rel=1e-9), f"metric {key} changed"
+
+
+# ---------------------------------------------------------------------------
+# P2 Regression: _CASH sentinel persisted for all-cash rebalance dates
+# ---------------------------------------------------------------------------
+
+
+def test_momentum_12_1_emits_all_cash_sentinel(monkeypatch):
+    """momentum_12_1 must emit a _CASH sentinel row for every rebalance date
+    where all momentum scores are <= 0 (all-cash state).
+
+    We force all-cash by using prices that decline uniformly so that the
+    12-month-minus-1-month momentum score is always negative.
+    """
+    import factorlab_engine.worker as w
+    from factorlab_engine.worker import _ALL_CASH_SENTINEL
+
+    n = _N_BDAYS
+    dates = pd.bdate_range(_SMOKE_START, periods=n)
+    # Uniformly declining prices → all momentum scores negative throughout
+    prices = pd.DataFrame(
+        {
+            "A": np.linspace(200, 50, n),
+            "B": np.linspace(180, 40, n),
+            "BENCH": np.linspace(150, 60, n),
+        },
+        index=dates,
+    )
+    io = _FakeIO(prices)
+    monkeypatch.setattr(w, "_download_prices", lambda *a, **kw: prices)
+
+    run = _fake_run("momentum_12_1", ["A", "B"], top_n=2)
+    result = _build_baseline_result(io, run)
+
+    cash_rows = [p for p in result.position_rows if p["symbol"] == _ALL_CASH_SENTINEL]
+    assert len(cash_rows) > 0, "Expected _CASH sentinel rows for all-cash rebalances"
+    for row in cash_rows:
+        assert row["weight"] == 0.0, "_CASH sentinel must have weight=0"
+        assert row["date"] >= run["start_date"], "_CASH row must be within run window"
+
+    # No real asset row may have the sentinel symbol
+    real_rows = [p for p in result.position_rows if p["symbol"] != _ALL_CASH_SENTINEL]
+    for row in real_rows:
+        assert row["symbol"] != _ALL_CASH_SENTINEL
+        assert row["weight"] > 0.0, "Real position rows must have positive weight"

@@ -245,6 +245,7 @@ def run_walk_forward(
     benchmark_ticker: str,
     top_n: int | None = None,
     cost_bps: float | None = None,
+    initial_capital: float = 100_000.0,
     progress_cb: Callable[[int, int], None] | None = None,
 ) -> MLArtifacts:
     """Daily walk-forward ML backtest.
@@ -494,8 +495,8 @@ def run_walk_forward(
     # ── Equity curve ──────────────────────────────────────────────────────────
     portfolio_ser = pd.Series(daily_portfolio, index=equity_dates)
     benchmark_ser = pd.Series(daily_benchmark, index=equity_dates)
-    portfolio_nav = 100_000.0 * (1.0 + portfolio_ser).cumprod()
-    benchmark_nav = 100_000.0 * (1.0 + benchmark_ser).cumprod()
+    portfolio_nav = initial_capital * (1.0 + portfolio_ser).cumprod()
+    benchmark_nav = initial_capital * (1.0 + benchmark_ser).cumprod()
 
     equity_rows = [
         {

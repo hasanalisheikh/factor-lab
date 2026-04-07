@@ -110,15 +110,30 @@ export function MlInsightsTab({ metadata, predictions, runMetadata }: MlInsights
 
   const topN = metadata?.top_n ?? null;
 
-  const keyRows: { label: string; value: string }[] = [
+  const trainingWindow = asObject(runMeta?.training_window as Json | null | undefined);
+  const trainWindowDays =
+    typeof trainingWindow?.train_window_days === "number" ? trainingWindow.train_window_days : null;
+  const rollingWindowLabel =
+    trainWindowDays !== null
+      ? `${trainWindowDays} days (~${Math.round((trainWindowDays / 252) * 10) / 10}yr)`
+      : "504 days (~2yr)";
+
+  const keyRows: { label: string; value: string; tooltip?: string }[] = [
     { label: "Model", value: metadata?.model_name ?? "--" },
     { label: "Algorithm", value: modelImpl },
     {
-      label: "Train Window",
+      label: "Data Range",
       value:
         metadata?.train_start && metadata?.train_end
           ? `${metadata.train_start} → ${metadata.train_end}`
           : "--",
+      tooltip:
+        "The full price history available for training: 5-year warmup before run start plus the backtest period. Actual per-step training window is rolling (see Rolling Window below).",
+    },
+    {
+      label: "Rolling Window",
+      value: rollingWindowLabel,
+      tooltip: "The size of the rolling training window used at each model refit step.",
     },
     { label: "Top N", value: topN !== null ? String(topN) : "--" },
     { label: "Cost (bps)", value: metadata ? Number(metadata.cost_bps).toFixed(1) : "--" },
@@ -285,7 +300,17 @@ export function MlInsightsTab({ metadata, predictions, runMetadata }: MlInsights
                   key={row.label}
                   className="border-border/40 flex items-center justify-between border-b py-2 last:border-0"
                 >
-                  <span className="text-muted-foreground text-[11px]">{row.label}</span>
+                  <span className="text-muted-foreground flex items-center gap-1 text-[11px]">
+                    {row.label}
+                    {row.tooltip && (
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Info className="text-muted-foreground/50 h-3 w-3 cursor-help" />
+                        </TooltipTrigger>
+                        <TooltipContent>{row.tooltip}</TooltipContent>
+                      </Tooltip>
+                    )}
+                  </span>
                   <span className="text-card-foreground font-mono text-[12px] font-medium">
                     {row.value}
                   </span>

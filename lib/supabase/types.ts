@@ -417,6 +417,15 @@ export type DataStateRow = Database["public"]["Tables"]["data_state"]["Row"];
 export type ModelMetadataRow = Database["public"]["Tables"]["model_metadata"]["Row"];
 export type ModelPredictionRow = Database["public"]["Tables"]["model_predictions"]["Row"];
 export type NotificationRow = Database["public"]["Tables"]["notifications"]["Row"];
+/**
+ * A row in the `positions` table (run_id, date, symbol, weight).
+ *
+ * The engine writes one row per held asset per rebalance date.  When a strategy
+ * holds no risky assets on a given rebalance date (e.g. momentum_12_1 with all
+ * negative scores), it writes a single sentinel row with symbol="_CASH" and
+ * weight=0.  Consumers must filter out symbol="_CASH" before treating rows as
+ * real ticker holdings — see `ALL_CASH_SENTINEL` in lib/turnover.ts.
+ */
 export type PositionRow = Database["public"]["Tables"]["positions"]["Row"];
 export type UserSettings = Database["public"]["Tables"]["user_settings"]["Row"];
 

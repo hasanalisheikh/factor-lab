@@ -18,6 +18,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
+import { ALL_CASH_SENTINEL } from "@/lib/turnover";
 import type { ModelPredictionRow, PositionRow } from "@/lib/supabase/types";
 
 function formatPct(v: number | null | undefined): string {
@@ -84,9 +85,15 @@ function getPositionDates(positions: PositionRow[]): string[] {
   return Array.from(seen).sort((a, b) => b.localeCompare(a)); // newest first
 }
 
+/** Returns true when the only row for this date is the _CASH sentinel (no real holdings). */
+function isAllCashDate(positions: PositionRow[], date: string): boolean {
+  const rows = positions.filter((r) => r.date === date);
+  return rows.length === 1 && rows[0].symbol === ALL_CASH_SENTINEL;
+}
+
 function getPositionsForDate(positions: PositionRow[], date: string): BaselineHolding[] {
   return positions
-    .filter((r) => r.date === date)
+    .filter((r) => r.date === date && r.symbol !== ALL_CASH_SENTINEL)
     .sort((a, b) => a.symbol.localeCompare(b.symbol))
     .map((r) => ({ symbol: r.symbol, weight: Number(r.weight) }));
 }
@@ -116,6 +123,10 @@ export function HoldingsTab({ predictions = [], positions = [] }: HoldingsTabPro
   );
   const baselineHoldings = useMemo(
     () => (isBaseline ? getPositionsForDate(positions, activeDate) : []),
+    [positions, activeDate, isBaseline]
+  );
+  const isAllCash = useMemo(
+    () => isBaseline && activeDate !== "" && isAllCashDate(positions, activeDate),
     [positions, activeDate, isBaseline]
   );
 
@@ -209,6 +220,10 @@ export function HoldingsTab({ predictions = [], positions = [] }: HoldingsTabPro
                 ))}
               </TableBody>
             </Table>
+          </div>
+        ) : isAllCash ? (
+          <div className="text-muted-foreground px-4 py-8 text-center text-[12px]">
+            All-cash — no qualifying assets held on this rebalance date.
           </div>
         ) : (
           /* Baseline holdings table */

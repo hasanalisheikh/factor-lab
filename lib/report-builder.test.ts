@@ -690,3 +690,48 @@ describe("buildReportHtml - Window header vs chart range", () => {
     expect(html).toContain(`to ${lastDate}`);
   });
 });
+
+// ── Top N visibility ──────────────────────────────────────────────────────────
+
+describe("buildReportHtml - Top N visibility", () => {
+  it("shows Top N line for momentum_12_1", () => {
+    const html = buildReportHtml({ ...BASE_PARAMS, strategyId: "momentum_12_1", topN: 5 });
+    expect(html).toContain("<strong>Top N:</strong> 5");
+  });
+
+  it("shows Top N line for trend_filter", () => {
+    const html = buildReportHtml({ ...BASE_PARAMS, strategyId: "trend_filter", topN: 4 });
+    expect(html).toContain("<strong>Top N:</strong> 4");
+  });
+
+  it("hides Top N line for equal_weight", () => {
+    const html = buildReportHtml({ ...BASE_PARAMS, strategyId: "equal_weight", topN: 5 });
+    expect(html).not.toContain("<strong>Top N:</strong>");
+  });
+});
+
+// ── Trend filter methodology section ─────────────────────────────────────────
+
+describe("buildReportHtml - trend_filter methodology", () => {
+  it("does not contain hardcoded '50%' for trend_filter risk-on selection", () => {
+    const html = buildReportHtml({ ...BASE_PARAMS, strategyId: "trend_filter", topN: 4 });
+    expect(html).not.toContain("top 50%");
+  });
+
+  it("uses actual topN value in trend_filter methodology section", () => {
+    const html = buildReportHtml({ ...BASE_PARAMS, strategyId: "trend_filter", topN: 4 });
+    expect(html).toContain("top 4 assets");
+    expect(html).toContain("N = run.top_n = 4");
+  });
+
+  it("handles topN=1 with singular 'asset' (not 'assets')", () => {
+    const html = buildReportHtml({ ...BASE_PARAMS, strategyId: "trend_filter", topN: 1 });
+    expect(html).toContain("top 1 asset (N");
+    expect(html).not.toContain("top 1 assets");
+  });
+
+  it("does not render methodology section for equal_weight", () => {
+    const html = buildReportHtml({ ...BASE_PARAMS, strategyId: "equal_weight", topN: 5 });
+    expect(html).not.toContain("Risk-on when benchmark");
+  });
+});

@@ -107,6 +107,7 @@ export default async function RunDetailPage({ params }: { params: Promise<{ id: 
 
   const runConfig: RunConfig = {
     strategyLabel,
+    strategyId: run.strategy_id,
     universe: universePreset,
     universeCount,
     benchmark: benchmarkTicker,

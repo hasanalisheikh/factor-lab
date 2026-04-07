@@ -47,7 +47,7 @@ const METRICS: MetricDef[] = [
   },
   {
     key: "turnover",
-    label: "Turnover (Ann.)",
+    label: "Turnover (Ann., drift-adj.)",
     higherIsBetter: false,
     format: (v) => `${(v * 100).toFixed(1)}%`,
   },
@@ -86,7 +86,7 @@ const LEADERBOARD_METRICS: {
   },
   {
     key: "turnover",
-    label: "Turnover (Ann.)",
+    label: "Turnover (Ann., drift-adj.)",
     higherIsBetter: false,
     format: (v) => `${(v * 100).toFixed(1)}%`,
   },

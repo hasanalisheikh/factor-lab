@@ -21,7 +21,7 @@ import yfinance as yf
 
 from .ml import run_walk_forward
 from .supabase_io import DataIngestJob, Job, SupabaseIO
-from .turnover import annualize_turnover, annualize_turnover_from_position_rows, one_way_turnover
+from .turnover import annualize_turnover, one_way_turnover
 
 # ---------------------------------------------------------------------------
 # Job-level wall-clock timeout (prevents stuck/runaway jobs)
@@ -68,6 +68,11 @@ _LOW_VOL_WINDOW: int = 60  # 60 trading-day realized vol window
 _TREND_SMA_WINDOW: int = 200  # 200-day benchmark SMA for trend signal
 _TREND_DEFENSIVE: str = "TLT"  # Primary risk-off asset
 _TREND_DEFENSIVE_FALLBACK: str = "BIL"  # Cash-proxy fallback
+
+# Sentinel symbol written to the positions table for rebalance dates where a strategy
+# holds no risky assets (e.g. momentum_12_1 with all-negative scores).  Weight is 0.0.
+# Consumers MUST filter this symbol out before treating rows as real ticker holdings.
+_ALL_CASH_SENTINEL: str = "_CASH"
 
 # Data-ingest safeguards
 _INGEST_HTTP_TIMEOUT_SECONDS: int = 25
@@ -259,12 +264,19 @@ def _rebalance_turnover_points(
 
 
 def _annualize_turnover_from_rebalances(
-    rebalance_turnover: pd.Series, *, periods_per_year: float = 12.0
+    rebalance_turnover: pd.Series,
+    *,
+    periods_per_year: float = 12.0,
+    exclude_initial: bool = True,
 ) -> float:
     rebalance_points = _rebalance_turnover_points(
         rebalance_turnover, periods_per_year=periods_per_year
     )
-    return annualize_turnover(rebalance_points, periods_per_year=periods_per_year)
+    return annualize_turnover(
+        rebalance_points,
+        periods_per_year=periods_per_year,
+        exclude_initial=exclude_initial,
+    )
 
 
 def _normalize_symbol_list(values: Any) -> list[str]:
@@ -437,6 +449,34 @@ def _get_ticker_inception_dates(prices: pd.DataFrame) -> dict[str, pd.Timestamp]
     return inception
 
 
+def _drift_weights(
+    prev_date: pd.Timestamp,
+    prev_weights: pd.Series,
+    prices: pd.DataFrame,
+    curr_date: pd.Timestamp,
+) -> pd.Series:
+    """Compute actual pre-rebalance weights by applying price growth since the last rebalance.
+
+    This gives the drifted portfolio weights that a buy-and-hold investor would have at curr_date
+    if they last rebalanced at prev_date to prev_weights.  Used to capture drift-reset turnover.
+    Falls back to prev_weights if any price data is missing or degenerate.
+    """
+    if prev_weights.sum() <= 0:
+        return prev_weights
+    held = prev_weights[prev_weights > 0]
+    prev_p = prices.loc[prev_date, held.index]
+    curr_p = prices.loc[curr_date, held.index]
+    safe_prev = prev_p.where(prev_p > 0, other=float("nan"))
+    growth = curr_p / safe_prev
+    drifted_vals = (held * growth).dropna()
+    total = float(drifted_vals.sum())
+    if total <= 0:
+        return prev_weights
+    actual = pd.Series(0.0, index=prev_weights.index)
+    actual[drifted_vals.index] = drifted_vals / total
+    return actual
+
+
 def _equal_weight(prices: pd.DataFrame) -> tuple[pd.Series, float, pd.Series, list[dict[str, Any]]]:
     # Compute per-ticker inception dates so pre-launch tickers are excluded at each rebalance.
     inception_dates = _get_ticker_inception_dates(prices)
@@ -450,6 +490,7 @@ def _equal_weight(prices: pd.DataFrame) -> tuple[pd.Series, float, pd.Series, li
     prev_month = None
     active_weights = pd.Series(0.0, index=prices.columns)
     prev_rebalance_weights = pd.Series(0.0, index=prices.columns)
+    prev_rebalance_date: pd.Timestamp | None = None
 
     for dt in prices.index:
         current_month = dt.to_period("M")
@@ -462,18 +503,33 @@ def _equal_weight(prices: pd.DataFrame) -> tuple[pd.Series, float, pd.Series, li
             current_w = pd.Series(0.0, index=prices.columns)
             if n > 0:
                 current_w.loc[available_cols] = weight_per_asset
-            monthly_turnover.loc[dt] = one_way_turnover(prev_rebalance_weights, current_w)
+            actual_prev = (
+                _drift_weights(prev_rebalance_date, prev_rebalance_weights, prices, dt)
+                if prev_rebalance_date is not None
+                else prev_rebalance_weights
+            )
+            monthly_turnover.loc[dt] = one_way_turnover(actual_prev, current_w)
             prev_rebalance_weights = current_w.copy()
+            prev_rebalance_date = dt
             active_weights = current_w.copy()
 
-            for col in available_cols:
+            if n == 0:
                 rebalance_positions.append(
                     {
                         "date": pd.Timestamp(dt).strftime("%Y-%m-%d"),
-                        "symbol": str(col),
-                        "weight": weight_per_asset,
+                        "symbol": _ALL_CASH_SENTINEL,
+                        "weight": 0.0,
                     }
                 )
+            else:
+                for col in available_cols:
+                    rebalance_positions.append(
+                        {
+                            "date": pd.Timestamp(dt).strftime("%Y-%m-%d"),
+                            "symbol": str(col),
+                            "weight": weight_per_asset,
+                        }
+                    )
 
         # Daily portfolio return using weights set at last rebalance
         portfolio_rets.loc[dt] = float((rets.loc[dt] * active_weights).sum())
@@ -498,6 +554,7 @@ def _momentum_12_1(
     effective_top_n = max(1, min(int(top_n), n_assets) if top_n is not None else n_assets // 2)
     rebalance_turnover = pd.Series(0.0, index=prices.index)
     prev_rebalance_weights = pd.Series(0.0, index=prices.columns)
+    prev_rebalance_date: pd.Timestamp | None = None
     rebalance_positions: list[dict[str, Any]] = []
 
     for i, dt in enumerate(prices.index):
@@ -509,18 +566,35 @@ def _momentum_12_1(
             current_w = pd.Series(0.0, index=prices.columns)
             if not s.empty:
                 current_w.loc[s.index] = 1.0 / len(s)
-            rebalance_turnover.loc[dt] = one_way_turnover(prev_rebalance_weights, current_w)
+            actual_prev = (
+                _drift_weights(prev_rebalance_date, prev_rebalance_weights, prices, dt)
+                if prev_rebalance_date is not None
+                else prev_rebalance_weights
+            )
+            rebalance_turnover.loc[dt] = one_way_turnover(actual_prev, current_w)
             prev_rebalance_weights = current_w.copy()
+            prev_rebalance_date = dt
 
-            # Snapshot positions at this rebalance date
-            for sym, wt in current_w[current_w > 0].items():
+            # Snapshot positions at this rebalance date.  When no asset qualifies
+            # (all scores <= 0), write a sentinel row so the date is auditable in the DB.
+            positive_w = current_w[current_w > 0]
+            if positive_w.empty:
                 rebalance_positions.append(
                     {
                         "date": pd.Timestamp(dt).strftime("%Y-%m-%d"),
-                        "symbol": str(sym),
-                        "weight": float(wt),
+                        "symbol": _ALL_CASH_SENTINEL,
+                        "weight": 0.0,
                     }
                 )
+            else:
+                for sym, wt in positive_w.items():
+                    rebalance_positions.append(
+                        {
+                            "date": pd.Timestamp(dt).strftime("%Y-%m-%d"),
+                            "symbol": str(sym),
+                            "weight": float(wt),
+                        }
+                    )
         weights.loc[dt] = current_w
 
     shifted = weights.shift(1).fillna(0.0)
@@ -552,6 +626,7 @@ def _low_vol(
     current_w = pd.Series(0.0, index=prices.columns)
     rebalance_turnover = pd.Series(0.0, index=prices.index)
     prev_rebalance_weights = pd.Series(0.0, index=prices.columns)
+    prev_rebalance_date: pd.Timestamp | None = None
     rebalance_positions: list[dict[str, Any]] = []
 
     for i, dt in enumerate(prices.index):
@@ -561,16 +636,32 @@ def _low_vol(
             current_w = pd.Series(0.0, index=prices.columns)
             if not selected.empty:
                 current_w.loc[selected.index] = 1.0 / len(selected)
-            rebalance_turnover.loc[dt] = one_way_turnover(prev_rebalance_weights, current_w)
+            actual_prev = (
+                _drift_weights(prev_rebalance_date, prev_rebalance_weights, prices, dt)
+                if prev_rebalance_date is not None
+                else prev_rebalance_weights
+            )
+            rebalance_turnover.loc[dt] = one_way_turnover(actual_prev, current_w)
             prev_rebalance_weights = current_w.copy()
-            for sym, wt in current_w[current_w > 0].items():
+            prev_rebalance_date = dt
+            positive_w_lv = current_w[current_w > 0]
+            if positive_w_lv.empty:
                 rebalance_positions.append(
                     {
                         "date": pd.Timestamp(dt).strftime("%Y-%m-%d"),
-                        "symbol": str(sym),
-                        "weight": float(wt),
+                        "symbol": _ALL_CASH_SENTINEL,
+                        "weight": 0.0,
                     }
                 )
+            else:
+                for sym, wt in positive_w_lv.items():
+                    rebalance_positions.append(
+                        {
+                            "date": pd.Timestamp(dt).strftime("%Y-%m-%d"),
+                            "symbol": str(sym),
+                            "weight": float(wt),
+                        }
+                    )
         weights.loc[dt] = current_w
 
     shifted = weights.shift(1).fillna(0.0)
@@ -624,6 +715,7 @@ def _trend_filter(
     current_w = pd.Series(0.0, index=prices.columns)
     rebalance_turnover = pd.Series(0.0, index=prices.index)
     prev_rebalance_weights = pd.Series(0.0, index=prices.columns)
+    prev_rebalance_date: pd.Timestamp | None = None
     rebalance_positions: list[dict[str, Any]] = []
 
     for i, dt in enumerate(prices.index):
@@ -645,8 +737,14 @@ def _trend_filter(
             else:
                 # Risk-off: 100% defensive asset
                 current_w.loc[defensive_ticker] = 1.0
-            rebalance_turnover.loc[dt] = one_way_turnover(prev_rebalance_weights, current_w)
+            actual_prev = (
+                _drift_weights(prev_rebalance_date, prev_rebalance_weights, prices, dt)
+                if prev_rebalance_date is not None
+                else prev_rebalance_weights
+            )
+            rebalance_turnover.loc[dt] = one_way_turnover(actual_prev, current_w)
             prev_rebalance_weights = current_w.copy()
+            prev_rebalance_date = dt
             for sym, wt in current_w[current_w > 0].items():
                 rebalance_positions.append(
                     {
@@ -759,6 +857,20 @@ def _read_run_preflight_snapshot(run: dict[str, Any]) -> dict[str, Any]:
         return {}
     preflight = run_params.get("preflight")
     return preflight if isinstance(preflight, dict) else {}
+
+
+def _read_initial_capital(run: dict[str, Any], default: float = 100_000.0) -> float:
+    """Return configured initial_capital from run_params, falling back to *default*.
+
+    Falls back silently so that old run rows that pre-date the initial_capital field
+    continue to produce equity curves starting at $100,000 unchanged.
+    """
+    run_params = run.get("run_params")
+    if isinstance(run_params, dict):
+        val = run_params.get("initial_capital")
+        if isinstance(val, (int, float)) and float(val) > 0:
+            return float(val)
+    return default
 
 
 def _ml_required_snapshot_cutoff(run: dict[str, Any]) -> str:
@@ -1064,7 +1176,7 @@ def _build_baseline_result(
         )
     elif strat == "trend_filter":
         assert defensive_ticker is not None
-        daily_rets, _, rebalance_turnover, rebalance_positions = _trend_filter(
+        daily_rets, turnover, rebalance_turnover, rebalance_positions = _trend_filter(
             prices, universe_tickers, bench_col, defensive_ticker, top_n
         )
     else:
@@ -1075,14 +1187,23 @@ def _build_baseline_result(
     daily_rets = _apply_rebalance_costs(daily_rets, rebalance_turnover, costs_bps)
     daily_rets = _slice_series_to_run_window(daily_rets, run_start, run_end)
     rebalance_turnover = _slice_series_to_run_window(rebalance_turnover, run_start, run_end)
+    # Recompute annualized turnover using only run-window rebalances.  The strategy function
+    # computed `turnover` over the full warmup+run window; we need the run-window-only figure.
+    # exclude_initial=False: the first run-window rebalance is a live trading rebalance, not init.
+    turnover = _annualize_turnover_from_rebalances(
+        rebalance_turnover, periods_per_year=12.0, exclude_initial=False
+    )
     benchmark_rets = _slice_series_to_run_window(
         prices[bench_col].pct_change().fillna(0.0),
         run_start,
         run_end,
     )
 
-    portfolio = 100_000.0 * (1.0 + daily_rets).cumprod()
-    benchmark = 100_000.0 * (1.0 + benchmark_rets.reindex(portfolio.index).fillna(0.0)).cumprod()
+    initial_capital = _read_initial_capital(run)
+    portfolio = initial_capital * (1.0 + daily_rets).cumprod()
+    benchmark = (
+        initial_capital * (1.0 + benchmark_rets.reindex(portfolio.index).fillna(0.0)).cumprod()
+    )
     rows = _equity_rows(portfolio.index, portfolio, benchmark)
 
     if on_progress:
@@ -1092,10 +1213,7 @@ def _build_baseline_result(
         {"run_id": run["id"], **p}
         for p in _slice_positions_to_run_window(rebalance_positions, run_start, run_end)
     ]
-    metrics = _compute_metrics(
-        daily_rets,
-        annualize_turnover_from_position_rows(position_rows, periods_per_year=12.0),
-    )
+    metrics = _compute_metrics(daily_rets, turnover)
     return BacktestResult(equity_rows=rows, metrics=metrics, position_rows=position_rows)
 
 
@@ -1170,6 +1288,7 @@ def _build_ml_result(
         benchmark_ticker=benchmark_ticker,
         top_n=top_n_for_ml,
         cost_bps=float(run.get("costs_bps") or 10.0),
+        initial_capital=_read_initial_capital(run),
         progress_cb=ml_progress,
     )
     model_params = (ml.metadata or {}).get("model_params", {})

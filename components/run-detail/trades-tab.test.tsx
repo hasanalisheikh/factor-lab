@@ -21,8 +21,8 @@ describe("TradesTab", () => {
 
     render(<TradesTab positions={positions} />);
 
-    expect(screen.getByText("Turnover by rebalance date")).toBeInTheDocument();
-    expect(screen.getByText(/per-rebalance one-way turnover/i)).toBeInTheDocument();
+    expect(screen.getByText("Per-rebalance constituent turnover")).toBeInTheDocument();
+    expect(screen.getByText(/weight changes when holdings enter/i)).toBeInTheDocument();
     expect(screen.getByText("Rebalance Log")).toBeInTheDocument();
     expect(screen.getByText("2 rebalances")).toBeInTheDocument();
     expect(screen.getByText("2026-03-11")).toBeInTheDocument();

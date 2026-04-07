@@ -67,12 +67,17 @@ const metricDefs: { key: keyof RunMetricsRow; label: string; format: (v: number)
   { key: "volatility", label: "Volatility", format: (v) => `${(v * 100).toFixed(1)}%` },
   { key: "win_rate", label: "Win Rate", format: (v) => `${(v * 100).toFixed(1)}%` },
   { key: "profit_factor", label: "Profit Factor", format: (v) => v.toFixed(2) },
-  { key: "turnover", label: "Turnover (Ann.)", format: (v) => `${(v * 100).toFixed(1)}%` },
+  {
+    key: "turnover",
+    label: "Turnover (Ann., drift-adj.)",
+    format: (v) => `${(v * 100).toFixed(1)}%`,
+  },
   { key: "calmar", label: "Calmar", format: (v) => v.toFixed(2) },
 ];
 
 export type RunConfig = {
   strategyLabel: string;
+  strategyId: string;
   universe: string;
   universeCount: number | null;
   benchmark: string;
@@ -268,7 +273,7 @@ export function OverviewTab({
                     ? `${runConfig.benchmarkCoverageHealth.status}${runConfig.benchmarkCoverageHealth.reason ? ` — ${runConfig.benchmarkCoverageHealth.reason}` : ""}`
                     : "—",
                 },
-                ...(runConfig.topN != null
+                ...(runConfig.topN != null && runConfig.strategyId !== "equal_weight"
                   ? [{ label: "Top N", value: String(runConfig.topN) }]
                   : []),
               ].map(({ label, value }) => (

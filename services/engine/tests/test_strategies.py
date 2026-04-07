@@ -104,16 +104,23 @@ def test_low_vol_selects_two_lowest_vol_assets():
 
 
 def test_low_vol_weights_sum_to_one():
-    """Weights must sum exactly to 1.0 at every rebalance date."""
+    """Weights must sum exactly to 1.0 at every rebalance date with real holdings.
+    All-cash rebalance dates (sole _CASH sentinel row) are accepted with weight=0."""
+    from factorlab_engine.worker import _ALL_CASH_SENTINEL
+
     prices = _make_known_vol_prices()
     _, _, _, positions = _low_vol(prices, top_n=2)
 
-    totals: dict[str, float] = defaultdict(float)
+    by_date: dict[str, list[dict]] = defaultdict(list)
     for pos in positions:
-        totals[pos["date"]] += pos["weight"]
+        by_date[pos["date"]].append(pos)
 
-    for dt, total in totals.items():
-        assert abs(total - 1.0) < 1e-9, f"Weights sum to {total:.6f} on {dt}, expected 1.0"
+    for dt, rows in by_date.items():
+        if len(rows) == 1 and rows[0]["symbol"] == _ALL_CASH_SENTINEL:
+            assert rows[0]["weight"] == 0.0, f"_CASH sentinel must have weight=0 on {dt}"
+        else:
+            total = sum(r["weight"] for r in rows)
+            assert abs(total - 1.0) < 1e-9, f"Weights sum to {total:.6f} on {dt}, expected 1.0"
 
 
 def test_low_vol_top_n_clamped_to_universe():
