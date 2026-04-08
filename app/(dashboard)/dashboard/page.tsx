@@ -53,7 +53,6 @@ export default async function DashboardPage({
   const featuredMetrics = featuredRun ? getMetrics(featuredRun.run_metrics) : null;
   const storedTurnover = featuredMetrics?.turnover ?? null;
 
-  const recentRuns = allRuns.slice(0, 6);
   const hasActiveRuns = allRuns.some((r) => r.status === "queued" || r.status === "running");
 
   return (
@@ -71,7 +70,7 @@ export default async function DashboardPage({
         benchmark={benchmark}
         benchmarkOverlapConfirmed={benchmarkOverlapConfirmed}
       >
-        <RecentRuns runs={recentRuns} total={totalRuns} selectedRunId={featuredRun?.id ?? null} />
+        <RecentRuns runs={allRuns} total={totalRuns} selectedRunId={featuredRun?.id ?? null} />
       </DashboardOverview>
       <RunsTable runs={allRuns} />
     </AppShell>

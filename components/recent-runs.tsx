@@ -45,8 +45,8 @@ export function RecentRuns({ runs, total, selectedRunId }: RecentRunsProps) {
   }
 
   return (
-    <Card className="bg-card border-border">
-      <CardHeader className="px-4 pt-4 pb-2">
+    <Card className="bg-card border-border min-h-0 overflow-hidden lg:h-full">
+      <CardHeader className="shrink-0 px-4 pt-4 pb-2">
         <div className="flex items-center justify-between">
           <CardTitle className="text-card-foreground text-[13px] font-medium">
             Recent Runs
@@ -62,56 +62,62 @@ export function RecentRuns({ runs, total, selectedRunId }: RecentRunsProps) {
           </div>
         </div>
       </CardHeader>
-      <CardContent className="px-4 pb-3">
-        <div className="flex flex-col gap-0.5">
-          <TooltipProvider>
-            {runs.map((run) => {
-              const metrics = getMetrics(run.run_metrics);
-              const status = run.status as RunStatus;
-              return (
-                <Link
-                  key={run.id}
-                  href={`/dashboard?run=${run.id}`}
-                  className={`hover:bg-accent/40 group -mx-2 flex items-center justify-between rounded-lg px-2 py-2.5 transition-colors ${run.id === selectedRunId ? "bg-primary/8 ring-primary/20 ring-1" : ""}`}
-                >
-                  <div className="flex min-w-0 flex-col gap-0.5">
-                    <span className="text-card-foreground group-hover:text-primary truncate text-[13px] font-medium transition-colors">
-                      {run.name}
-                    </span>
-                    <span className="text-muted-foreground text-[11px]">
-                      {STRATEGY_LABELS[run.strategy_id as StrategyId] ?? run.strategy_id}
-                    </span>
-                  </div>
-                  <div className="ml-3 flex shrink-0 items-center gap-3">
-                    {status === "completed" &&
-                      (metrics != null ? (
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <span className="text-success cursor-default font-mono text-[12px]">
-                              {metrics.sharpe.toFixed(2)}
-                            </span>
-                          </TooltipTrigger>
-                          <TooltipContent side="left" className="text-xs">
-                            <div>Sharpe: {metrics.sharpe.toFixed(4)}</div>
-                            <div>CAGR: {(metrics.cagr * 100).toFixed(1)}%</div>
-                          </TooltipContent>
-                        </Tooltip>
-                      ) : (
-                        <span className="text-muted-foreground font-mono text-[12px]">—</span>
-                      ))}
-                    <StatusBadge status={status} />
-                    {run.id === selectedRunId && (
-                      <Check className="text-primary h-3.5 w-3.5 shrink-0" />
-                    )}
-                  </div>
-                </Link>
-              );
-            })}
-          </TooltipProvider>
-          {runs.length === 0 && (
-            <p className="text-muted-foreground py-4 text-center text-[12px]">No runs yet</p>
-          )}
-        </div>
+      <CardContent className="flex min-h-0 flex-1 flex-col px-4 pb-3">
+        {runs.length === 0 ? (
+          <p className="text-muted-foreground py-4 text-center text-[12px]">No runs yet</p>
+        ) : (
+          <div
+            data-testid="recent-runs-scroll-area"
+            className="min-h-0 flex-1 scroll-smooth lg:overflow-y-auto lg:overscroll-contain lg:pr-1 lg:[scrollbar-gutter:stable]"
+          >
+            <div className="flex flex-col gap-0.5 pb-1">
+              <TooltipProvider>
+                {runs.map((run) => {
+                  const metrics = getMetrics(run.run_metrics);
+                  const status = run.status as RunStatus;
+                  return (
+                    <Link
+                      key={run.id}
+                      href={`/dashboard?run=${run.id}`}
+                      className={`hover:bg-accent/40 group -mx-2 flex items-center justify-between rounded-lg px-2 py-2.5 transition-colors ${run.id === selectedRunId ? "bg-primary/8 ring-primary/20 ring-1" : ""}`}
+                    >
+                      <div className="flex min-w-0 flex-col gap-0.5">
+                        <span className="text-card-foreground group-hover:text-primary truncate text-[13px] font-medium transition-colors">
+                          {run.name}
+                        </span>
+                        <span className="text-muted-foreground text-[11px]">
+                          {STRATEGY_LABELS[run.strategy_id as StrategyId] ?? run.strategy_id}
+                        </span>
+                      </div>
+                      <div className="ml-3 flex shrink-0 items-center gap-3">
+                        {status === "completed" &&
+                          (metrics != null ? (
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <span className="text-success cursor-default font-mono text-[12px]">
+                                  {metrics.sharpe.toFixed(2)}
+                                </span>
+                              </TooltipTrigger>
+                              <TooltipContent side="left" className="text-xs">
+                                <div>Sharpe: {metrics.sharpe.toFixed(4)}</div>
+                                <div>CAGR: {(metrics.cagr * 100).toFixed(1)}%</div>
+                              </TooltipContent>
+                            </Tooltip>
+                          ) : (
+                            <span className="text-muted-foreground font-mono text-[12px]">—</span>
+                          ))}
+                        <StatusBadge status={status} />
+                        {run.id === selectedRunId && (
+                          <Check className="text-primary h-3.5 w-3.5 shrink-0" />
+                        )}
+                      </div>
+                    </Link>
+                  );
+                })}
+              </TooltipProvider>
+            </div>
+          </div>
+        )}
       </CardContent>
     </Card>
   );
