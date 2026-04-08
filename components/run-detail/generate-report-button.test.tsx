@@ -62,11 +62,7 @@ describe("GenerateReportButton", () => {
   });
 
   it("shows Download Report immediately when generation succeeds", async () => {
-    mockUseActionState.mockReturnValue([
-      { success: true, url: REPORT_URL },
-      formActionMock,
-      false,
-    ]);
+    mockUseActionState.mockReturnValue([{ success: true, url: REPORT_URL }, formActionMock, false]);
 
     render(<GenerateReportButton runId="run-1" />);
 
@@ -96,11 +92,7 @@ describe("GenerateReportButton", () => {
   });
 
   it("triggers exactly one background refresh after success", async () => {
-    mockUseActionState.mockReturnValue([
-      { success: true, url: REPORT_URL },
-      formActionMock,
-      false,
-    ]);
+    mockUseActionState.mockReturnValue([{ success: true, url: REPORT_URL }, formActionMock, false]);
 
     const { rerender } = render(<GenerateReportButton runId="run-1" />);
 
