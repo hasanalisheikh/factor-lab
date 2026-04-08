@@ -480,13 +480,18 @@ describe("buildReportHtml - turnover convention and cost drag", () => {
     expect(html).toContain("No-change rebalance dates count as 0");
   });
 
+  it("uses explicit constituent-only vs total drift-adjusted labels in the turnover section", () => {
+    const html = buildReportHtml({ ...BASE_PARAMS, strategyId: "equal_weight" });
+    expect(html).toContain("Average one-way turnover per rebalance (constituent changes only)");
+    expect(html).toContain("Per-rebalance cost drag (total drift-adjusted turnover basis)");
+    expect(html).toContain("Annualized cost drag (total drift-adjusted turnover basis)");
+  });
+
   /**
-   * Cost drag formula: annualizedCostDrag = avg_turnover_per_rebalance × (costsBps/10000) × periods
-   * With avg turnover=0.08 (8%), costs=10bps, monthly (12 periods):
-   *   perRebalance = 0.08 × 0.001 = 0.00008 = 0.008%
-   *   annualized   = 0.00008 × 12 = 0.00096 ≈ 0.10%
+   * When constituent-only and canonical turnover match, the total cost-drag math should still
+   * resolve to the same numeric result using the canonical annualized basis.
    */
-  it("Cost drag is computed correctly: 8% turnover × 10bps × 12 periods = 0.096%", () => {
+  it("Cost drag is computed correctly from canonical annualized turnover when sources agree", () => {
     const html = buildReportHtml({
       ...BASE_PARAMS,
       strategyId: "equal_weight",
@@ -498,10 +503,99 @@ describe("buildReportHtml - turnover convention and cost drag", () => {
         annualizedTurnover: 0.96,
       },
     });
-    // Per-rebalance: 0.08 × 0.001 = 0.00008 → fmtCostDrag → "0.008%"
-    expect(html).toContain("0.008%");
-    // Annualized: 0.00008 × 12 = 0.00096 → fmtCostDrag → "0.10%"
-    expect(html).toContain("0.10%");
+    expect(html).toContain(
+      "Per-rebalance cost drag (total drift-adjusted turnover basis): 0.008% (= 8.00% turnover &times; 10 bps)."
+    );
+    expect(html).toContain(
+      "Annualized cost drag (total drift-adjusted turnover basis): 0.10% (= 96.00% annualized turnover &times; 10 bps; monthly rebalancing, 12 periods/year)."
+    );
+  });
+
+  it("Equal Weight keeps constituent-only turnover at 0.00% while total drift-adjusted cost drag stays non-zero", () => {
+    const html = buildReportHtml({
+      ...BASE_PARAMS,
+      strategyId: "equal_weight",
+      metrics: { ...METRICS, turnover: 0.138 },
+      turnoverSummary: {
+        ...DEFAULT_TURNOVER_SUMMARY,
+        averageTurnover: 0.0,
+        annualizedTurnover: 0.0,
+      },
+    });
+
+    expect(html).toContain(
+      "Average one-way turnover per rebalance (constituent changes only): 0.00%."
+    );
+    expect(html).toContain(
+      "Per-rebalance cost drag (total drift-adjusted turnover basis): <0.01% (= 1.15% turnover &times; 10 bps)."
+    );
+    expect(html).toContain(
+      "Annualized cost drag (total drift-adjusted turnover basis): 0.01% (= 13.80% annualized turnover &times; 10 bps; monthly rebalancing, 12 periods/year)."
+    );
+    expect(html).not.toContain(
+      "Per-rebalance cost drag (total drift-adjusted turnover basis): 0.00%"
+    );
+  });
+
+  it("monthly rotating strategy cost drag uses canonical turnover rather than constituent-only turnover", () => {
+    const html = buildReportHtml({
+      ...BASE_PARAMS,
+      strategyId: "momentum_12_1",
+      metrics: { ...METRICS, turnover: 2.04 },
+      turnoverSummary: {
+        ...DEFAULT_TURNOVER_SUMMARY,
+        averageTurnover: 0.1,
+        annualizedTurnover: 1.2,
+      },
+    });
+
+    expect(html).toContain(
+      "Per-rebalance cost drag (total drift-adjusted turnover basis): 0.02% (= 17.00% turnover &times; 10 bps)."
+    );
+    expect(html).toContain(
+      "Annualized cost drag (total drift-adjusted turnover basis): 0.20% (= 204.00% annualized turnover &times; 10 bps; monthly rebalancing, 12 periods/year)."
+    );
+    expect(html).not.toContain("= 10.00% turnover &times; 10 bps");
+  });
+
+  it("daily ML strategy cost drag uses canonical annualized turnover with 252 periods/year", () => {
+    const html = buildReportHtml({
+      ...BASE_PARAMS,
+      strategyId: "ml_lightgbm",
+      metrics: { ...METRICS, turnover: 52.5284 },
+      turnoverSummary: {
+        ...DEFAULT_TURNOVER_SUMMARY,
+        averageTurnover: 0.0833,
+        annualizedTurnover: 20.9916,
+        periodsPerYear: 252,
+      },
+    });
+
+    expect(html).toContain(
+      "Per-rebalance cost drag (total drift-adjusted turnover basis): 0.02% (= 20.84% turnover &times; 10 bps)."
+    );
+    expect(html).toContain(
+      "Annualized cost drag (total drift-adjusted turnover basis): 5.25% (= 5252.84% annualized turnover &times; 10 bps; daily rebalancing, 252 periods/year)."
+    );
+  });
+
+  it("shows constituent-only turnover as unavailable while still rendering total cost drag when turnoverSummary is missing", () => {
+    const html = buildReportHtml({
+      ...BASE_PARAMS,
+      strategyId: "equal_weight",
+      metrics: { ...METRICS, turnover: 0.96 },
+      turnoverSummary: null,
+    });
+
+    expect(html).toContain(
+      "Average one-way turnover per rebalance (constituent changes only): Unavailable (positions history required)."
+    );
+    expect(html).toContain(
+      "Per-rebalance cost drag (total drift-adjusted turnover basis): 0.008% (= 8.00% turnover &times; 10 bps)."
+    );
+    expect(html).toContain(
+      "Annualized cost drag (total drift-adjusted turnover basis): 0.10% (= 96.00% annualized turnover &times; 10 bps; monthly rebalancing, 12 periods/year)."
+    );
   });
 
   /**

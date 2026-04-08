@@ -364,15 +364,16 @@ export function buildReportHtml(params: {
   ].join("\n        ");
 
   // ── Cost drag calculations ─────────────────────────────────────────────────
-  // run_metrics.turnover is an annualized fraction (e.g. 0.96 = 96% annualized)
-  // turnoverSummary.averageTurnover is a per-rebalance fraction (e.g. 0.08 = 8%)
-  // cost_rate = costs_bps / 10_000 (e.g. 10 bps -> 0.001)
+  // run_metrics.turnover is the canonical annualized drift-adjusted fraction
+  // (e.g. 0.96 = 96% annualized). turnoverSummary.averageTurnover is the
+  // constituent-only per-rebalance fraction from position records
+  // (e.g. 0.08 = 8%). cost_rate = costs_bps / 10_000 (e.g. 10 bps -> 0.001).
   const annualizedTurnoverFrac = metrics.turnover;
   const averageTurnoverPerRebalance = turnoverSummary?.averageTurnover ?? null;
   const costRate = costsBps / 10_000;
-  const perRebalanceCostDrag =
-    averageTurnoverPerRebalance != null ? averageTurnoverPerRebalance * costRate : null;
-  const annualizedCostDrag = perRebalanceCostDrag != null ? perRebalanceCostDrag * periods : null;
+  const totalTurnoverPerRebalance = annualizedTurnoverFrac / periods;
+  const perRebalanceCostDrag = totalTurnoverPerRebalance * costRate;
+  const annualizedCostDrag = annualizedTurnoverFrac * costRate;
 
   // ── Run-params extraction (best-effort; older runs may lack these fields) ──
   const initialCapital =
@@ -542,10 +543,10 @@ export function buildReportHtml(params: {
         <li>Turnover KPI shown is annualized one-way turnover: ${fmtPercent(annualizedTurnoverFrac, 2)}.</li>
         <li>Average one-way turnover per rebalance (constituent changes only): ${averageTurnoverPerRebalance != null ? fmtPercent(averageTurnoverPerRebalance, 2) : "Unavailable (positions history required)"}.</li>
         <li>Initial portfolio establishment is excluded from turnover. No-change rebalance dates count as 0.</li>
-        <li>Note: the per-rebalance figure above reflects constituent-change turnover from position records. The annualized Turnover KPI additionally includes weight drift accumulated between rebalances and reset at each rebalance.</li>
+        <li>Note: the constituent-only line above reflects turnover from position records. The annualized Turnover KPI and the cost-drag lines below use the total drift-adjusted turnover basis, which additionally includes weight drift accumulated between rebalances and reset at each rebalance.</li>
         <li>Transaction cost rate: ${costsBps} bps per 100% one-way turnover (cost_rate = ${(costRate * 100).toFixed(4)}%).</li>
-        <li>Per-rebalance cost drag: ${perRebalanceCostDrag != null ? `${fmtCostDrag(perRebalanceCostDrag)} (= ${fmtPercent(averageTurnoverPerRebalance ?? 0, 2)} turnover &times; ${costsBps} bps).` : "Unavailable (positions history required)."}</li>
-        <li>Annualized cost drag (${escapeHtml(rebalanceFreq.toLowerCase())} rebalancing, ${periods} periods/year): ${annualizedCostDrag != null ? fmtCostDrag(annualizedCostDrag) : "Unavailable (positions history required)"}.</li>
+        <li>Per-rebalance cost drag (total drift-adjusted turnover basis): ${fmtCostDrag(perRebalanceCostDrag)} (= ${fmtPercent(totalTurnoverPerRebalance, 2)} turnover &times; ${costsBps} bps).</li>
+        <li>Annualized cost drag (total drift-adjusted turnover basis): ${fmtCostDrag(annualizedCostDrag)} (= ${fmtPercent(annualizedTurnoverFrac, 2)} annualized turnover &times; ${costsBps} bps; ${escapeHtml(rebalanceFreq.toLowerCase())} rebalancing, ${periods} periods/year).</li>
         ${costsBps === 0 ? "<li>Note: no transaction costs were applied in this run (effective costs_bps = 0).</li>" : ""}
         <li>Slippage${slippageBps !== null && slippageBps > 0 ? `: ${slippageBps} bps configured` : " not modeled"}. No explicit market impact model applied.</li>
       </ul>
