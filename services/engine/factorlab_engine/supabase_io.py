@@ -452,10 +452,7 @@ class SupabaseIO:
         if not (claimed.data or []):
             return False
 
-        print(
-            f"[supabase_io] claimed backtest job={job.id} "
-            f"run={job.run_id} worker={_WORKER_ID}"
-        )
+        print(f"[supabase_io] claimed backtest job={job.id} run={job.run_id} worker={_WORKER_ID}")
 
         # Only update run status for backtest jobs that have a run_id
         if job.run_id:
