@@ -410,7 +410,11 @@ export type RunRow = Database["public"]["Tables"]["runs"]["Row"];
 export type RunMetricsRow = Database["public"]["Tables"]["run_metrics"]["Row"];
 export type EquityCurveRow = Database["public"]["Tables"]["equity_curve"]["Row"];
 export type ReportRow = Database["public"]["Tables"]["reports"]["Row"];
-export type JobRow = Database["public"]["Tables"]["jobs"]["Row"];
+export type JobRow = Database["public"]["Tables"]["jobs"]["Row"] & {
+  claimed_at?: string | null;
+  worker_id?: string | null;
+  heartbeat_at?: string | null;
+};
 export type PriceRow = Database["public"]["Tables"]["prices"]["Row"];
 export type DataLastUpdatedRow = Database["public"]["Tables"]["data_last_updated"]["Row"];
 export type DataStateRow = Database["public"]["Tables"]["data_state"]["Row"];

@@ -1,8 +1,9 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AlertCircle, Clock, Download, Loader2 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
+import { retryQueuedRunWakeAction } from "@/app/actions/runs";
 import type { JobRow } from "@/lib/supabase/types";
 import type { RunStatus } from "@/lib/types";
 import type { IngestProgress } from "@/lib/supabase/queries";
@@ -10,6 +11,11 @@ import { computeEtaSeconds, formatEtaSeconds } from "@/lib/eta";
 import { deriveRunDetailDisplayState } from "@/components/run-detail/run-status-state";
 
 const ERROR_TRUNCATE_CHARS = 200;
+const RETRY_1_DELAY_MS = 50_000;
+const RETRY_2_DELAY_MS = 100_000;
+const MIN_DISPATCH_SPACING_MS = 30_000;
+const INITIAL_WAITING_WINDOW_MS = 15_000;
+const QUEUED_RETRY_STORAGE_KEY_PREFIX = "factorlab:queued-retry:";
 
 const STAGE_LABELS: Record<string, string> = {
   ingest: "Initializing",
@@ -64,10 +70,62 @@ function FailedErrorMessage({ message }: { message: string }) {
 }
 
 interface JobStatusPanelProps {
+  runId: string;
   job: JobRow | null;
   runStatus: RunStatus;
   /** Aggregated ingest progress — present when runStatus === "waiting_for_data". */
   ingestProgress?: IngestProgress | null;
+}
+
+type RetryOrdinal = 1 | 2;
+type RetryState = {
+  firedOrdinals: RetryOrdinal[];
+  lastDispatchAtMs: number | null;
+};
+
+function buildDefaultRetryState(createdAt: string | null | undefined): RetryState {
+  const createdAtMs = createdAt ? new Date(createdAt).getTime() : NaN;
+  return {
+    firedOrdinals: [],
+    lastDispatchAtMs: Number.isFinite(createdAtMs) ? createdAtMs : null,
+  };
+}
+
+function getRetryStorageKey(runId: string): string {
+  return `${QUEUED_RETRY_STORAGE_KEY_PREFIX}${runId}`;
+}
+
+function readRetryState(runId: string, createdAt: string | null | undefined): RetryState {
+  const fallback = buildDefaultRetryState(createdAt);
+  if (typeof window === "undefined") return fallback;
+
+  try {
+    const raw = window.sessionStorage.getItem(getRetryStorageKey(runId));
+    if (!raw) return fallback;
+    const parsed = JSON.parse(raw) as Partial<RetryState> | null;
+    const firedOrdinals = Array.isArray(parsed?.firedOrdinals)
+      ? parsed.firedOrdinals.filter((value): value is RetryOrdinal => value === 1 || value === 2)
+      : [];
+    const lastDispatchAtMs =
+      typeof parsed?.lastDispatchAtMs === "number"
+        ? parsed.lastDispatchAtMs
+        : fallback.lastDispatchAtMs;
+    return {
+      firedOrdinals: [...new Set(firedOrdinals)].sort() as RetryOrdinal[],
+      lastDispatchAtMs,
+    };
+  } catch {
+    return fallback;
+  }
+}
+
+function writeRetryState(runId: string, state: RetryState): void {
+  if (typeof window === "undefined") return;
+  window.sessionStorage.setItem(getRetryStorageKey(runId), JSON.stringify(state));
+}
+
+function hasClaimSignal(job: JobRow | null): boolean {
+  return Boolean(job?.claimed_at || job?.worker_id || job?.started_at);
 }
 
 function formatElapsed(seconds: number): string {
@@ -77,7 +135,7 @@ function formatElapsed(seconds: number): string {
   return s > 0 ? `${m}m ${s}s` : `${m}m`;
 }
 
-export function JobStatusPanel({ job, runStatus, ingestProgress }: JobStatusPanelProps) {
+export function JobStatusPanel({ runId, job, runStatus, ingestProgress }: JobStatusPanelProps) {
   const displayState = deriveRunDetailDisplayState({
     runStatus,
     jobStatus: job?.status,
@@ -89,6 +147,11 @@ export function JobStatusPanel({ job, runStatus, ingestProgress }: JobStatusPane
   const isFinishing = displayState.status === "finishing";
   const isFailed = displayState.status === "failed";
   const isBlocked = displayState.status === "blocked";
+  const claimed = hasClaimSignal(job);
+  const pendingRetryOrdinalsRef = useRef<Set<RetryOrdinal>>(new Set());
+  const [retryState, setRetryState] = useState<RetryState>(() =>
+    readRetryState(runId, job?.created_at)
+  );
 
   // Elapsed-time counter shown while the run is waiting for a worker to pick it up.
   const [elapsed, setElapsed] = useState(0);
@@ -100,6 +163,66 @@ export function JobStatusPanel({ job, runStatus, ingestProgress }: JobStatusPane
     const id = setInterval(tick, 1000);
     return () => clearInterval(id);
   }, [isQueued, job?.created_at]);
+
+  useEffect(() => {
+    if (!isQueued || runStatus !== "queued" || !job || claimed || job.status !== "queued") {
+      return;
+    }
+
+    const nextOrdinal: RetryOrdinal | null = retryState.firedOrdinals.includes(1)
+      ? retryState.firedOrdinals.includes(2)
+        ? null
+        : 2
+      : 1;
+    if (!nextOrdinal || pendingRetryOrdinalsRef.current.has(nextOrdinal)) {
+      return;
+    }
+
+    const createdAtMs = new Date(job.created_at).getTime();
+    const dispatchAnchorMs =
+      retryState.lastDispatchAtMs ?? (Number.isFinite(createdAtMs) ? createdAtMs : Date.now());
+    const retryThresholdMs =
+      createdAtMs + (nextOrdinal === 1 ? RETRY_1_DELAY_MS : RETRY_2_DELAY_MS);
+    const fireAtMs = Math.max(retryThresholdMs, dispatchAnchorMs + MIN_DISPATCH_SPACING_MS);
+    const delayMs = Math.max(0, fireAtMs - Date.now());
+
+    const timerId = setTimeout(() => {
+      if (pendingRetryOrdinalsRef.current.has(nextOrdinal)) return;
+
+      pendingRetryOrdinalsRef.current.add(nextOrdinal);
+      void retryQueuedRunWakeAction(runId, nextOrdinal)
+        .then((result) => {
+          if (!result.attempted) return;
+
+          setRetryState((current) => {
+            const nextState = {
+              firedOrdinals: [
+                ...new Set([...current.firedOrdinals, nextOrdinal]),
+              ].sort() as RetryOrdinal[],
+              lastDispatchAtMs: Date.now(),
+            };
+            writeRetryState(runId, nextState);
+            return nextState;
+          });
+        })
+        .catch((error) => {
+          console.error("[JobStatusPanel] queued wake retry failed:", error);
+        })
+        .finally(() => {
+          pendingRetryOrdinalsRef.current.delete(nextOrdinal);
+        });
+    }, delayMs);
+
+    return () => clearTimeout(timerId);
+  }, [
+    claimed,
+    isQueued,
+    job,
+    retryState.firedOrdinals,
+    retryState.lastDispatchAtMs,
+    runId,
+    runStatus,
+  ]);
 
   // Elapsed-time counter shown while the backtest is actively running.
   const [runElapsed, setRunElapsed] = useState(0);
@@ -142,12 +265,32 @@ export function JobStatusPanel({ job, runStatus, ingestProgress }: JobStatusPane
       ? formatEtaSeconds(computeEtaSeconds(ingestAvg, ingestProgress.minStartedAt))
       : "";
 
-  // Dynamic queued copy — avoids the false promise of "usually starts in seconds".
+  function queuedHeadline(): string {
+    if (claimed) return "Worker started. Preparing run…";
+    if (retryState.firedOrdinals.includes(2)) {
+      return "Worker is taking longer than expected. We’ll keep trying in the background.";
+    }
+    if (retryState.firedOrdinals.includes(1)) {
+      return "Worker still starting — retrying…";
+    }
+    if (elapsed * 1000 < INITIAL_WAITING_WINDOW_MS) {
+      return "Waiting for worker…";
+    }
+    return "Starting worker…";
+  }
+
   function queuedSubtext(): string {
-    if (elapsed < 30) return `Waiting for worker pickup… (${formatElapsed(elapsed)} elapsed)`;
-    if (elapsed < 120)
-      return `Still in queue — the worker will pick this up soon. (${formatElapsed(elapsed)} elapsed)`;
-    return `Queued for ${formatElapsed(elapsed)} — the worker may be processing other jobs.`;
+    const elapsedText = `${formatElapsed(elapsed)} elapsed`;
+    if (claimed) {
+      return elapsedText;
+    }
+    if (retryState.firedOrdinals.includes(2)) {
+      return elapsedText;
+    }
+    if (retryState.firedOrdinals.includes(1)) {
+      return `${elapsedText} — sent another wake-up request.`;
+    }
+    return elapsedText;
   }
 
   // Summary line for the waiting-for-data state.
@@ -182,7 +325,7 @@ export function JobStatusPanel({ job, runStatus, ingestProgress }: JobStatusPane
           <div className="min-w-0 flex-1">
             <p className="text-card-foreground text-[13px] font-medium">
               {isQueued
-                ? "Queued"
+                ? queuedHeadline()
                 : isFinishing
                   ? "Finalizing results…"
                   : isWaiting

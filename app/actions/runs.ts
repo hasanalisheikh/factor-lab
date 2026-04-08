@@ -28,7 +28,7 @@ import {
 } from "@/lib/coverage-check";
 import { buildJobNotification } from "@/lib/notifications";
 import { UNIVERSE_PRESETS, type UniverseId } from "@/lib/universe-config";
-import { TICKER_INCEPTION_DATES } from "@/lib/supabase/types";
+import { TICKER_INCEPTION_DATES, type JobRow } from "@/lib/supabase/types";
 import type { StrategyId } from "@/lib/types";
 import { resolveReportsBucketName } from "@/lib/storage";
 import { triggerWorker } from "@/lib/worker-trigger";
@@ -138,6 +138,18 @@ export type RetryPreflightRepairsResult =
   | { ok: false; error: string };
 
 export type DeleteRunActionResult = { error: string };
+export type RetryQueuedRunWakeReason =
+  | "triggered"
+  | "claimed"
+  | "not_queued"
+  | "too_early"
+  | "unauthorized"
+  | "not_found"
+  | "maxed";
+export type RetryQueuedRunWakeResult = {
+  attempted: boolean;
+  reason: RetryQueuedRunWakeReason;
+};
 
 type ActiveIngestJobRow = {
   id: string;
@@ -173,6 +185,16 @@ const RANKING_STRATEGIES = new Set<StrategyId>([
 const TREND_DEFENSIVE_PRIMARY = "TLT";
 const TREND_DEFENSIVE_FALLBACK = "BIL";
 const RUN_DELETE_BLOCKED_STATUSES = new Set(["queued", "running", "waiting_for_data"]);
+const RETRY_WAKE_MIN_AGE_SECONDS: Record<1 | 2, number> = {
+  1: 45,
+  2: 90,
+};
+
+function hasWorkerClaimSignal(
+  job: Pick<JobRow, "claimed_at" | "worker_id" | "started_at">
+): boolean {
+  return Boolean(job.claimed_at || job.worker_id || job.started_at);
+}
 
 function isMissingBenchmarkColumnError(message?: string): boolean {
   if (!message) return false;
@@ -1434,6 +1456,81 @@ export async function createRun(input: z.input<typeof createRunSchema>): Promise
 
   await triggerWorker("runs.createRunAction");
   return { ok: true, runId: run.id, preflight };
+}
+
+export async function retryQueuedRunWakeAction(
+  runId: string,
+  ordinal: 1 | 2
+): Promise<RetryQueuedRunWakeResult> {
+  if (ordinal !== 1 && ordinal !== 2) {
+    return { attempted: false, reason: "maxed" };
+  }
+
+  const parsedRunId = z.string().uuid().safeParse(runId);
+  if (!parsedRunId.success) {
+    return { attempted: false, reason: "not_found" };
+  }
+
+  const serverClient = await createClient();
+  const {
+    data: { user },
+    error: userError,
+  } = await serverClient.auth.getUser();
+  if (userError || !user) {
+    return { attempted: false, reason: "unauthorized" };
+  }
+
+  const { data: run, error: runError } = await serverClient
+    .from("runs")
+    .select("id, status, user_id")
+    .eq("id", parsedRunId.data)
+    .maybeSingle();
+  if (runError) {
+    console.error("retryQueuedRunWakeAction run lookup error:", runError.message);
+    return { attempted: false, reason: "not_found" };
+  }
+  if (!run) {
+    return { attempted: false, reason: "not_found" };
+  }
+  if (run.user_id !== user.id) {
+    return { attempted: false, reason: "unauthorized" };
+  }
+  if (run.status !== "queued") {
+    return { attempted: false, reason: "not_queued" };
+  }
+
+  const { data: latestJobData, error: latestJobError } = await serverClient
+    .from("jobs")
+    .select("*")
+    .eq("run_id", parsedRunId.data)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (latestJobError) {
+    console.error("retryQueuedRunWakeAction job lookup error:", latestJobError.message);
+    return { attempted: false, reason: "not_found" };
+  }
+
+  const latestJob = (latestJobData ?? null) as JobRow | null;
+  if (!latestJob || latestJob.status !== "queued") {
+    return { attempted: false, reason: "not_queued" };
+  }
+  if (hasWorkerClaimSignal(latestJob)) {
+    return { attempted: false, reason: "claimed" };
+  }
+
+  const jobCreatedAt = new Date(latestJob.created_at).getTime();
+  if (!Number.isFinite(jobCreatedAt)) {
+    return { attempted: false, reason: "too_early" };
+  }
+
+  const ageSeconds = Math.floor((Date.now() - jobCreatedAt) / 1000);
+  if (ageSeconds < RETRY_WAKE_MIN_AGE_SECONDS[ordinal]) {
+    return { attempted: false, reason: "too_early" };
+  }
+
+  await triggerWorker(`runs.retryQueuedRunWakeAction.${ordinal}`);
+  return { attempted: true, reason: "triggered" };
 }
 
 export async function deleteRunAction(runId: string): Promise<DeleteRunActionResult | never> {

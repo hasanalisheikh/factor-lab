@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RunPreflightSnapshot } from "@/lib/coverage-check";
 import type { UniverseConstraintsSnapshot } from "@/lib/supabase/queries";
 
@@ -10,6 +10,7 @@ const {
   evaluateRunPreflightSnapshotMock,
   redirectMock,
   revalidatePathMock,
+  triggerWorkerMock,
 } = vi.hoisted(() => ({
   createClientMock: vi.fn(),
   createAdminClientMock: vi.fn(),
@@ -20,6 +21,7 @@ const {
     throw new Error(`REDIRECT:${path}`);
   }),
   revalidatePathMock: vi.fn(),
+  triggerWorkerMock: vi.fn(),
 }));
 
 vi.mock("next/navigation", () => ({
@@ -43,6 +45,10 @@ vi.mock("@/lib/supabase/queries", () => ({
   getUniverseBatchStatus: getUniverseBatchStatusMock,
 }));
 
+vi.mock("@/lib/worker-trigger", () => ({
+  triggerWorker: triggerWorkerMock,
+}));
+
 vi.mock("@/lib/coverage-check", async () => {
   const actual =
     await vi.importActual<typeof import("@/lib/coverage-check")>("@/lib/coverage-check");
@@ -52,8 +58,14 @@ vi.mock("@/lib/coverage-check", async () => {
   };
 });
 
-import { createRun, deleteRunAction, preflightRun } from "@/app/actions/runs";
+import {
+  createRun,
+  deleteRunAction,
+  preflightRun,
+  retryQueuedRunWakeAction,
+} from "@/app/actions/runs";
 import { getLastCompleteTradingDayUtc } from "@/lib/data-cutoff";
+import type { JobRow } from "@/lib/supabase/types";
 
 const BASE_CONSTRAINTS: UniverseConstraintsSnapshot = {
   universe: "ETF8",
@@ -418,16 +430,103 @@ function makeDeleteAdminStub(options?: { storagePath?: string | null }) {
   };
 }
 
+function makeRetryWakeServerClient(options?: {
+  userId?: string | null;
+  run?: { id: string; status: string; user_id: string } | null;
+  job?: Partial<JobRow> | null;
+}) {
+  const userId = options?.userId ?? "user-1";
+  const run = options?.run ?? {
+    id: "run-123",
+    status: "queued",
+    user_id: "user-1",
+  };
+  const job =
+    options?.job === undefined
+      ? ({
+          id: "job-123",
+          run_id: "run-123",
+          name: "Queued run",
+          status: "queued",
+          stage: "ingest",
+          progress: 0,
+          error_message: null,
+          started_at: null,
+          finished_at: null,
+          duration: null,
+          created_at: "2026-03-26T11:59:00Z",
+          job_type: "backtest",
+          payload: null,
+          preflight_run_id: null,
+          updated_at: null,
+          attempt_count: 0,
+          next_retry_at: null,
+          locked_at: null,
+          claimed_at: null,
+          worker_id: null,
+          heartbeat_at: null,
+        } satisfies JobRow)
+      : options.job;
+
+  return {
+    auth: {
+      getUser: vi.fn().mockResolvedValue({
+        data: { user: userId ? { id: userId } : null },
+        error: null,
+      }),
+    },
+    from(table: string) {
+      if (table === "runs") {
+        return {
+          select: () => ({
+            eq: () => ({
+              maybeSingle: async () => ({
+                data: run,
+                error: null,
+              }),
+            }),
+          }),
+        };
+      }
+
+      if (table === "jobs") {
+        return {
+          select: () => ({
+            eq: () => ({
+              order: () => ({
+                limit: () => ({
+                  maybeSingle: async () => ({
+                    data: job,
+                    error: null,
+                  }),
+                }),
+              }),
+            }),
+          }),
+        };
+      }
+
+      throw new Error(`Unexpected retry table access in test: ${table}`);
+    },
+  };
+}
+
 describe("run actions preflight gating", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.unstubAllEnvs();
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-26T12:00:00Z"));
 
     createClientMock.mockResolvedValue(makeAuthenticatedClient());
     createAdminClientMock.mockReturnValue(makeAdminStub());
     getUniverseConstraintsSnapshotMock.mockResolvedValue(BASE_CONSTRAINTS);
     getUniverseBatchStatusMock.mockResolvedValue(null);
     evaluateRunPreflightSnapshotMock.mockResolvedValue(makeSnapshot());
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it("preflight blocks invalid date ranges with clear clamp actions", async () => {
@@ -817,6 +916,8 @@ describe("run actions preflight gating", () => {
       level: "info",
       read_at: null,
     });
+    expect(triggerWorkerMock).toHaveBeenCalledTimes(strategies.length);
+    expect(triggerWorkerMock).toHaveBeenCalledWith("runs.createRunAction");
   });
 
   it("warn acknowledgement gates creation and marks executed_with_missing_data", async () => {
@@ -879,6 +980,161 @@ describe("run actions preflight gating", () => {
       title: "Job queued: Warn acked",
       level: "info",
     });
+  });
+});
+
+describe("retryQueuedRunWakeAction", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-26T12:00:00Z"));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("triggers a queued wake retry once the job is still queued and old enough", async () => {
+    createClientMock.mockResolvedValue(makeRetryWakeServerClient());
+
+    const result = await retryQueuedRunWakeAction("11111111-1111-4111-8111-111111111111", 1);
+
+    expect(result).toEqual({ attempted: true, reason: "triggered" });
+    expect(triggerWorkerMock).toHaveBeenCalledWith("runs.retryQueuedRunWakeAction.1");
+  });
+
+  it("returns too_early before the retry window opens", async () => {
+    createClientMock.mockResolvedValue(
+      makeRetryWakeServerClient({
+        job: {
+          id: "job-123",
+          run_id: "run-123",
+          name: "Queued run",
+          status: "queued",
+          stage: "ingest",
+          progress: 0,
+          error_message: null,
+          started_at: null,
+          finished_at: null,
+          duration: null,
+          created_at: "2026-03-26T11:59:30Z",
+          job_type: "backtest",
+          payload: null,
+          preflight_run_id: null,
+          updated_at: null,
+          attempt_count: 0,
+          next_retry_at: null,
+          locked_at: null,
+          claimed_at: null,
+          worker_id: null,
+          heartbeat_at: null,
+        },
+      })
+    );
+
+    const result = await retryQueuedRunWakeAction("11111111-1111-4111-8111-111111111111", 1);
+
+    expect(result).toEqual({ attempted: false, reason: "too_early" });
+    expect(triggerWorkerMock).not.toHaveBeenCalled();
+  });
+
+  it("returns claimed when the worker has already picked up the job", async () => {
+    createClientMock.mockResolvedValue(
+      makeRetryWakeServerClient({
+        job: {
+          id: "job-123",
+          run_id: "run-123",
+          name: "Queued run",
+          status: "queued",
+          stage: "ingest",
+          progress: 0,
+          error_message: null,
+          started_at: null,
+          finished_at: null,
+          duration: null,
+          created_at: "2026-03-26T11:58:00Z",
+          job_type: "backtest",
+          payload: null,
+          preflight_run_id: null,
+          updated_at: null,
+          attempt_count: 0,
+          next_retry_at: null,
+          locked_at: null,
+          claimed_at: "2026-03-26T11:59:40Z",
+          worker_id: "worker-1",
+          heartbeat_at: null,
+        },
+      })
+    );
+
+    const result = await retryQueuedRunWakeAction("11111111-1111-4111-8111-111111111111", 1);
+
+    expect(result).toEqual({ attempted: false, reason: "claimed" });
+    expect(triggerWorkerMock).not.toHaveBeenCalled();
+  });
+
+  it("returns not_queued when the run or latest job is no longer queued", async () => {
+    createClientMock.mockResolvedValue(
+      makeRetryWakeServerClient({
+        run: {
+          id: "run-123",
+          status: "running",
+          user_id: "user-1",
+        },
+      })
+    );
+
+    const runResult = await retryQueuedRunWakeAction("11111111-1111-4111-8111-111111111111", 1);
+    expect(runResult).toEqual({ attempted: false, reason: "not_queued" });
+
+    createClientMock.mockResolvedValue(
+      makeRetryWakeServerClient({
+        job: {
+          id: "job-123",
+          run_id: "run-123",
+          name: "Queued run",
+          status: "running",
+          stage: "ingest",
+          progress: 0,
+          error_message: null,
+          started_at: null,
+          finished_at: null,
+          duration: null,
+          created_at: "2026-03-26T11:58:00Z",
+          job_type: "backtest",
+          payload: null,
+          preflight_run_id: null,
+          updated_at: null,
+          attempt_count: 0,
+          next_retry_at: null,
+          locked_at: null,
+          claimed_at: null,
+          worker_id: null,
+          heartbeat_at: null,
+        },
+      })
+    );
+
+    const jobResult = await retryQueuedRunWakeAction("11111111-1111-4111-8111-111111111111", 1);
+    expect(jobResult).toEqual({ attempted: false, reason: "not_queued" });
+    expect(triggerWorkerMock).not.toHaveBeenCalled();
+  });
+
+  it("returns unauthorized for the wrong user", async () => {
+    createClientMock.mockResolvedValue(
+      makeRetryWakeServerClient({
+        run: {
+          id: "run-123",
+          status: "queued",
+          user_id: "someone-else",
+        },
+      })
+    );
+
+    const result = await retryQueuedRunWakeAction("11111111-1111-4111-8111-111111111111", 1);
+
+    expect(result).toEqual({ attempted: false, reason: "unauthorized" });
+    expect(triggerWorkerMock).not.toHaveBeenCalled();
   });
 });
 
