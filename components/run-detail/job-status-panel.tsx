@@ -7,6 +7,7 @@ import type { JobRow } from "@/lib/supabase/types";
 import type { RunStatus } from "@/lib/types";
 import type { IngestProgress } from "@/lib/supabase/queries";
 import { computeEtaSeconds, formatEtaSeconds } from "@/lib/eta";
+import { deriveRunDetailDisplayState } from "@/components/run-detail/run-status-state";
 
 const ERROR_TRUNCATE_CHARS = 200;
 
@@ -77,9 +78,17 @@ function formatElapsed(seconds: number): string {
 }
 
 export function JobStatusPanel({ job, runStatus, ingestProgress }: JobStatusPanelProps) {
-  const isQueued = runStatus === "queued";
-  const isRunning = runStatus === "running";
-  const isWaiting = runStatus === "waiting_for_data";
+  const displayState = deriveRunDetailDisplayState({
+    runStatus,
+    jobStatus: job?.status,
+    jobProgress: job?.progress,
+  });
+  const isQueued = displayState.status === "queued";
+  const isRunning = displayState.status === "running";
+  const isWaiting = displayState.status === "waiting_for_data";
+  const isFinishing = displayState.status === "finishing";
+  const isFailed = displayState.status === "failed";
+  const isBlocked = displayState.status === "blocked";
 
   // Elapsed-time counter shown while the run is waiting for a worker to pick it up.
   const [elapsed, setElapsed] = useState(0);
@@ -114,30 +123,16 @@ export function JobStatusPanel({ job, runStatus, ingestProgress }: JobStatusPane
     return () => clearInterval(id);
   }, [isWaiting, ingestProgress?.minStartedAt]);
 
-  if (
-    runStatus !== "queued" &&
-    runStatus !== "running" &&
-    runStatus !== "failed" &&
-    runStatus !== "blocked" &&
-    runStatus !== "waiting_for_data"
-  )
-    return null;
+  if (displayState.status === "completed") return null;
 
-  const isFailed = runStatus === "failed";
-  const isBlocked = runStatus === "blocked";
-  const rawProgress = job?.progress ?? 0;
-  // If the job row itself is already terminal (completed), force progress to 100 even if
-  // runs.status hasn't been updated yet. This closes the race window where save_success()
-  // writes runs.status="completed" before jobs.progress=100, but for any ordering where
-  // jobs.status flips first it also prevents a stale percentage from freezing on screen.
-  const progress = job?.status === "completed" ? 100 : rawProgress;
+  const progress = displayState.progress ?? 0;
   const stage = job?.stage ?? "ingest";
   const stageLabel = STAGE_LABELS[stage] ?? stage;
   const errorText = job?.error_message || null;
 
   // ETA for the running backtest (uses job.started_at from DB).
   const backtestEta = isRunning
-    ? formatEtaSeconds(computeEtaSeconds(rawProgress, job?.started_at ?? null))
+    ? formatEtaSeconds(computeEtaSeconds(progress, job?.started_at ?? null))
     : "";
 
   // ETA for data ingestion (aggregated across all ingest jobs for this run).
@@ -170,6 +165,8 @@ export function JobStatusPanel({ job, runStatus, ingestProgress }: JobStatusPane
           <div className="mt-0.5 shrink-0">
             {isRunning ? (
               <Loader2 className="text-warning h-4 w-4 animate-spin" />
+            ) : isFinishing ? (
+              <Loader2 className="text-warning h-4 w-4 animate-spin" />
             ) : isWaiting ? (
               <Download className="h-4 w-4 text-blue-500" />
             ) : isBlocked ? (
@@ -186,17 +183,21 @@ export function JobStatusPanel({ job, runStatus, ingestProgress }: JobStatusPane
             <p className="text-card-foreground text-[13px] font-medium">
               {isQueued
                 ? "Queued"
-                : isWaiting
-                  ? "Preparing data…"
-                  : isBlocked
-                    ? "Run blocked"
-                    : isFailed
-                      ? "Run failed"
-                      : `Running backtest — ${stageLabel}`}
+                : isFinishing
+                  ? "Finalizing results…"
+                  : isWaiting
+                    ? "Preparing data…"
+                    : isBlocked
+                      ? "Run blocked"
+                      : isFailed
+                        ? "Run failed"
+                        : `Running backtest — ${stageLabel}`}
             </p>
             <p className="text-muted-foreground mt-0.5 text-[12px]">
               {isQueued ? (
                 queuedSubtext()
+              ) : isFinishing ? (
+                "Writing final results and report data. This should finish shortly."
               ) : isWaiting ? (
                 ingestSummary
               ) : isRunning ? (
@@ -229,7 +230,7 @@ export function JobStatusPanel({ job, runStatus, ingestProgress }: JobStatusPane
             )}
 
             {/* ── Backtest progress bar (running) ────────────────────────── */}
-            {isRunning && (
+            {(isRunning || isFinishing) && (
               <div className="mt-2.5 flex items-center gap-2.5">
                 <div className="bg-secondary h-1.5 max-w-[280px] flex-1 overflow-hidden rounded-full">
                   <div

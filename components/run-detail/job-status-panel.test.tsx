@@ -5,6 +5,10 @@ import type { JobRow } from "@/lib/supabase/types";
 
 const BASE_TIME = new Date("2026-03-26T12:00:00Z").getTime();
 
+afterEach(() => {
+  cleanup();
+});
+
 function makeJob(overrides: Partial<JobRow> = {}): JobRow {
   return {
     id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
@@ -137,6 +141,27 @@ describe("JobStatusPanel — running state", () => {
     });
     expect(screen.getByText(/Building the HTML performance report/i)).toBeInTheDocument();
   });
+
+  it("shows a finishing state at 100% with no ETA when the job completes first", async () => {
+    const startedSecondsAgo = 90;
+    const job = makeJob({
+      status: "completed",
+      stage: "report",
+      progress: 88,
+      started_at: new Date(BASE_TIME - startedSecondsAgo * 1000).toISOString(),
+    });
+
+    await act(async () => {
+      render(<JobStatusPanel job={job} runStatus="running" />);
+    });
+
+    expect(screen.getByText(/Finalizing results/i)).toBeInTheDocument();
+    expect(screen.getByText(/Writing final results and report data/i)).toBeInTheDocument();
+    expect(screen.getByText("100%")).toBeInTheDocument();
+    expect(screen.queryByText(/88%/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/remaining/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Building the HTML performance report/i)).not.toBeInTheDocument();
+  });
 });
 
 describe("JobStatusPanel — waiting_for_data state", () => {
@@ -172,6 +197,38 @@ describe("JobStatusPanel — failed / blocked state", () => {
     const job = makeJob({ status: "failed", error_message: "Something went wrong" });
     render(<JobStatusPanel job={job} runStatus="failed" />);
     expect(screen.getByText(/Something went wrong/i)).toBeInTheDocument();
+  });
+
+  it("shows terminal failed state immediately when the job fails before the run row catches up", () => {
+    const job = makeJob({
+      status: "failed",
+      progress: 88,
+      error_message: "Something went wrong",
+    });
+
+    render(<JobStatusPanel job={job} runStatus="running" />);
+
+    expect(screen.getByText(/Run failed/i)).toBeInTheDocument();
+    expect(screen.getByText(/Something went wrong/i)).toBeInTheDocument();
+    expect(screen.queryByText(/88%/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/remaining/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Running backtest/i)).not.toBeInTheDocument();
+  });
+
+  it("does not show stale running progress for blocked states", () => {
+    const job = makeJob({
+      status: "blocked",
+      progress: 92,
+      error_message: "Coverage gap",
+    });
+
+    render(<JobStatusPanel job={job} runStatus="running" />);
+
+    expect(screen.getByText(/Run blocked/i)).toBeInTheDocument();
+    expect(screen.getByText(/Coverage gap/i)).toBeInTheDocument();
+    expect(screen.queryByText(/92%/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/remaining/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Running backtest/i)).not.toBeInTheDocument();
   });
 
   it("returns null for completed runs", () => {
