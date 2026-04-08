@@ -150,14 +150,12 @@ export function DashboardOverview({
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-[280px_minmax(0,1fr)] xl:grid-cols-[340px_minmax(0,1fr)]">
         {children}
-        <div className="flex flex-col gap-2">
-          <EquityChart
-            data={equityCurve}
-            benchmarkTicker={benchmark}
-            timeframe={selectedTf}
-            onTimeframeChange={setSelectedTf}
-          />
-        </div>
+        <EquityChart
+          data={equityCurve}
+          benchmarkTicker={benchmark}
+          timeframe={selectedTf}
+          onTimeframeChange={setSelectedTf}
+        />
       </div>
     </>
   );
