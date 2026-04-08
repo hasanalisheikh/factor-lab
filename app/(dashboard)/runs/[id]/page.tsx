@@ -199,7 +199,7 @@ export default async function RunDetailPage({ params }: { params: Promise<{ id: 
 
       {/* Job status panel — visible for queued / running / waiting_for_data runs */}
       <JobStatusPanel job={job} runStatus={status} ingestProgress={ingestProgress} />
-      <RunStatusPoller status={status} jobStatus={job?.status ?? null} />
+      <RunStatusPoller runId={id} status={status} jobStatus={job?.status ?? null} />
       {benchmarkOverlap.confirmed ? <BenchmarkOverlapWarning benchmark={benchmarkTicker} /> : null}
 
       {/* Tabs */}

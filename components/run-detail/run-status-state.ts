@@ -12,6 +12,7 @@ export interface RunDetailDisplayState {
 
 const ACTIVE_RUN_STATUSES: RunStatus[] = ["queued", "running", "waiting_for_data"];
 const TERMINAL_RUN_STATUSES: RunStatus[] = ["completed", "failed", "blocked"];
+const ALL_RUN_STATUSES: RunStatus[] = [...ACTIVE_RUN_STATUSES, ...TERMINAL_RUN_STATUSES];
 const TERMINAL_JOB_STATUSES = ["completed", "failed", "blocked"] as const;
 
 function clampProgress(progress: number | null | undefined): number {
@@ -25,6 +26,10 @@ export function isActiveRunStatus(status: RunStatus): boolean {
 
 export function isTerminalRunStatus(status: RunStatus): boolean {
   return TERMINAL_RUN_STATUSES.includes(status);
+}
+
+export function isRunStatus(status: string | null | undefined): status is RunStatus {
+  return status != null && ALL_RUN_STATUSES.includes(status as RunStatus);
 }
 
 export function isTerminalJobStatus(
