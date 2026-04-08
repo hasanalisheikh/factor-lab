@@ -68,7 +68,7 @@ export function RecentRuns({ runs, total, selectedRunId }: RecentRunsProps) {
         ) : (
           <div
             data-testid="recent-runs-scroll-area"
-            className="min-h-0 overflow-x-hidden scroll-smooth lg:max-h-[22.5rem] lg:overflow-y-auto lg:overscroll-contain lg:pr-1 lg:[scrollbar-gutter:stable]"
+            className="min-h-0 scroll-smooth lg:max-h-[22.5rem] lg:overflow-y-auto lg:overscroll-contain lg:px-2 lg:[scrollbar-gutter:stable]"
           >
             <div className="flex flex-col gap-0.5 pb-1">
               <TooltipProvider>
