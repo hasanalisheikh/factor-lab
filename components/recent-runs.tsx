@@ -45,7 +45,7 @@ export function RecentRuns({ runs, total, selectedRunId }: RecentRunsProps) {
   }
 
   return (
-    <Card className="bg-card border-border min-h-0 overflow-hidden lg:h-full">
+    <Card className="bg-card border-border min-h-0 overflow-hidden">
       <CardHeader className="shrink-0 px-4 pt-4 pb-2">
         <div className="flex items-center justify-between">
           <CardTitle className="text-card-foreground text-[13px] font-medium">
@@ -62,13 +62,13 @@ export function RecentRuns({ runs, total, selectedRunId }: RecentRunsProps) {
           </div>
         </div>
       </CardHeader>
-      <CardContent className="flex min-h-0 flex-1 flex-col px-4 pb-3">
+      <CardContent className="flex min-h-0 flex-col px-4 pb-3">
         {runs.length === 0 ? (
           <p className="text-muted-foreground py-4 text-center text-[12px]">No runs yet</p>
         ) : (
           <div
             data-testid="recent-runs-scroll-area"
-            className="min-h-0 flex-1 scroll-smooth lg:overflow-y-auto lg:overscroll-contain lg:pr-1 lg:[scrollbar-gutter:stable]"
+            className="min-h-0 scroll-smooth lg:max-h-[22.5rem] lg:overflow-y-auto lg:overscroll-contain lg:pr-1 lg:[scrollbar-gutter:stable]"
           >
             <div className="flex flex-col gap-0.5 pb-1">
               <TooltipProvider>

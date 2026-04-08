@@ -53,6 +53,7 @@ describe("RecentRuns", () => {
     const scrollArea = screen.getByTestId("recent-runs-scroll-area");
     expect(scrollArea).toBeInTheDocument();
     expect(scrollArea.className).toContain("lg:overflow-y-auto");
+    expect(scrollArea.className).toContain("lg:max-h-[22.5rem]");
     expect(within(scrollArea).getByText("Run 8")).toBeInTheDocument();
     expect(screen.getAllByRole("link")).toHaveLength(8);
     expect(screen.getByText("20 total")).toBeInTheDocument();
