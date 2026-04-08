@@ -125,14 +125,19 @@ export function JobStatusPanel({ job, runStatus, ingestProgress }: JobStatusPane
 
   const isFailed = runStatus === "failed";
   const isBlocked = runStatus === "blocked";
-  const progress = job?.progress ?? 0;
+  const rawProgress = job?.progress ?? 0;
+  // If the job row itself is already terminal (completed), force progress to 100 even if
+  // runs.status hasn't been updated yet. This closes the race window where save_success()
+  // writes runs.status="completed" before jobs.progress=100, but for any ordering where
+  // jobs.status flips first it also prevents a stale percentage from freezing on screen.
+  const progress = job?.status === "completed" ? 100 : rawProgress;
   const stage = job?.stage ?? "ingest";
   const stageLabel = STAGE_LABELS[stage] ?? stage;
   const errorText = job?.error_message || null;
 
   // ETA for the running backtest (uses job.started_at from DB).
   const backtestEta = isRunning
-    ? formatEtaSeconds(computeEtaSeconds(progress, job?.started_at ?? null))
+    ? formatEtaSeconds(computeEtaSeconds(rawProgress, job?.started_at ?? null))
     : "";
 
   // ETA for data ingestion (aggregated across all ingest jobs for this run).

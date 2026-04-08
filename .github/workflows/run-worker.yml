@@ -1,6 +1,11 @@
 name: Run Worker
 
 on:
+  schedule:
+    # Safety-net: process any queued jobs every 15 minutes even if the Render
+    # long-running worker is down. This is NOT a substitute for the primary
+    # Render service — it only catches jobs that have been queued > ~15 min.
+    - cron: "*/15 * * * *"
   repository_dispatch:
     types: [run-worker]
 

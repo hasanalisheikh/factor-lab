@@ -22,7 +22,14 @@ export function RunStatusPoller({ status }: { status: RunStatus }) {
         clearTimeout(timerRef.current);
         timerRef.current = null;
       }
-      return;
+      // Flush in-flight DB writes after terminal status lands.
+      // jobs.progress=100 can trail runs.status="completed" by several seconds on large
+      // ML LightGBM runs (equity_curve + predictions are slow to write). A single retry
+      // at +500ms is not enough; schedule 4 at increasing intervals so any realistic
+      // race window is covered without polling indefinitely.
+      const TRAILING_DELAYS_MS = [300, 800, 2000, 4000];
+      const trailingTimers = TRAILING_DELAYS_MS.map((ms) => setTimeout(() => router.refresh(), ms));
+      return () => trailingTimers.forEach(clearTimeout);
     }
 
     // Reset the fast phase whenever status changes (e.g. queued → running).

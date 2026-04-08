@@ -9,6 +9,7 @@ import platform
 import signal
 import threading
 import time
+import traceback
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -2052,36 +2053,45 @@ def main() -> None:
     io = SupabaseIO()
     print("[engine] worker started")
     while True:
-        # --- Watchdog & retry scheduler (run before fetching new work) ---
-        # jobs table (backtest + legacy data_ingest jobs)
-        io.scan_and_requeue_stalled_jobs(stall_minutes=job_stall_minutes, max_attempts=5)
-        io.scan_and_requeue_queued_too_long(
-            timeout_minutes=job_queue_timeout_minutes, max_attempts=5
-        )
-        io.requeue_due_for_retry(max_attempts=5)
-        # data_ingest_jobs table (new explicit-schema ingest jobs)
-        io.scan_stalled_data_ingest_jobs(stall_minutes=2, max_attempts=5)
-        io.scan_queued_too_long_data_ingest(timeout_minutes=10, max_attempts=5)
-        io.requeue_due_data_ingest(max_attempts=5)
+        try:
+            # --- Watchdog & retry scheduler (run before fetching new work) ---
+            # jobs table (backtest + legacy data_ingest jobs)
+            io.scan_and_requeue_stalled_jobs(stall_minutes=job_stall_minutes, max_attempts=5)
+            io.scan_and_requeue_queued_too_long(
+                timeout_minutes=job_queue_timeout_minutes, max_attempts=5
+            )
+            io.requeue_due_for_retry(max_attempts=5)
+            # data_ingest_jobs table (new explicit-schema ingest jobs)
+            io.scan_stalled_data_ingest_jobs(stall_minutes=2, max_attempts=5)
+            io.scan_queued_too_long_data_ingest(timeout_minutes=10, max_attempts=5)
+            io.requeue_due_data_ingest(max_attempts=5)
 
-        # Fetch from both queues and process
-        jobs = io.fetch_queued_jobs(limit=batch_size)
-        ingest_jobs = io.fetch_queued_data_ingest_jobs(limit=batch_size)
+            # Fetch from both queues and process
+            jobs = io.fetch_queued_jobs(limit=batch_size)
+            ingest_jobs = io.fetch_queued_data_ingest_jobs(limit=batch_size)
 
-        if not jobs and not ingest_jobs:
-            if once:
-                print("[engine] no more queued jobs — exiting")
-                break
-            _wakeup.wait(timeout=poll_seconds)
+            if not jobs and not ingest_jobs:
+                if once:
+                    print("[engine] no more queued jobs — exiting")
+                    break
+                _wakeup.wait(timeout=poll_seconds)
+                _wakeup.clear()
+                continue
+
             _wakeup.clear()
-            continue
-
-        _wakeup.clear()
-        for job in jobs:
-            _process_job(io, job)
-        for ingest_job in ingest_jobs:
-            if io.claim_data_ingest_job(ingest_job):
-                _process_data_ingest_job_v2(io, ingest_job)
+            for job in jobs:
+                _process_job(io, job)
+            for ingest_job in ingest_jobs:
+                if io.claim_data_ingest_job(ingest_job):
+                    _process_data_ingest_job_v2(io, ingest_job)
+        except (SystemExit, KeyboardInterrupt):
+            raise
+        except Exception as exc:
+            # An unhandled error in watchdog scans or queue fetches must not crash the
+            # long-running Render service. Log, sleep, and retry so the worker stays alive.
+            print(f"[engine] CRITICAL: main loop error, sleeping 30s before retry: {exc}")
+            traceback.print_exc()
+            time.sleep(30)
 
 
 if __name__ == "__main__":
