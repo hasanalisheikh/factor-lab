@@ -594,14 +594,13 @@ describe("computeCAGRFromEquityCurve - unit", () => {
 
 describe("buildReportHtml - CAGR truthfulness", () => {
   /**
-   * Regression: the tearsheet used to display metrics.cagr (a stored DB value),
-   * which may have been computed with a different base/n than the equity curve.
-   * Now it must compute CAGR from the equity curve directly.
+   * The CAGR KPI must use the engine-computed stored value (metrics.cagr) so that
+   * the tearsheet agrees with the Overview UI, which also reads run_metrics.cagr.
    *
-   * Setup: stored metrics.cagr = 6% (wrong), equity startNav=100_488,
-   * endNav=111_203 over 1000 trading days → implied CAGR ≈ 2.56%.
+   * Setup: stored metrics.cagr = 6%; equity curve implies a different value (~2.56%).
+   * The report must display 6.0% (the stored canonical value), not the equity-derived one.
    */
-  it("CAGR KPI is derived from equity curve, not from stored metrics.cagr", () => {
+  it("CAGR KPI uses stored metrics.cagr (engine-computed canonical value), not equity-curve-recomputed value", () => {
     const startNav = 100_488;
     const endNav = 111_203;
     const n = 1000; // trading days
@@ -612,21 +611,81 @@ describe("buildReportHtml - CAGR truthfulness", () => {
       portfolio: startNav + ((endNav - startNav) * i) / (n - 1),
       benchmark: 100_000 + i * 40,
     }));
-    const expectedCagr = Math.pow(endNav / startNav, 252 / n) - 1;
+    const equityCurveCagr = Math.pow(endNav / startNav, 252 / n) - 1; // ≈ 2.56%
 
     const html = buildReportHtml({
       ...BASE_PARAMS,
       strategyId: "equal_weight",
       equityCurve: curve,
-      metrics: { ...METRICS, cagr: 0.06 }, // deliberately wrong stored value
+      metrics: { ...METRICS, cagr: 0.06 }, // stored canonical value
       startDate: "2021-03-13",
       endDate: "2026-03-13",
     });
 
-    // Must NOT display the wrong stored 6%
-    expect(html).not.toContain(">6.0%<");
-    // Must display the equity-curve-derived CAGR
-    expect(html).toContain(`>${fmtPercent(expectedCagr)}<`);
+    // Must display stored metrics.cagr = 6.0%
+    expect(html).toContain(">6.0%<");
+    // Must NOT display the equity-curve-derived value instead
+    expect(html).not.toContain(`>${fmtPercent(equityCurveCagr)}<`);
+  });
+});
+
+// ── Canonical metric source-of-truth ─────────────────────────────────────────
+
+describe("buildReportHtml - canonical metric sources", () => {
+  /**
+   * ML CAGR mismatch: computeCAGRFromEquityCurve uses raw[0].portfolio as startNav
+   * (NAV after day-1's return), while Python's engine computes from 1.0 (before day-1).
+   * Using metrics.cagr directly ensures UI and report always agree.
+   */
+  it("ML strategy CAGR KPI uses metrics.cagr, not equity-curve recomputation", () => {
+    const html = buildReportHtml({
+      ...BASE_PARAMS,
+      strategyId: "ml_lightgbm",
+      metrics: { ...METRICS, cagr: 0.011 }, // stored Python value → 1.1%
+      equityCurve: EQUITY,
+    });
+    expect(html).toContain(">1.1%<");
+  });
+
+  /**
+   * Turnover KPI must come from metrics.turnover (Python drift-adjusted value stored
+   * in run_metrics), not from turnoverSummary.annualizedTurnover (TypeScript
+   * constituent-only computation). The equal-weight case is the canonical example:
+   * symbols never change so constituent-only = 0%, but drift-adjusted ≈ 13.8%.
+   */
+  it("Turnover KPI uses metrics.turnover when turnoverSummary.annualizedTurnover differs", () => {
+    const html = buildReportHtml({
+      ...BASE_PARAMS,
+      strategyId: "equal_weight",
+      metrics: { ...METRICS, turnover: 0.138 },
+      turnoverSummary: {
+        ...DEFAULT_TURNOVER_SUMMARY,
+        averageTurnover: 0.0,
+        annualizedTurnover: 0.0, // constituent-only = 0 for equal weight
+      },
+    });
+    // Must show drift-adjusted value from metrics.turnover
+    expect(html).toContain(">13.8%<");
+  });
+
+  /**
+   * Regression guard: Equal Weight report must not show 0.0% turnover in the KPI
+   * grid when the stored drift-adjusted turnover is non-zero.
+   */
+  it("Equal Weight report shows non-zero turnover KPI when drift-adjusted turnover is stored", () => {
+    const html = buildReportHtml({
+      ...BASE_PARAMS,
+      strategyId: "equal_weight",
+      metrics: { ...METRICS, turnover: 0.138 },
+      turnoverSummary: {
+        ...DEFAULT_TURNOVER_SUMMARY,
+        annualizedTurnover: 0.0,
+        averageTurnover: 0.0,
+      },
+    });
+    // The KPI grid div must not contain ">0.0%<" for the turnover cell
+    const kpiSection = html.match(/<div class="grid">([\s\S]*?)<\/div>/)?.[0] ?? "";
+    expect(kpiSection).not.toContain(">0.0%<");
   });
 });
 

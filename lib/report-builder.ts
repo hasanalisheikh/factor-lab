@@ -256,8 +256,6 @@ export function buildReportHtml(params: {
   const strategyLabel = STRATEGY_LABELS[strategyId] ?? strategyId;
   const warmupPoints = getWarmupPointCount(equityCurve);
   const chartRawSeries = equityCurve;
-  // CAGR derived from the equity curve — always consistent with displayed Start/End NAV
-  const chartCagr = computeCAGRFromEquityCurve(chartRawSeries);
   // Effective window: use actual equity-curve dates, not the run-param request dates
   const effectiveStart = chartRawSeries[0]?.date ?? startDate;
   const effectiveEnd = chartRawSeries[chartRawSeries.length - 1]?.date ?? endDate;
@@ -493,7 +491,7 @@ export function buildReportHtml(params: {
 
     <h2>KPIs</h2>
     <div class="grid">
-      <div class="kpi"><div class="label">CAGR</div><div class="value">${fmtPercent(chartCagr)}</div></div>
+      <div class="kpi"><div class="label">CAGR</div><div class="value">${fmtPercent(metrics.cagr)}</div></div>
       <div class="kpi"><div class="label">Sharpe</div><div class="value">${fmtRatio(metrics.sharpe)}</div></div>
       <div class="kpi"><div class="label">Max Drawdown (peak-to-trough)</div><div class="value">${fmtPercent(Math.abs(metrics.max_drawdown))}</div></div>
       <div class="kpi"><div class="label">Volatility</div><div class="value">${fmtPercent(metrics.volatility)}</div></div>

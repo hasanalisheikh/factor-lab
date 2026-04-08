@@ -55,10 +55,7 @@ export async function ensureRunReport(runId: string): Promise<void> {
     positions,
     getTurnoverPeriodsPerYear(runRow.strategy_id)
   );
-  const reportMetrics: RunMetricsRow = {
-    ...(metrics as RunMetricsRow),
-    turnover: turnoverSummary?.annualizedTurnover ?? (metrics as RunMetricsRow).turnover,
-  };
+  const reportMetrics: RunMetricsRow = metrics as RunMetricsRow;
   const overlapState = await getBenchmarkOverlapStateForRun(runRow);
   let benchmarkOverlapDetected = overlapState.confirmed;
   if (!benchmarkOverlapDetected) {
