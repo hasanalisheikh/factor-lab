@@ -645,46 +645,6 @@ export async function getModelPredictionsByRunId(runId: string): Promise<ModelPr
   }
 }
 
-export async function getStrategyComparisonRuns(): Promise<RunWithMetrics[]> {
-  const empty: RunWithMetrics[] = [];
-  try {
-    const supabase = await createClient();
-    const strategies = [
-      "equal_weight",
-      "momentum_12_1",
-      "low_vol",
-      "trend_filter",
-      "ml_ridge",
-      "ml_lightgbm",
-    ];
-
-    // Single query: fetch recent completed runs across all strategies, then pick latest per strategy in JS.
-    // limit(30) gives ~5 per strategy on average which is more than enough.
-    const { data, error } = await supabase
-      .from("runs")
-      .select("*, run_metrics(*)")
-      .in("strategy_id", strategies)
-      .eq("status", "completed")
-      .order("created_at", { ascending: false })
-      .limit(30);
-
-    if (error || !data) return empty;
-
-    const seen = new Set<string>();
-    const results: RunWithMetrics[] = [];
-    for (const row of data as RunWithMetrics[]) {
-      if (!seen.has(row.strategy_id)) {
-        seen.add(row.strategy_id);
-        results.push(row);
-      }
-    }
-    return results;
-  } catch (err) {
-    console.error("getStrategyComparisonRuns exception:", err);
-    return empty;
-  }
-}
-
 async function fetchCompareEquityCurveRows(
   supabase: Awaited<ReturnType<typeof createClient>>,
   runIds: string[]
