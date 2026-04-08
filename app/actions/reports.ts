@@ -1,5 +1,6 @@
 "use server";
 
+import { revalidatePath } from "next/cache";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import {
@@ -21,7 +22,12 @@ function isMissingPositionsTableError(message?: string): boolean {
   return m.includes("public.positions") && m.includes("could not find the table");
 }
 
-export async function ensureRunReport(runId: string): Promise<void> {
+export type GenerateRunReportState =
+  | { success: true; url: string }
+  | { success: false; error: string }
+  | null;
+
+export async function ensureRunReport(runId: string): Promise<string> {
   // Verify the caller owns this run
   const serverClient = await createClient();
   const {
@@ -29,6 +35,18 @@ export async function ensureRunReport(runId: string): Promise<void> {
   } = await serverClient.auth.getUser();
   if (!user) {
     throw new Error("Authentication required.");
+  }
+
+  const { data: existingReport, error: existingReportError } = await serverClient
+    .from("reports")
+    .select("url")
+    .eq("run_id", runId)
+    .maybeSingle();
+
+  if (existingReportError) {
+    console.error("ensureRunReport existing report lookup error:", existingReportError.message);
+  } else if (existingReport?.url) {
+    return existingReport.url;
   }
 
   const [
@@ -142,20 +160,25 @@ export async function ensureRunReport(runId: string): Promise<void> {
   if (reportError) {
     throw new Error(`Failed to persist report row: ${reportError.message}`);
   }
+
+  return urlData.publicUrl;
 }
 
 export async function generateRunReport(
-  _prev: { error: string } | { success: true } | null,
+  _prev: GenerateRunReportState,
   formData: FormData
-): Promise<{ error: string } | { success: true } | null> {
+): Promise<GenerateRunReportState> {
   const runId = formData.get("runId") as string;
   try {
-    await ensureRunReport(runId);
+    const url = await ensureRunReport(runId);
+    revalidatePath("/runs");
+    revalidatePath(`/runs/${runId}`);
+    return { success: true, url };
   } catch (err) {
     console.error("[generateRunReport] report generation failed:", err);
     return {
+      success: false,
       error: err instanceof Error ? err.message : "Report generation failed. Please try again.",
     };
   }
-  return { success: true };
 }
