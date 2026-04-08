@@ -11,6 +11,7 @@ const config = [
       "node_modules/**",
       "services/engine/**",
       ".venv/**",
+      ".tmp-engine-venv/**",
       "playwright-audit/**",
     ],
   },

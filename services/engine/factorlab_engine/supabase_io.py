@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import socket
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -27,6 +28,9 @@ _TRANSIENT_DB_RETRY_BASE_SECONDS: float = float(
     os.getenv("SUPABASE_TRANSIENT_RETRY_BASE_SECONDS", "0.5")
 )
 _SUPABASE_SELECT_PAGE_SIZE = 1000
+
+# Identifies this worker process in jobs.worker_id for debugging.
+_WORKER_ID: str = f"{socket.gethostname()}:{os.getpid()}"
 
 
 @dataclass(frozen=True)
@@ -401,6 +405,13 @@ class SupabaseIO:
             "started_at": now,
             "updated_at": now,
             "locked_at": now,
+            # claimed_at: set once at claim time, never updated — queue-age analytics.
+            "claimed_at": now,
+            # worker_id: hostname:pid for correlating logs across workers.
+            "worker_id": _WORKER_ID,
+            # heartbeat_at: starts NULL; populated by first heartbeat tick (≤10 s).
+            # Stall detection uses this column as the primary liveness signal.
+            "heartbeat_at": None,
             "finished_at": None,
             "error_message": None,
             "next_retry_at": None,
@@ -415,8 +426,16 @@ class SupabaseIO:
             )
         except Exception as exc:
             message = str(exc).lower()
-            # Backward compat: older schemas may not have all columns yet.
+            # Backward compat: strip columns that don't exist on older schemas yet.
+            # The three new columns (claimed_at, worker_id, heartbeat_at) were all
+            # added in the same migration — strip all three if any one is missing so
+            # the single retry doesn't hit a second PGRST204 error.
             retried = False
+            new_migration_cols = ("claimed_at", "worker_id", "heartbeat_at")
+            if any(col in message for col in new_migration_cols):
+                for col in new_migration_cols:
+                    claim_payload.pop(col, None)
+                retried = True
             for col in ("finished_at", "updated_at", "locked_at", "next_retry_at"):
                 if col in claim_payload and col in message:
                     claim_payload.pop(col, None)
@@ -543,20 +562,34 @@ class SupabaseIO:
         )
 
     def heartbeat_job(self, job_id: str) -> None:
-        """Write updated_at=NOW() to signal the job is still alive.
+        """Write heartbeat_at=NOW() and updated_at=NOW() to signal the job is alive.
 
-        Called by the _Heartbeat background thread every 15 seconds.
-        Does NOT update locked_at — locked_at is the claim timestamp and must stay
-        frozen so the max-runtime stall scanner can compare started_at against it
-        without heartbeat interference.
+        Called by the _Heartbeat background thread every 10 seconds.
+        - heartbeat_at: dedicated liveness column, written ONLY by this function.
+          Stall detection uses it as the primary signal so progress updates
+          (which also touch updated_at) never mask a silent worker.
+        - updated_at: general mutation timestamp, retained as fallback for stall
+          detection on schemas that pre-date the heartbeat_at column.
+        Does NOT update locked_at or claimed_at — those stay frozen as analytics
+        timestamps (claim time) distinct from liveness.
         Silently ignores all errors — a failed heartbeat must never kill an
-        in-progress job, and the columns may not exist on old schemas.
+        in-progress job.
         """
         try:
             now = datetime.now(timezone.utc).isoformat()
-            self.client.table("jobs").update({"updated_at": now}).eq("id", job_id).execute()
+            self.client.table("jobs").update({"updated_at": now, "heartbeat_at": now}).eq(
+                "id", job_id
+            ).execute()
         except Exception as exc:
-            print(f"[supabase_io] heartbeat warning job={job_id}: {exc}")
+            # heartbeat_at column may not exist on old schemas — retry with updated_at only.
+            if "heartbeat_at" in str(exc).lower():
+                try:
+                    now = datetime.now(timezone.utc).isoformat()
+                    self.client.table("jobs").update({"updated_at": now}).eq("id", job_id).execute()
+                except Exception as exc2:
+                    print(f"[supabase_io] heartbeat warning job={job_id}: {exc2}")
+            else:
+                print(f"[supabase_io] heartbeat warning job={job_id}: {exc}")
 
     def scan_and_requeue_stalled_jobs(
         self,
@@ -578,13 +611,29 @@ class SupabaseIO:
         try:
             cutoff = (datetime.now(timezone.utc) - timedelta(minutes=stall_minutes)).isoformat()
 
-            result = (
-                self.client.table("jobs")
-                .select("id, stage, attempt_count, preflight_run_id, payload, job_type")
-                .eq("status", "running")
-                .lt("updated_at", cutoff)
-                .execute()
-            )
+            # Primary: use heartbeat_at (written only by the heartbeat thread — no
+            # false-negatives from progress writes). Fallback: jobs whose heartbeat_at
+            # is still NULL (claimed but not yet ticked) use updated_at instead.
+            # The or_() filter handles both cases in one query.
+            try:
+                result = (
+                    self.client.table("jobs")
+                    .select("id, stage, attempt_count, preflight_run_id, payload, job_type")
+                    .eq("status", "running")
+                    .or_(
+                        f"heartbeat_at.lt.{cutoff},and(heartbeat_at.is.null,updated_at.lt.{cutoff})"
+                    )
+                    .execute()
+                )
+            except Exception:
+                # heartbeat_at column not yet present — fall back to updated_at only.
+                result = (
+                    self.client.table("jobs")
+                    .select("id, stage, attempt_count, preflight_run_id, payload, job_type")
+                    .eq("status", "running")
+                    .lt("updated_at", cutoff)
+                    .execute()
+                )
             stalled = result.data or []
             if not stalled:
                 return
@@ -873,6 +922,22 @@ class SupabaseIO:
         if position_rows is not None:
             self._replace_positions(job.run_id, position_rows)
 
+        # Mark run completed FIRST — this is the UI-visible status badge.
+        # Doing this before the job row means that if the job update fails on a
+        # transient error, the run is already in the correct terminal state.
+        # Both writes are idempotent (same value on retry), so re-running
+        # save_success() after a partial failure is safe.
+        runs_update: dict[str, Any] = {"status": "completed"}
+        if rows:
+            dates = [row["date"] for row in rows]
+            runs_update["executed_start_date"] = min(dates)
+            runs_update["executed_end_date"] = max(dates)
+        self._execute_with_retry(
+            lambda: self.client.table("runs").update(runs_update).eq("id", job.run_id).execute(),
+            context=f"finalize_run_success run_id={job.run_id}",
+        )
+
+        # Mark job completed second — also idempotent on retry.
         self._update_job_row(
             job.id,
             {
@@ -885,18 +950,13 @@ class SupabaseIO:
             },
             fallback_stage="report",
         )
-        # Persist the true executed window (first/last equity_curve date) so that
-        # the runs list can display accurate dates without joining equity_curve.
-        runs_update: dict[str, Any] = {"status": "completed"}
-        if rows:
-            dates = [row["date"] for row in rows]
-            runs_update["executed_start_date"] = min(dates)
-            runs_update["executed_end_date"] = max(dates)
-        self._execute_with_retry(
-            lambda: self.client.table("runs").update(runs_update).eq("id", job.run_id).execute(),
-            context=f"finalize_run_success run_id={job.run_id}",
-        )
-        self._sync_backtest_notification(job, status="completed")
+
+        # Notification is best-effort — failure here must not prevent the run from
+        # reaching completed state (both rows are already written above).
+        try:
+            self._sync_backtest_notification(job, status="completed")
+        except Exception as exc:
+            print(f"[supabase_io] notification warning job={job.id}: {exc}")
 
     def save_failure(
         self,

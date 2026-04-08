@@ -33,6 +33,9 @@ _ML_RIDGE_JOB_TIMEOUT_SECONDS: int = int(
 _ML_LIGHTGBM_JOB_TIMEOUT_SECONDS: int = int(
     os.getenv("JOB_TIMEOUT_SECONDS_ML_LIGHTGBM", str(max(_JOB_TIMEOUT_SECONDS, 1800)))
 )
+# Separate budget for the persistence phase (save_success DB writes) after the compute
+# timeout has been cancelled. Keeps persistence bounded without constraining computation.
+_PERSIST_TIMEOUT_SECONDS: int = int(os.getenv("PERSIST_TIMEOUT_SECONDS", "600"))  # 10 min
 
 ProgressCallback = Callable[[str, int], None]
 
@@ -1910,61 +1913,81 @@ def _process_job(io: SupabaseIO, job: Job) -> None:
     if run is None:
         raise RuntimeError(f"Run not found for run_id={job.run_id}")
     job_timeout_seconds = _job_timeout_seconds_for_strategy(str(run.get("strategy_id", "")))
-    print(f"[engine] running job={job.id} run={job.run_id} timeout={job_timeout_seconds}s")
+    print(
+        f"[engine] phase=start job={job.id} run={job.run_id} "
+        f"compute_budget={job_timeout_seconds}s persist_budget={_PERSIST_TIMEOUT_SECONDS}s"
+    )
     _install_job_timeout(job_timeout_seconds)
     try:
-        io.update_job_progress(job.id, stage="ingest", progress=10)
-        resolve_and_snapshot_universe_symbols(io, run)
+        # _Heartbeat ticks updated_at + heartbeat_at every 10 s for the entire job
+        # lifetime (compute AND persist).  The stall watchdog uses heartbeat_at as the
+        # primary liveness signal, so long ML training phases no longer trigger false
+        # stall-detection even when progress_cb hasn't been called recently.
+        with _Heartbeat(lambda: io.heartbeat_job(job.id), interval=10, job_id=job.id):
+            io.update_job_progress(job.id, stage="ingest", progress=10)
+            resolve_and_snapshot_universe_symbols(io, run)
 
-        # Early span validation — fast-fail before any data fetch or computation.
-        try:
-            start_dt = pd.to_datetime(run["start_date"])
-            end_dt = pd.to_datetime(run["end_date"])
-            requested_span = (end_dt - start_dt).days
-        except Exception:
-            requested_span = 0
-        if requested_span < MIN_SPAN_DAYS:
-            raise ValueError(
-                f"Requested date range is too short: {requested_span} days "
-                f"({requested_span / 365:.1f} years). "
-                f"A robust backtest requires at least {MIN_SPAN_DAYS} days (2 years). "
-                "Please choose an earlier start date."
+            # Early span validation — fast-fail before any data fetch or computation.
+            try:
+                start_dt = pd.to_datetime(run["start_date"])
+                end_dt = pd.to_datetime(run["end_date"])
+                requested_span = (end_dt - start_dt).days
+            except Exception:
+                requested_span = 0
+            if requested_span < MIN_SPAN_DAYS:
+                raise ValueError(
+                    f"Requested date range is too short: {requested_span} days "
+                    f"({requested_span / 365:.1f} years). "
+                    f"A robust backtest requires at least {MIN_SPAN_DAYS} days (2 years). "
+                    "Please choose an earlier start date."
+                )
+
+            # Progress callback: updates job stage/progress via DB during computation.
+            def progress_cb(stage: str, pct: int) -> None:
+                io.update_job_progress(job.id, stage=stage, progress=pct)
+
+            result = _run_backtest(io, run, progress_cb)
+
+            assert job.run_id is not None
+
+            # Validate all required outputs are present before marking as completed.
+            _validate_backtest_result(result, job.run_id)
+
+            progress_cb("persist", 82)
+            io.update_run_metadata(job.run_id, _build_run_metadata(run, result))
+            progress_cb("persist", 88)
+
+            # Computation is done. Cancel the compute SIGALRM and install a separate
+            # persistence budget so DB writes are bounded independently of the backtest
+            # runtime. The heartbeat thread stays alive through this phase so the stall
+            # watchdog can still detect a truly hung persist operation.
+            _cancel_job_timeout()
+            _install_job_timeout(_PERSIST_TIMEOUT_SECONDS)
+            print(
+                f"[engine] phase=persist_start job={job.id} "
+                f"elapsed={int((_utcnow() - started).total_seconds())}s"
             )
 
-        # Progress callback: updates job stage/progress via DB during computation.
-        def progress_cb(stage: str, pct: int) -> None:
-            io.update_job_progress(job.id, stage=stage, progress=pct)
-
-        result = _run_backtest(io, run, progress_cb)
-
-        assert job.run_id is not None
-
-        # Validate all required outputs are present before marking as completed.
-        _validate_backtest_result(result, job.run_id)
-
-        progress_cb("persist", 82)
-        io.update_run_metadata(job.run_id, _build_run_metadata(run, result))
-        progress_cb("persist", 88)
-
-        duration = int((_utcnow() - started).total_seconds())
-        io.save_success(
-            job=job,
-            duration_seconds=duration,
-            metrics=result.metrics,
-            equity_rows=({"run_id": job.run_id, **row} for row in result.equity_rows),
-            feature_rows=result.feature_rows,
-            prediction_rows=result.prediction_rows,
-            model_metadata=result.model_metadata,
-            position_rows=result.position_rows,
-        )
-        _cancel_job_timeout()
-        print(f"[engine] completed job={job.id} in {duration}s")
+            duration = int((_utcnow() - started).total_seconds())
+            io.save_success(
+                job=job,
+                duration_seconds=duration,
+                metrics=result.metrics,
+                equity_rows=({"run_id": job.run_id, **row} for row in result.equity_rows),
+                feature_rows=result.feature_rows,
+                prediction_rows=result.prediction_rows,
+                model_metadata=result.model_metadata,
+                position_rows=result.position_rows,
+            )
+            # Persist budget consumed — cancel before the heartbeat context exits.
+            _cancel_job_timeout()
+            print(f"[engine] phase=completed job={job.id} in {duration}s")
     except Exception as exc:
         _cancel_job_timeout()
         duration = int((_utcnow() - started).total_seconds())
         err_str = str(exc)
         # Print first — so the error is always visible in logs even if the DB write fails.
-        print(f"[engine] failed job={job.id} in {duration}s: {err_str}")
+        print(f"[engine] phase=failed job={job.id} in {duration}s: {err_str}")
         try:
             io.save_failure(job, duration, err_str)
         except Exception as save_exc:

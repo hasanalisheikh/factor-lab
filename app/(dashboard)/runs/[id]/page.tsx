@@ -33,6 +33,7 @@ import { RerunButton } from "@/components/run-detail/rerun-button";
 import { getRunPreflightSnapshot } from "@/lib/run-preflight-snapshot";
 
 export const maxDuration = 60;
+export const dynamic = "force-dynamic";
 
 function getMetrics(value: RunMetricsRow[] | RunMetricsRow | null): RunMetricsRow | null {
   if (Array.isArray(value)) return value[0] ?? null;
