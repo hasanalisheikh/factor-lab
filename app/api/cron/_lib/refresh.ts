@@ -14,6 +14,7 @@ import {
   stripExtendedDataIngestFields,
 } from "@/lib/data-ingest-jobs";
 import { TICKER_INCEPTION_DATES } from "@/lib/supabase/types";
+import { triggerWorker } from "@/lib/worker-trigger";
 import { randomUUID } from "crypto";
 
 type TickerStatsRow = {
@@ -28,29 +29,6 @@ type ExistingBatchRow = {
   status: string;
   batch_id: string | null;
 };
-
-function triggerWorker(): void {
-  const url = process.env.WORKER_TRIGGER_URL;
-  if (!url) return;
-  const secret = process.env.WORKER_TRIGGER_SECRET;
-  const isGitHub = url.includes("api.github.com");
-
-  fetch(isGitHub ? url : `${url}/trigger`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${secret}`,
-      "Content-Type": "application/json",
-      ...(isGitHub
-        ? {
-            Accept: "application/vnd.github+json",
-            "X-GitHub-Api-Version": "2022-11-28",
-          }
-        : {}),
-    },
-    body: isGitHub ? JSON.stringify({ event_type: "run-worker" }) : undefined,
-    signal: AbortSignal.timeout(8000),
-  }).catch(() => {});
-}
 
 async function assertAuthorized(request: NextRequest): Promise<NextResponse | null> {
   const cronSecret = process.env.CRON_SECRET;
@@ -345,7 +323,7 @@ export async function runScheduledRefresh(
   console.log(
     `[cron:${requestMode}] queued batch=${batchId} jobs=${jobsToInsert.length} skipped=${skippedSymbols.length} target=${targetCutoffDate} workerUrl=${Boolean(process.env.WORKER_TRIGGER_URL)}`
   );
-  triggerWorker();
+  await triggerWorker(`cron.${requestMode}`);
 
   return NextResponse.json({
     ok: true,

@@ -2069,6 +2069,10 @@ def main() -> None:
             # Fetch from both queues and process
             jobs = io.fetch_queued_jobs(limit=batch_size)
             ingest_jobs = io.fetch_queued_data_ingest_jobs(limit=batch_size)
+            print(
+                f"[engine] poll queued_backtest={len(jobs)} "
+                f"queued_ingest={len(ingest_jobs)} batch_size={batch_size}"
+            )
 
             if not jobs and not ingest_jobs:
                 if once:

@@ -8,6 +8,7 @@ import {
 } from "@/lib/data-ingest-jobs";
 import { DATA_STATE_SINGLETON_ID, getLastCompleteTradingDayUtc } from "@/lib/data-cutoff";
 import { TICKER_INCEPTION_DATES } from "@/lib/supabase/types";
+import { triggerWorker } from "@/lib/worker-trigger";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 export const runtime = "nodejs";
@@ -172,31 +173,6 @@ async function checkIngestRateLimit(userId: string): Promise<{ allowed: boolean;
   }
 }
 
-function triggerWorker(): void {
-  const url = process.env.WORKER_TRIGGER_URL;
-  if (!url) return;
-  const secret = process.env.WORKER_TRIGGER_SECRET;
-  const isGitHub = url.includes("api.github.com");
-
-  fetch(isGitHub ? url : `${url}/trigger`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${secret}`,
-      "Content-Type": "application/json",
-      ...(isGitHub
-        ? {
-            Accept: "application/vnd.github+json",
-            "X-GitHub-Api-Version": "2022-11-28",
-          }
-        : {}),
-    },
-    body: isGitHub ? JSON.stringify({ event_type: "run-worker" }) : undefined,
-    signal: AbortSignal.timeout(8000),
-  }).catch(() => {
-    // fire-and-forget fallback: worker poll loop will still pick queued jobs
-  });
-}
-
 // ---------------------------------------------------------------------------
 // POST /api/data/ingest-benchmark — enqueue a data_ingest_job for the worker
 // ---------------------------------------------------------------------------
@@ -305,7 +281,7 @@ export async function POST(request: NextRequest) {
           requested_by: job.requested_by ?? requestedBy,
         }
       );
-      triggerWorker();
+      await triggerWorker("ingest-benchmark.reuseQueuedJob");
       return NextResponse.json({ jobId: job.id, already_active: true });
     }
 
@@ -401,7 +377,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Failed to create ingest job." }, { status: 500 });
   }
 
-  triggerWorker();
+  await triggerWorker("ingest-benchmark.createJob");
   return NextResponse.json({ jobId: newJob.id }, { status: 201 });
 }
 

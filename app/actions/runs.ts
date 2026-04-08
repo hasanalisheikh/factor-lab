@@ -31,34 +31,10 @@ import { UNIVERSE_PRESETS, type UniverseId } from "@/lib/universe-config";
 import { TICKER_INCEPTION_DATES } from "@/lib/supabase/types";
 import type { StrategyId } from "@/lib/types";
 import { resolveReportsBucketName } from "@/lib/storage";
+import { triggerWorker } from "@/lib/worker-trigger";
 
 export type { RunPreflightResult } from "@/lib/coverage-check";
 export type { UniverseBatchStatusSummary } from "@/lib/supabase/queries";
-
-function triggerWorker(): void {
-  const url = process.env.WORKER_TRIGGER_URL;
-  if (!url) return;
-  const secret = process.env.WORKER_TRIGGER_SECRET;
-
-  const isGitHub = url.includes("api.github.com");
-  fetch(isGitHub ? url : `${url}/trigger`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${secret}`,
-      "Content-Type": "application/json",
-      ...(isGitHub
-        ? {
-            Accept: "application/vnd.github+json",
-            "X-GitHub-Api-Version": "2022-11-28",
-          }
-        : {}),
-    },
-    body: isGitHub ? JSON.stringify({ event_type: "run-worker" }) : undefined,
-    signal: AbortSignal.timeout(8000),
-  }).catch(() => {
-    /* fire-and-forget — worker will still poll as fallback */
-  });
-}
 
 const baseRunConfigSchema = z.object({
   name: z.string().min(1, "Name is required").max(120, "Name too long"),
@@ -554,7 +530,7 @@ async function ensureSymbolRepairsInternal(params: {
   }
 
   if ((rowsToInsert.length > 0 || widenedSymbols.length > 0) && failedSymbols.length === 0) {
-    triggerWorker();
+    await triggerWorker("runs.ensureSymbolRepairsInternal");
   }
 
   return {
@@ -1456,7 +1432,7 @@ export async function createRun(input: z.input<typeof createRunSchema>): Promise
     console.warn("createRun notification insert warning:", notificationError.message);
   }
 
-  triggerWorker();
+  await triggerWorker("runs.createRunAction");
   return { ok: true, runId: run.id, preflight };
 }
 
