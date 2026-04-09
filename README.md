@@ -1,6 +1,6 @@
 # FactorLab
 
-FactorLab is a browser-based quantitative research platform for running, comparing, and exporting
+FactorLab is a full stack quantitative research platform for running, comparing, and exporting
 equity factor backtests without writing code.
 
 It combines a polished Next.js dashboard with Supabase-backed storage and a Python compute engine so
