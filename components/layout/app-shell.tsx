@@ -3,7 +3,15 @@
 import { useEffect, useRef } from "react";
 import { Topbar } from "@/components/layout/topbar";
 
-export function AppShell({ title, children }: { title: string; children: React.ReactNode }) {
+export function AppShell({
+  title,
+  children,
+  showDataDiagnosticsToggle = true,
+}: {
+  title: string;
+  children: React.ReactNode;
+  showDataDiagnosticsToggle?: boolean;
+}) {
   const mainRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
@@ -44,7 +52,7 @@ export function AppShell({ title, children }: { title: string; children: React.R
 
   return (
     <>
-      <Topbar title={title} />
+      <Topbar title={title} showDataDiagnosticsToggle={showDataDiagnosticsToggle} />
       <main ref={mainRef} className="w-full min-w-0 flex-1 overflow-y-auto">
         <div className="flex w-full flex-col gap-4 p-4 lg:p-6">{children}</div>
       </main>

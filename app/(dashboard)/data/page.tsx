@@ -22,6 +22,7 @@ import {
   type HealthStatus,
   summarizeInceptionAwareCoverage,
 } from "@/lib/data-health";
+import { isInternalDataDiagnosticsEnabled } from "@/lib/data-page-diagnostics";
 import { InfoTooltip } from "@/components/data/info-tooltip";
 import { TopMissingTable } from "@/components/data/top-missing-table";
 import { BenchmarkCoverageCard } from "@/components/data/benchmark-coverage-card";
@@ -239,8 +240,9 @@ export default async function DataPage({
   searchParams: Promise<Record<string, string | undefined>>;
 }) {
   const params = await searchParams;
-  const diagnostics = params.diagnostics === "1";
-  const mode = params.mode === "full" ? "full" : "backtest";
+  const showInternalDiagnostics = isInternalDataDiagnosticsEnabled();
+  const diagnostics = showInternalDiagnostics && params.diagnostics === "1";
+  const mode = showInternalDiagnostics && params.mode === "full" ? "full" : "backtest";
   const searchQuery = (params.q ?? "").trim().toUpperCase();
   const benchmarkParam = normalizeBenchmark(params.benchmark);
   const benchmarkOptions = new Set<string>(BENCHMARK_OPTIONS);
@@ -356,13 +358,13 @@ export default async function DataPage({
 
   function buildDataHref(nextMode: "backtest" | "full") {
     const hrefParams = new URLSearchParams();
-    if (nextMode === "full") {
+    if (showInternalDiagnostics && nextMode === "full") {
       hrefParams.set("mode", "full");
     }
     if (params.q) {
       hrefParams.set("q", params.q);
     }
-    if (diagnostics) {
+    if (showInternalDiagnostics && diagnostics) {
       hrefParams.set("diagnostics", "1");
     }
     if (hasExplicitBenchmark && params.benchmark) {
@@ -373,7 +375,7 @@ export default async function DataPage({
   }
 
   return (
-    <AppShell title="Data">
+    <AppShell title="Data" showDataDiagnosticsToggle={showInternalDiagnostics}>
       {refreshTotals > 0 && (
         <Card className="mb-3 border-blue-800/40 bg-blue-950/30">
           <CardContent className="flex items-start gap-3 py-4">
@@ -400,8 +402,12 @@ export default async function DataPage({
           action="/data"
           className="flex max-w-xs min-w-[160px] flex-1 items-center gap-1.5"
         >
-          {mode === "full" && <input type="hidden" name="mode" value="full" />}
-          {diagnostics && <input type="hidden" name="diagnostics" value="1" />}
+          {showInternalDiagnostics && mode === "full" && (
+            <input type="hidden" name="mode" value="full" />
+          )}
+          {showInternalDiagnostics && diagnostics && (
+            <input type="hidden" name="diagnostics" value="1" />
+          )}
           {hasExplicitBenchmark && params.benchmark && (
             <input type="hidden" name="benchmark" value={params.benchmark} />
           )}
@@ -417,28 +423,30 @@ export default async function DataPage({
           </div>
         </form>
 
-        <div className="border-border bg-muted/40 flex w-fit items-center gap-1 rounded-lg border p-1">
-          <Link
-            href={buildDataHref("backtest")}
-            className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
-              mode === "backtest"
-                ? "bg-card text-foreground shadow-sm"
-                : "text-muted-foreground hover:text-foreground"
-            }`}
-          >
-            Backtest-ready
-          </Link>
-          <Link
-            href={buildDataHref("full")}
-            className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
-              mode === "full"
-                ? "bg-card text-foreground shadow-sm"
-                : "text-muted-foreground hover:text-foreground"
-            }`}
-          >
-            Advanced
-          </Link>
-        </div>
+        {showInternalDiagnostics && (
+          <div className="border-border bg-muted/40 flex w-fit items-center gap-1 rounded-lg border p-1">
+            <Link
+              href={buildDataHref("backtest")}
+              className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
+                mode === "backtest"
+                  ? "bg-card text-foreground shadow-sm"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              Backtest-ready
+            </Link>
+            <Link
+              href={buildDataHref("full")}
+              className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
+                mode === "full"
+                  ? "bg-card text-foreground shadow-sm"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              Advanced
+            </Link>
+          </div>
+        )}
       </div>
 
       <div className="mb-4">
@@ -616,7 +624,9 @@ export default async function DataPage({
                     ? "Benchmark coverage is temporarily unavailable."
                     : benchmarkStatus.issues.length === 0
                       ? "All supported benchmarks are healthy inside the research window."
-                      : `${benchmarkStatus.issues.length} benchmark${benchmarkStatus.issues.length !== 1 ? "s" : ""} still need repair. Details live in Advanced.`}
+                      : showInternalDiagnostics
+                        ? `${benchmarkStatus.issues.length} benchmark${benchmarkStatus.issues.length !== 1 ? "s" : ""} still need repair. Details live in Advanced.`
+                        : `${benchmarkStatus.issues.length} benchmark${benchmarkStatus.issues.length !== 1 ? "s" : ""} still need repair. Automatic repairs continue in the background.`}
                 </p>
               </div>
             </CardContent>
@@ -634,7 +644,9 @@ export default async function DataPage({
               <p className="text-xs text-amber-300/80">
                 <strong>Missing from the required dataset:</strong>{" "}
                 <span className="font-mono">{requiredResearch.notIngestedTickers.join(", ")}</span>.
-                Repairs run in the background and can be inspected in Advanced.
+                {showInternalDiagnostics
+                  ? " Repairs run in the background and can be inspected in Advanced."
+                  : " Repairs run in the background automatically."}
               </p>
             </div>
           )}
@@ -784,10 +796,9 @@ export default async function DataPage({
           <div>
             <p className="text-foreground mb-1 text-xs font-semibold">Inception-aware coverage</p>
             <p className="text-muted-foreground text-xs leading-relaxed">
-              FactorLab keeps the visible dataset capped at a global cutoff date. Backtest-ready
-              measures only the required ticker set inside each universe&apos;s research window.
-              Advanced keeps the same cutoff but expands into DB-wide historical diagnostics,
-              benchmark repair state, and recent job outcomes.
+              {showInternalDiagnostics
+                ? "FactorLab keeps the visible dataset capped at a global cutoff date. Backtest-ready measures only the required ticker set inside each universe's research window. Advanced keeps the same cutoff but expands into DB-wide historical diagnostics, benchmark repair state, and recent job outcomes."
+                : "FactorLab keeps the visible dataset capped at a global cutoff date. This page focuses on backtest-ready coverage for the required ticker set inside each universe's research window."}
             </p>
           </div>
         </CardContent>

@@ -167,42 +167,31 @@ FactorLab uses a singleton **data cutoff date** as the global dataset boundary:
 | --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Current through**               | The effective end date for all data. Backtests and coverage checks cap at this date.                                                           |
 | **Backtest-ready** (Monthly mode) | Updated once per month via a scheduled refresh. All coverage checks are relative to the cutoff date. This is the default and most stable mode. |
-| **Advanced** (Daily mode)         | Updated daily. Provides more recent data but may have partial ingest coverage until the nightly patch completes.                               |
 
-If `ENABLE_DAILY_UPDATES=false` (the default), the system operates in Backtest-ready / Monthly mode. The daily patch route exists but exits without action.
+If `ENABLE_DAILY_UPDATES=false` (the default), the daily patch route exists but exits without action.
+
+### Backtest-ready Summary
+
+The Data page focuses on the product-facing readiness view:
+
+- overall data health
+- tickers ingested
+- current-through date
+- completeness inside the monitored research window
+- true missing days inside the monitored research window
+- universe readiness and top issues
+
+The overall health score is evaluated on the required backtest research window, not on the entire database history.
 
 ### Universe Tier Summary
 
 Assets are grouped by their earliest available start date ("tiers"). An asset listed as `2015+` has data going back to 2015. Choosing a run start date before an asset's tier will trigger the preflight WAITING_FOR_DATA flow or an inception-date block.
 
-### Benchmark Coverage
+### Top Issues
 
-Each supported benchmark has a coverage card showing:
+The Top Issues table highlights the required tickers with the most true missing days inside the monitored research window. This keeps the public Data page focused on whether backtests are ready to run, rather than on internal maintenance detail.
 
-- Ingested date range
-- Coverage percentage vs. expected trading days
-- Health status
-
-### Benchmark Coverage Job Statuses
-
-| Status                  | Meaning                                                                                                                     |
-| ----------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| **Good**                | Coverage ≥ 99% with no gaps > 5 days                                                                                        |
-| **Warning**             | Coverage between 95–99% or a gap between 5–10 days                                                                          |
-| **Degraded**            | Coverage < 95% or gap > 10 days                                                                                             |
-| **Retrying…**           | A failed ingest is scheduled for automatic retry                                                                            |
-| **Will retry at HH:MM** | Exponential backoff retry is scheduled                                                                                      |
-| **Blocked**             | Permanent failure (e.g., invalid ticker, delisted). Requires manual intervention — click "Retry now" to force a new attempt |
-
-### Diagnostics
-
-The Data page includes an overall health assessment based on:
-
-- Missing data rate across all ingested tickers
-- Maximum gap length
-- Benchmark-specific coverage
-
-**Important:** The overall health score reflects the entire database window (up to 10 years). A run over a shorter window (e.g., 2020–2025) may pass preflight even if the DB-wide health shows a warning, because the preflight check is window-scoped.
+Internal benchmark repair tools and deeper diagnostics may exist in internal deployments, but they are not part of the standard product-facing Data page experience.
 
 ---
 
@@ -247,9 +236,6 @@ LightGBM is not installed in the worker environment. Install it: `pip install li
 
 **Preflight blocks with "not enough training data"**
 The ML strategies require ~730 calendar days of warmup. Move the start date earlier or use a longer date range.
-
-**Data page shows "Blocked" for a benchmark**
-The benchmark ticker returned a permanent error (invalid ticker, delisted). Click **Retry now** to force a fresh attempt. If it continues to fail, the ticker may need to be removed from the supported list.
 
 **Chart does not render / shows blank**
 Equity curve data may be missing for this run. Check the Jobs page for errors during the `persist` stage.

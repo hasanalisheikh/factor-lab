@@ -2,14 +2,17 @@ import { AppShell } from "@/components/layout/app-shell";
 import { MetricCardsSkeleton, TableSkeleton } from "@/components/skeletons";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Card, CardContent } from "@/components/ui/card";
+import { isInternalDataDiagnosticsEnabled } from "@/lib/data-page-diagnostics";
 
 export default function DataLoading() {
+  const showInternalDiagnostics = isInternalDataDiagnosticsEnabled();
+
   return (
-    <AppShell title="Data">
-      {/* toolbar: search input + tab toggle */}
+    <AppShell title="Data" showDataDiagnosticsToggle={showInternalDiagnostics}>
+      {/* toolbar: search input + optional internal mode toggle */}
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <Skeleton className="bg-secondary h-8 w-52 rounded-md" />
-        <Skeleton className="bg-secondary h-8 w-36 rounded-lg" />
+        {showInternalDiagnostics && <Skeleton className="bg-secondary h-8 w-36 rounded-lg" />}
       </div>
 
       {/* health card */}

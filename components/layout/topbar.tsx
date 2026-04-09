@@ -12,8 +12,17 @@ import { TopbarNotifications } from "@/components/layout/topbar-notifications";
 import { DiagnosticsToggle } from "@/components/data/diagnostics-toggle";
 import { usePathname } from "next/navigation";
 
-export function Topbar({ title = "Dashboard" }: { title?: string }) {
+export function Topbar({
+  title = "Dashboard",
+  showDataDiagnosticsToggle = true,
+}: {
+  title?: string;
+  showDataDiagnosticsToggle?: boolean;
+}) {
   const pathname = usePathname();
+  const showDiagnosticsToggle =
+    pathname === "/runs/new" || (pathname === "/data" && showDataDiagnosticsToggle);
+
   return (
     <header className="border-border bg-card/40 flex h-14 shrink-0 items-center justify-between border-b px-4 backdrop-blur-sm lg:px-6">
       <div className="flex items-center gap-3">
@@ -48,7 +57,7 @@ export function Topbar({ title = "Dashboard" }: { title?: string }) {
 
       <div className="flex items-center gap-1">
         <TopbarSearch />
-        {(pathname === "/data" || pathname === "/runs/new") && <DiagnosticsToggle />}
+        {showDiagnosticsToggle && <DiagnosticsToggle />}
         <TopbarNotifications />
         <TopbarUserMenu />
       </div>

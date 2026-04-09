@@ -1,6 +1,8 @@
 import type { Page } from "@playwright/test"
 import { BASE_URL } from "../audit.config"
 
+const INTERNAL_DATA_DIAGNOSTICS = process.env.SHOW_INTERNAL_DATA_DIAGNOSTICS === "true"
+
 // All 9 benchmarks in the matrix — used to bound per-ticker row context
 const ALL_BENCHMARKS = ["SPY", "QQQ", "IWM", "VTI", "EFA", "EEM", "TLT", "GLD", "VNQ"]
 
@@ -39,6 +41,7 @@ export type DataPageHealth = {
   benchmarkRows: BenchmarkHealthRow[]
   completeness: string | null
   backtestReady: boolean
+  internalDiagnosticsEnabled: boolean
 }
 
 export class DataPage {
@@ -54,13 +57,20 @@ export class DataPage {
     const overallVerdict = await this.readOverallVerdict()
     const cutoffDate = await this.readCutoffDate()
     const completeness = await this.readCompleteness()
-    const benchmarkRows = await this.readBenchmarkRows()
+    const benchmarkRows = INTERNAL_DATA_DIAGNOSTICS ? await this.readBenchmarkRowsFromAdvanced() : []
 
     // If completeness is near 100% and there are no blocked rows, backtest-ready
     const hasBlocked = benchmarkRows.some((r) => r.status === "blocked" || r.status === "needs_backfill")
     const backtestReady = overallVerdict === "GOOD" && !hasBlocked
 
-    return { overallVerdict, cutoffDate, benchmarkRows, completeness, backtestReady }
+    return {
+      overallVerdict,
+      cutoffDate,
+      benchmarkRows,
+      completeness,
+      backtestReady,
+      internalDiagnosticsEnabled: INTERNAL_DATA_DIAGNOSTICS,
+    }
   }
 
   private async readOverallVerdict(): Promise<DataPageHealth['overallVerdict']> {
@@ -105,12 +115,18 @@ export class DataPage {
     return null
   }
 
-  private async readBenchmarkRows(): Promise<BenchmarkHealthRow[]> {
+  private async readBenchmarkRowsFromAdvanced(): Promise<BenchmarkHealthRow[]> {
+    await this.page.goto(`${BASE_URL}/data?mode=full`)
+    await this.page.waitForSelector('text=/Data Health|Data current/i', { timeout: 30_000 })
+    return this.readBenchmarkRowsFromCurrentPage()
+  }
+
+  private async readBenchmarkRowsFromCurrentPage(): Promise<BenchmarkHealthRow[]> {
     const rows: BenchmarkHealthRow[] = []
     const benchmarks = ["SPY", "QQQ", "IWM", "VTI", "EFA", "EEM", "TLT", "GLD", "VNQ"]
 
     for (const ticker of benchmarks) {
-      const row = await this.readBenchmarkRow(ticker)
+      const row = await this.readBenchmarkRowFromCurrentPage(ticker)
       rows.push(row)
     }
 
@@ -118,6 +134,16 @@ export class DataPage {
   }
 
   async readBenchmarkRow(ticker: string): Promise<BenchmarkHealthRow> {
+    if (!INTERNAL_DATA_DIAGNOSTICS) {
+      return { ticker, coveragePct: null, status: "unknown", isBehindCutoff: false }
+    }
+
+    await this.page.goto(`${BASE_URL}/data?mode=full`)
+    await this.page.waitForSelector('text=/Data Health|Data current/i', { timeout: 30_000 })
+    return this.readBenchmarkRowFromCurrentPage(ticker)
+  }
+
+  private async readBenchmarkRowFromCurrentPage(ticker: string): Promise<BenchmarkHealthRow> {
     try {
       // Strategy: scan the full page text for each row, then parse.
       // The Benchmark Coverage card renders a list where each row contains:
