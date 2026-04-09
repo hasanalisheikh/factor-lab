@@ -1,5 +1,4 @@
 import { type NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import {
   buildScheduledRefreshWindow,
@@ -32,20 +31,13 @@ type ExistingBatchRow = {
 
 async function assertAuthorized(request: NextRequest): Promise<NextResponse | null> {
   const cronSecret = process.env.CRON_SECRET;
-  const authHeader = request.headers.get("Authorization");
-  const hasCronAuth = cronSecret && authHeader === `Bearer ${cronSecret}`;
-
-  if (hasCronAuth) {
-    return null;
+  if (!cronSecret) {
+    return NextResponse.json({ error: "Cron secret not configured." }, { status: 500 });
   }
 
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (!user) {
-    return NextResponse.json({ error: "Authentication required." }, { status: 401 });
+  const authHeader = request.headers.get("Authorization");
+  if (authHeader !== `Bearer ${cronSecret}`) {
+    return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
   }
 
   return null;
