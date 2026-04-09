@@ -1,8 +1,10 @@
 # FactorLab User Guide
 
-FactorLab is a browser-based quantitative research platform. You queue a backtest run, the Python worker executes it, and results are displayed as interactive charts, tables, and a downloadable HTML tearsheet.
+FactorLab is a browser-based research product for creating historical backtests, monitoring queued
+runs, and reviewing results as charts, tables, and downloadable HTML reports.
 
----
+For strategy methodology, use [docs/strategies.md](strategies.md). For system and deployment detail,
+use [docs/architecture.md](architecture.md) and [docs/deployment.md](deployment.md).
 
 ## Getting Started
 
@@ -10,15 +12,12 @@ FactorLab is a browser-based quantitative research platform. You queue a backtes
 
 The app requires authentication. From `/login` you can:
 
-- **Sign in** — email and password
-- **Create account** — email and password (rate-limited: 10 per IP per hour)
-- **Continue as Guest** — one click, no email required. Creates an isolated private account (`guest_<uuid>@factorlab.local`). Your data is fully private via row-level security.
+- sign in with email and password
+- create an account with email and password
+- continue as a guest with one click
 
-Guest accounts are full accounts. You can upgrade a guest account to a named account at any time from **Settings → Account**.
-
-All runs, jobs, and results are strictly private. User A cannot see User B's runs, even on a shared deployment.
-
----
+Guest accounts are real private accounts with their own isolated data. You can upgrade a guest
+account later from **Settings → Account**.
 
 ## Creating a Run
 
@@ -26,222 +25,173 @@ Navigate to **New Run** in the sidebar.
 
 ### Run Parameters
 
-| Field           | Description                                                                               |
-| --------------- | ----------------------------------------------------------------------------------------- |
-| **Run name**    | A label you choose for easy identification                                                |
-| **Strategy**    | Which strategy to execute (see [Strategy Reference](strategies.md))                       |
-| **Universe**    | The investable asset set: ETF8, SP100 subset, or NASDAQ100 subset                         |
-| **Benchmark**   | Index for relative performance comparison: SPY, QQQ, IWM, VTI, EFA, EEM, TLT, GLD, or VNQ |
-| **Start date**  | First date of the backtest                                                                |
-| **End date**    | Last date (capped at the data cutoff — "Current through" date)                            |
-| **Top N**       | Number of assets to hold. Capped by universe size and strategy constraints                |
-| **Costs (bps)** | Transaction cost per rebalance per unit of turnover. Default: 10 bps                      |
+| Field               | Description                                                                              |
+| ------------------- | ---------------------------------------------------------------------------------------- |
+| **Run name**        | A label to identify the backtest later.                                                  |
+| **Strategy**        | The strategy to execute. See [docs/strategies.md](strategies.md) for methodology.        |
+| **Universe**        | The investable asset set: ETF8, SP100 subset, or NASDAQ100 subset.                       |
+| **Benchmark**       | The comparison ticker used for relative performance metrics.                             |
+| **Start date**      | First date of the requested backtest window.                                             |
+| **End date**        | Last date of the requested window, capped at the Data page's **Current through** cutoff. |
+| **Top N**           | Maximum number of names to hold for strategies that rank or filter assets.               |
+| **Costs (bps)**     | Transaction cost assumption applied to turnover.                                         |
+| **Initial capital** | Starting portfolio value used for the run and benchmark series.                          |
 
-Your default settings are saved in **Settings → Backtest** and pre-populate the form.
+Your default values are stored in **Settings → Backtest** and pre-fill the form.
 
-### Date Constraints
+### Date and Data Constraints
 
-The earliest allowed start date depends on:
+- Every run must span at least **730 calendar days**.
+- The earliest viable start date also depends on available price history and strategy warmup.
+- ML strategies need a longer usable history window than the monthly strategies.
+- The end date never extends beyond the shared data cutoff shown on the Data page.
 
-1. **Data availability** — the earliest date with sufficient price history in the database
-2. **Strategy warmup** — each strategy requires a look-back window before the first rebalance:
-   - `equal_weight`: no warmup
-   - `momentum_12_1`: ~390 calendar days
-   - `low_vol`: ~90 calendar days
-   - `trend_filter`: ~390 calendar days
-   - `ml_ridge` / `ml_lightgbm`: ~730 calendar days
+## Preflight and Queue Behavior
 
-The end date is always capped at the **data cutoff date** shown on the Data page.
+When you submit a run, FactorLab performs a preflight coverage check before compute starts.
 
----
+| Outcome                        | What happens                                                                                                                                          |
+| ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **All required data is ready** | The run is created with status `queued`.                                                                                                              |
+| **Some data is missing**       | The run is created with status `waiting_for_data`; ingestion jobs are queued automatically, and the run starts when the missing coverage is repaired. |
+| **The request is not viable**  | The form returns an error, such as an inception-date or training-history issue, and no run is created.                                                |
 
-## Preflight Check
-
-When you submit the form, FactorLab runs a **preflight coverage check** before creating the run. This verifies that all required price data is available for the chosen universe, benchmark, and date range.
-
-### Possible Outcomes
-
-| Outcome                            | What Happens                                                                                                                                           |
-| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **All data ready**                 | Run is created with status `queued`; backtest starts immediately                                                                                       |
-| **Data partially missing**         | Run is created with status `waiting_for_data`; data ingestion jobs are queued automatically; the backtest chains automatically when ingestion finishes |
-| **Ticker inception date too late** | Run form shows an error with the minimum viable start date — no run is created                                                                         |
-
-You never need to manually trigger data ingestion. If data is missing, the system handles it.
-
-### Coverage Thresholds
-
-- Benchmark: ≥ 99% coverage over the warmup-adjusted window
-- Universe assets: ≥ 98% coverage (99% for momentum and ML strategies)
-
----
+You do not manually start ingestion from the normal user flow. The platform handles the repair path
+automatically.
 
 ## Run Statuses
 
-| Status             | Meaning                                                                          |
-| ------------------ | -------------------------------------------------------------------------------- |
-| `queued`           | Job is waiting for the Python worker to pick it up                               |
-| `waiting_for_data` | Price data is being ingested; backtest will start automatically                  |
-| `running`          | Worker is actively executing the backtest                                        |
-| `completed`        | Backtest finished successfully; results are available                            |
-| `failed`           | Job encountered an unrecoverable error (see the Jobs page for the error message) |
-
----
+| Status             | Meaning                                                                  |
+| ------------------ | ------------------------------------------------------------------------ |
+| `queued`           | The run is waiting for background compute to claim it.                   |
+| `waiting_for_data` | Required price coverage is being repaired before the backtest can start. |
+| `running`          | The backtest is executing.                                               |
+| `completed`        | Results are available.                                                   |
+| `failed`           | The run stopped with an unrecoverable error.                             |
 
 ## Runs Page
 
-The **Runs** page lists all your runs. You can filter by:
+The **Runs** page lists your runs and supports filtering by name, status, strategy, and universe.
 
-- Name (search bar)
-- Status
-- Strategy
-- Universe
-
-Rows with an active status (`queued`, `running`, `waiting_for_data`) show a mini progress bar and percentage under the status badge. The page polls automatically while any run is active.
-
-### Deleting Runs
-
-Each row has a context menu (three-dot icon) with a **Delete** option. Deleting a run removes the run and all associated data (equity curve, metrics, positions, reports). This cannot be undone.
-
----
+- active runs show a live progress indicator
+- the page refreshes automatically while runs are `queued`, `waiting_for_data`, or `running`
+- deleting a run removes its associated result data and report
 
 ## Run Detail Page
 
-Click any completed run to open its detail page. Results are organized into tabs.
+Completed runs open into a tabbed detail view.
 
-### Overview Tab
+### Overview
 
-- **Equity curve** — portfolio NAV vs. benchmark NAV over the full run window, starting at $100,000
-- **Key metrics** — CAGR, Sharpe, Max Drawdown (peak-to-trough), Volatility, Turnover (annualized), Win Rate, Profit Factor, Calmar
-- **Run configuration card** — strategy, universe, benchmark, date range, costs, and disclaimer
+- equity curve versus the selected benchmark
+- drawdown chart
+- KPI grid including CAGR, Sharpe, Max Drawdown, Volatility, Turnover, Win Rate, Profit Factor,
+  and Calmar
+- run configuration summary and research disclaimer
 
-### Holdings Tab
+### Holdings
 
-Current portfolio composition as of the most recent rebalance. Shows symbol, weight, and position size.
+The Holdings tab shows a date-selected snapshot of the portfolio.
 
-### Trades Tab
+- monthly strategies show the stored holdings and weights for the selected rebalance date
+- ML strategies show the selected names, weights, rank, predicted return, and realized return for
+  the selected prediction date
 
-Full rebalance log — one entry per rebalance date showing what was bought and sold (the weight change) and the resulting one-way turnover for that rebalance date.
+### Trades
 
-### ML Insights Tab (ML strategies only)
+The Trades tab focuses on rebalance activity:
 
-Shown only for `ml_ridge` and `ml_lightgbm` runs. Contains:
+- a per-rebalance constituent turnover chart
+- a rebalance log showing which names entered or exited
 
-- **Feature importance** — which factors are driving the model's predictions (displayed as % contribution)
-- **Predicted picks** — the model's most recent ranked asset list with predicted return
-- **Realized vs. predicted** — how well the model's predictions corresponded to actual returns
+### ML Insights
 
----
+ML runs include an **ML Insights** tab with feature importance, predicted picks, and realized versus
+predicted return views.
 
-## Downloading the Tearsheet
+## Reports
 
-On any completed run, the Overview tab has a **Download Report** button that delivers a self-contained HTML tearsheet. Open it in any browser — it requires no internet connection.
+Completed runs support HTML report generation.
 
-The tearsheet includes:
+- if a report already exists, the run detail page shows **Download Report**
+- if not, it shows **Generate Report**
+- generated reports are self-contained HTML files you can open or share outside the app
 
-- Full equity curve chart
-- All performance metrics
-- Holdings snapshot
-- Strategy and benchmark configuration
-- Research disclaimer
+## Compare
 
-If no report has been generated yet (e.g., a newly completed run), click **Generate Report** first; the button appears in place of the download link.
+The **Compare** page lets you review two completed runs side by side.
 
----
+Use it to compare:
 
-## Comparing Runs
-
-The **Compare** page lets you place two completed runs side-by-side: equity curves, metrics tables, and benchmark labels. Select Run A and Run B from the dropdowns.
-
----
+- different strategies
+- different Top N settings
+- different cost assumptions
+- a factor strategy versus a baseline run
 
 ## Data Page
 
-The **Data** page shows the health of the price database. Understanding it helps you interpret why a run might be blocked or degraded.
+The public/default Data page is a **Backtest-ready** view, not an internal maintenance console.
 
-### Data Cutoff Mode
+It focuses on:
 
-FactorLab uses a singleton **data cutoff date** as the global dataset boundary:
+- the shared **Current through** cutoff date
+- overall data health for the monitored research window
+- required ticker coverage and true missing days
+- universe readiness and top issues that could affect backtests
 
-| Label                             | Meaning                                                                                                                                        |
-| --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Current through**               | The effective end date for all data. Backtests and coverage checks cap at this date.                                                           |
-| **Backtest-ready** (Monthly mode) | Updated once per month via a scheduled refresh. All coverage checks are relative to the cutoff date. This is the default and most stable mode. |
-
-If `ENABLE_DAILY_UPDATES=false` (the default), the daily patch route exists but exits without action.
-
-### Backtest-ready Summary
-
-The Data page focuses on the product-facing readiness view:
-
-- overall data health
-- tickers ingested
-- current-through date
-- completeness inside the monitored research window
-- true missing days inside the monitored research window
-- universe readiness and top issues
-
-The overall health score is evaluated on the required backtest research window, not on the entire database history.
-
-### Universe Tier Summary
-
-Assets are grouped by their earliest available start date ("tiers"). An asset listed as `2015+` has data going back to 2015. Choosing a run start date before an asset's tier will trigger the preflight WAITING_FOR_DATA flow or an inception-date block.
-
-### Top Issues
-
-The Top Issues table highlights the required tickers with the most true missing days inside the monitored research window. This keeps the public Data page focused on whether backtests are ready to run, rather than on internal maintenance detail.
-
-Internal benchmark repair tools and deeper diagnostics may exist in internal deployments, but they are not part of the standard product-facing Data page experience.
-
----
-
-## Benchmark Overlap Warning
-
-If the selected benchmark ticker (e.g., SPY) is also an asset in the investable universe (e.g., the ETF8 universe includes SPY), the run detail page shows a **benchmark overlap** notice. This means the portfolio's return and the benchmark's return share a common component. The results are still valid — this is an expected and documented behavior of using broad ETF benchmarks with ETF universes.
-
----
+For standard users, this page is about research readiness, not low-level repair controls or deep
+diagnostics. Internal deployments may expose extra diagnostics, but they are not part of the normal
+product flow.
 
 ## Jobs Page
 
-The **Jobs** page shows all jobs associated with your runs:
+The **Jobs** page shows the underlying backtest and data-ingest work associated with your runs.
 
-- Data ingest jobs (status: queued, running, completed, failed, blocked)
-- Backtest jobs (status: queued, running, completed, failed)
-
-Each job shows its current stage and progress percentage. Hover over error badges for the full error message.
-
----
+- backtest jobs show status, stage, duration, and progress
+- data-ingest jobs explain why a run may still be `waiting_for_data`
+- failures surface their error messages here first
 
 ## Settings
 
-### Backtest Defaults (Settings → Backtest)
+### Backtest
 
-Set default values for universe, benchmark, costs, top-N, initial capital, rebalance frequency, and date range. These pre-populate the New Run form.
+Use **Settings → Backtest** to save defaults for:
 
-### Account (Settings → Account)
+- universe
+- benchmark
+- costs
+- Top N
+- initial capital
+- preferred date range
+- rebalance preference
 
-- **Change password** — update your login password
-- **Upgrade guest account** — convert a guest account to a named account with a real email address
-- **Delete account** — permanently deletes your account and all associated runs and data. This cannot be undone.
+### Account
 
----
+Use **Settings → Account** to:
+
+- change your password
+- upgrade a guest account to a named account
+- delete the account and its associated data
 
 ## Troubleshooting
 
-**Run is stuck in `queued` for a long time**
-The Python worker may not be running. Check the Jobs page for error messages. If using Render, verify the background worker service is running.
+**A run stays in `queued` for a long time**
+Background compute may be unavailable. Check the Jobs page first. If you operate the deployment,
+see [docs/deployment.md](deployment.md).
 
-**Run failed with "LightGBM unavailable"**
-LightGBM is not installed in the worker environment. Install it: `pip install lightgbm`.
+**A run stays in `waiting_for_data`**
+The platform is still repairing missing coverage. Check the Jobs page and Data page for progress and
+readiness context.
 
-**Preflight blocks with "not enough training data"**
-The ML strategies require ~730 calendar days of warmup. Move the start date earlier or use a longer date range.
+**An ML run fails quickly**
+The selected window may not have enough usable training history, or the worker environment may not
+have ML dependencies installed.
 
-**Chart does not render / shows blank**
-Equity curve data may be missing for this run. Check the Jobs page for errors during the `persist` stage.
-
----
+**The report button shows Generate instead of Download**
+The run finished before a report was generated. Use **Generate Report** once; the button switches to
+**Download Report** when the file is ready.
 
 ## Research Disclaimer
 
-FactorLab generates historical simulations. Results reflect backtested performance of simplified rule-based or ML strategies. They do not constitute financial advice and are not a guarantee of future returns.
+FactorLab produces historical simulations. Results are hypothetical, simplified, and not financial
+advice.

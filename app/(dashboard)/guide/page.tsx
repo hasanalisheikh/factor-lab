@@ -4,8 +4,6 @@ import { PageContainer } from "@/components/layout/page-container";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 
-// ── Sections ──────────────────────────────────────────────────────────────────
-
 const sections = [
   {
     id: "overview",
@@ -13,13 +11,16 @@ const sections = [
     content: (
       <div className="text-muted-foreground space-y-3 text-[13px] leading-relaxed">
         <p>
-          FactorLab is a quant research dashboard for running and comparing historical backtests on
-          systematic investment strategies. You define the strategy, universe, and date range; the
-          engine simulates monthly rebalancing and reports performance metrics and tear sheets.
+          FactorLab is a quant research dashboard for creating historical backtests, monitoring
+          queued runs, and reviewing the results as charts, tables, and downloadable HTML reports.
+        </p>
+        <p>
+          Monthly factor strategies and daily walk-forward ML strategies share the same product
+          flow: choose a strategy, queue a run, and review the stored outputs when it completes.
         </p>
         <p>
           It is a <span className="text-foreground font-medium">research tool</span>, not a trading
-          platform. All results are hypothetical and do not constitute financial advice.
+          platform. Results are hypothetical and not financial advice.
         </p>
       </div>
     ),
@@ -30,44 +31,51 @@ const sections = [
     content: (
       <div className="text-muted-foreground space-y-4 text-[13px] leading-relaxed">
         <p>
-          Navigate to{" "}
+          Start from{" "}
           <Link
             href="/runs/new"
             className="text-foreground hover:text-primary font-medium underline underline-offset-2 transition-colors"
           >
             New Run
+          </Link>
+          . For deeper methodology, use the{" "}
+          <Link
+            href="/strategies"
+            className="text-foreground hover:text-primary font-medium underline underline-offset-2 transition-colors"
+          >
+            Strategies
           </Link>{" "}
-          in the sidebar. Each field controls an aspect of the simulation:
+          page.
         </p>
         <div className="space-y-2.5">
           {[
             {
               label: "Strategy",
-              desc: "The portfolio construction algorithm. Equal Weight holds everything at 1/N. Momentum 12-1 picks the top N (run.top_n) assets with a positive 12-month momentum score. ML strategies use walk-forward machine learning to rank assets. See the Strategies page for full details.",
+              desc: "Choose the portfolio logic you want to test. FactorLab includes baseline, factor, regime, and ML strategies.",
             },
             {
               label: "Universe",
-              desc: "The asset pool the strategy selects from. ETF8 is 8 broad-market ETFs; SP100 is 20 S&P 100 stocks; NASDAQ100 is 20 Nasdaq 100 stocks. The exact symbols used are snapshotted at run time.",
+              desc: "Pick the investable set the strategy can draw from: ETF8, SP100, or NASDAQ100.",
             },
             {
               label: "Benchmark",
-              desc: "SPY (S&P 500 ETF) by default. All relative metrics (alpha, beta, information ratio) are computed against this series. Avoid choosing a benchmark that is already in your universe — FactorLab will warn you.",
+              desc: "Select the comparison ticker used for relative performance metrics and chart overlays.",
             },
             {
               label: "Date range",
-              desc: "Start and end dates for the backtest. Longer horizons give more statistical power but require sufficient price history. ML strategies need at least 24 months of training data before the first prediction.",
+              desc: "Every run must span at least 730 calendar days. The end date is capped at the Data page's Current through cutoff.",
             },
             {
               label: "Top N",
-              desc: "For strategies that select a subset of assets, this is the maximum number held at each rebalance. Ignored by Equal Weight (holds all assets).",
+              desc: "Maximum number of names held by ranking strategies. Equal Weight ignores it because it holds the full universe.",
             },
             {
               label: "Costs (bps)",
-              desc: "Round-trip transaction cost applied at each rebalance, in basis points. 10 bps = 0.10% total. Applies to the traded notional (sells + buys) each month. Higher costs penalise high-turnover strategies more.",
+              desc: "Transaction cost assumption applied to turnover. Higher-turnover strategies are more sensitive to this input.",
             },
             {
               label: "Initial capital",
-              desc: "Starting portfolio value in USD. Affects absolute P&L figures but not percentage-based metrics like CAGR or Sharpe ratio.",
+              desc: "Starting portfolio value for the run and benchmark series.",
             },
           ].map(({ label, desc }) => (
             <div key={label} className="flex gap-2">
@@ -77,109 +85,111 @@ const sections = [
           ))}
         </div>
         <div className="border-border bg-secondary/30 rounded-lg border px-3 py-2.5 text-[12px]">
-          <span className="text-foreground font-medium">Tip:</span> Your default settings are saved
-          in{" "}
+          <span className="text-foreground font-medium">Tip:</span> Save your preferred defaults in{" "}
           <Link
             href="/settings?tab=backtest"
             className="text-foreground hover:text-primary font-medium underline underline-offset-2 transition-colors"
           >
-            Settings → Backtest
-          </Link>{" "}
-          so you don&apos;t have to re-enter them every time.
+            Settings {">"} Backtest
+          </Link>
+          .
         </div>
       </div>
     ),
   },
   {
-    id: "job-lifecycle",
-    title: "Job Lifecycle",
+    id: "queue",
+    title: "Queue and Status",
     content: (
-      <div className="text-muted-foreground space-y-3 text-[13px] leading-relaxed">
-        <p>When you submit a run, a background job is created. It moves through these stages:</p>
-        <div className="space-y-2">
+      <div className="text-muted-foreground space-y-4 text-[13px] leading-relaxed">
+        <p>
+          Submitting a run starts with a preflight coverage check. That keeps missing-data repairs
+          separate from actual strategy execution.
+        </p>
+        <div className="space-y-2.5">
           {[
             {
-              status: "Queued",
-              color: "text-muted-foreground",
-              desc: "Job is waiting for a worker to pick it up.",
+              label: "Queued",
+              desc: "All required data is ready, so the run is waiting for background compute to claim it.",
             },
             {
-              status: "Running",
-              color: "text-warning",
-              desc: "Worker is executing: price ingest → backtest → metrics → report. A progress bar shows the current stage and percentage.",
+              label: "Waiting for Data",
+              desc: "Required price coverage is being repaired automatically before the run can start.",
             },
             {
-              status: "Completed",
-              color: "text-success",
-              desc: "All stages finished. Equity curve, KPIs, holdings, and trades are available.",
+              label: "Running",
+              desc: "FactorLab is executing the backtest and persisting the result set.",
             },
             {
-              status: "Failed",
-              color: "text-destructive",
-              desc: "An error occurred. The error message is shown in the job status panel. Common causes: insufficient price data, too-short date range for ML warmup.",
+              label: "Completed",
+              desc: "Results are available in the run detail page.",
             },
-          ].map(({ status, color, desc }) => (
-            <div key={status} className="flex gap-2">
-              <span className={`w-[90px] shrink-0 font-medium ${color}`}>{status}</span>
+            {
+              label: "Failed",
+              desc: "The run stopped with an unrecoverable error. Check the Jobs page for the message.",
+            },
+          ].map(({ label, desc }) => (
+            <div key={label} className="flex gap-2">
+              <span className="text-foreground w-[110px] shrink-0 font-medium">{label}</span>
               <span>{desc}</span>
             </div>
           ))}
         </div>
         <p>
-          You can monitor all active jobs on the{" "}
+          Active runs refresh automatically on the{" "}
           <Link
-            href="/jobs"
+            href="/runs"
             className="text-foreground hover:text-primary font-medium underline underline-offset-2 transition-colors"
           >
-            Jobs
+            Runs
           </Link>{" "}
-          page. The run detail page also shows a live status panel that auto-updates without a
-          manual refresh.
+          page and in the run detail status panel.
         </p>
       </div>
     ),
   },
   {
     id: "results",
-    title: "Interpreting Results",
+    title: "Reading Results",
     content: (
       <div className="text-muted-foreground space-y-4 text-[13px] leading-relaxed">
         <p>
-          The <span className="text-foreground font-medium">Overview</span> tab on a completed run
-          contains the equity curve, drawdown chart, and KPI grid.
+          The <span className="text-foreground font-medium">Overview</span> tab combines the equity
+          curve, drawdown chart, KPI grid, and run configuration summary.
         </p>
-
-        <p className="text-foreground font-medium">Key metrics:</p>
         <div className="space-y-2">
           {[
             {
               label: "CAGR",
-              desc: "Compound annual growth rate — the annualised geometric return of the portfolio.",
+              desc: "Annualized compounded return over the stored run history.",
             },
             {
-              label: "Sharpe Ratio",
-              desc: "Annualised excess return divided by volatility. Higher is better; >1 is generally considered good.",
+              label: "Sharpe",
+              desc: "Risk-adjusted return using daily return volatility.",
             },
             {
               label: "Max Drawdown",
-              desc: "Largest peak-to-trough decline in portfolio value. A measure of downside risk.",
+              desc: "Worst peak-to-trough decline in the portfolio series.",
             },
-            { label: "Volatility", desc: "Annualised standard deviation of monthly returns." },
+            {
+              label: "Volatility",
+              desc: "Annualized standard deviation of daily portfolio returns.",
+            },
             {
               label: "Win Rate",
-              desc: "Fraction of monthly periods where the portfolio had a positive return.",
+              desc: "Share of trading days with a positive portfolio return.",
             },
             {
               label: "Profit Factor",
-              desc: "Sum of winning months' returns divided by sum of losing months' returns. >1 means more gains than losses.",
+              desc: "Total positive daily returns divided by the absolute value of total negative daily returns.",
             },
             {
-              label: "Turnover (Ann.)",
-              desc: "Annualized one-way turnover: the average fraction of the portfolio traded at each rebalance, multiplied by rebalances per year. Initial establishment is excluded and no-change rebalances count as 0.",
+              label: "Turnover",
+              desc: "Annualized drift-adjusted turnover. Higher values imply more trading and more cost sensitivity.",
             },
             {
-              label: "Calmar Ratio",
-              desc: "CAGR divided by the absolute max drawdown. Rewards strategies that grow fast relative to their worst decline.",
+              label: "Calmar",
+              desc: "CAGR relative to maximum drawdown.",
             },
           ].map(({ label, desc }) => (
             <div key={label} className="flex gap-2">
@@ -188,35 +198,32 @@ const sections = [
             </div>
           ))}
         </div>
-
         <div className="border-border bg-secondary/30 rounded-lg border px-3 py-2.5 text-[12px]">
-          <span className="text-foreground font-medium">Delta columns</span> show how each metric
-          compares to the benchmark over the same period (e.g. portfolio CAGR − benchmark CAGR).
-          Green means outperformance, red means underperformance.
+          <span className="text-foreground font-medium">Compare</span> lets you review two completed
+          runs side by side as equity curves and KPI tables.
         </div>
       </div>
     ),
   },
   {
-    id: "holdings-trades",
-    title: "Holdings & Trades Tabs",
+    id: "tabs",
+    title: "Holdings, Trades, and ML Insights",
     content: (
       <div className="text-muted-foreground space-y-3 text-[13px] leading-relaxed">
         <p className="text-foreground font-medium">Holdings</p>
         <p>
-          Shows the portfolio weights at each monthly rebalance date. Each row is a symbol; each
-          column is a period. For ML strategies, the predicted return and rank are also shown.
+          Choose a stored date from the selector to inspect the portfolio snapshot for that period.
+          ML runs also show rank, predicted return, and realized return.
         </p>
         <p className="text-foreground font-medium">Trades</p>
         <p>
-          Shows the buy/sell activity implied by the weight changes between rebalances. A positive
-          trade value means the position was increased; negative means reduced or exited. This tab
-          helps you understand turnover and which assets drive it.
+          Review per-rebalance constituent turnover and the rebalance log showing which names
+          entered or exited.
         </p>
-        <p className="text-foreground font-medium">ML Insights (ML strategies only)</p>
+        <p className="text-foreground font-medium">ML Insights</p>
         <p>
-          Walk-forward model performance — how well the predicted returns correlated with realised
-          returns over time. Useful for diagnosing overfitting or regime breaks.
+          ML strategies expose feature importance, predicted picks, and realized-versus-predicted
+          views for the stored model output.
         </p>
       </div>
     ),
@@ -226,43 +233,52 @@ const sections = [
     title: "Reports",
     content: (
       <div className="text-muted-foreground space-y-3 text-[13px] leading-relaxed">
+        <p>Completed runs support HTML reports from the Overview tab.</p>
         <p>
-          For completed runs, FactorLab auto-generates an HTML tear sheet on your first visit to the
-          run detail page. You can also trigger it manually by clicking{" "}
-          <span className="text-foreground font-medium">Generate Report</span>.
+          If a report already exists, you will see{" "}
+          <span className="text-foreground font-medium">Download Report</span>. If not, you will see{" "}
+          <span className="text-foreground font-medium">Generate Report</span> first.
         </p>
-        <p>
-          The tear sheet includes the equity curve, drawdown chart, full KPI grid, universe summary,
-          cost assumptions, and methodology notes. Click{" "}
-          <span className="text-foreground font-medium">Download Report</span> to save it locally or
-          share it.
-        </p>
-        <div className="border-border bg-secondary/30 rounded-lg border px-3 py-2.5 text-[12px]">
-          Reports are stored as public HTML files in Supabase Storage and regenerated on demand if
-          you re-run or update a backtest.
-        </div>
+        <p>Reports are self-contained HTML files that can be opened outside the app.</p>
       </div>
     ),
   },
   {
-    id: "compare",
-    title: "Comparing Runs",
+    id: "data",
+    title: "Data, Jobs, and Settings",
     content: (
       <div className="text-muted-foreground space-y-3 text-[13px] leading-relaxed">
         <p>
           The{" "}
           <Link
-            href="/compare"
+            href="/data"
             className="text-foreground hover:text-primary font-medium underline underline-offset-2 transition-colors"
           >
-            Compare
+            Data
           </Link>{" "}
-          page lets you overlay two completed runs on the same equity curve and KPI table. Select
-          Run A and Run B using the dropdowns, then review the side-by-side metrics.
+          page is the public Backtest-ready view. It focuses on the shared cutoff date, required
+          ticker coverage, and readiness for normal research workflows.
         </p>
         <p>
-          Use Compare to evaluate strategy variants (e.g. different Top N or cost assumptions), or
-          to benchmark a factor strategy against Equal Weight.
+          The{" "}
+          <Link
+            href="/jobs"
+            className="text-foreground hover:text-primary font-medium underline underline-offset-2 transition-colors"
+          >
+            Jobs
+          </Link>{" "}
+          page shows the underlying backtest and data-ingest work, including failure messages.
+        </p>
+        <p>
+          Use{" "}
+          <Link
+            href="/settings"
+            className="text-foreground hover:text-primary font-medium underline underline-offset-2 transition-colors"
+          >
+            Settings
+          </Link>{" "}
+          to manage backtest defaults, password changes, guest-account upgrades, and account
+          deletion.
         </p>
       </div>
     ),
@@ -271,42 +287,34 @@ const sections = [
     id: "common-issues",
     title: "Common Issues",
     content: (
-      <div className="text-muted-foreground space-y-3 text-[13px] leading-relaxed">
-        <div className="space-y-2.5">
-          {[
-            {
-              problem: "Run fails with 'insufficient data'",
-              fix: "The date range is too short or the start date predates available price history. Try widening the date range or moving the start date later.",
-            },
-            {
-              problem: "ML run fails immediately",
-              fix: "ML strategies require at least 24 months of training history before the first prediction. Ensure your date range is at least 2 years, and that price data exists for all selected assets.",
-            },
-            {
-              problem: "Benchmark overlap warning",
-              fix: "Your chosen benchmark (e.g. SPY) is also in the universe. This inflates apparent performance because the portfolio already holds the benchmark. Consider choosing a different benchmark or removing it from the universe.",
-            },
-            {
-              problem: "High costs reduce returns significantly",
-              fix: "High-turnover strategies (Momentum, ML) are most affected. Lower costs make the simulation more optimistic; raising them (20–30 bps) gives a more conservative picture. Real-world costs depend on your broker and position size.",
-            },
-            {
-              problem: "Progress bar stuck / run not updating",
-              fix: "The UI polls for status automatically every few seconds. If it appears stuck, try a hard refresh (Cmd+Shift+R / Ctrl+Shift+R). If the job is still showing 'running' after several minutes, check the Jobs page for an error message.",
-            },
-          ].map(({ problem, fix }) => (
-            <div key={problem} className="border-border bg-card rounded-lg border px-3 py-2.5">
-              <p className="text-foreground mb-1 font-medium">{problem}</p>
-              <p>{fix}</p>
-            </div>
-          ))}
-        </div>
+      <div className="text-muted-foreground space-y-2.5 text-[13px] leading-relaxed">
+        {[
+          {
+            problem: "Run stays queued",
+            fix: "Background compute may be unavailable. Check the Jobs page for the latest state.",
+          },
+          {
+            problem: "Run stays waiting for data",
+            fix: "Missing coverage is still being repaired. Use the Jobs and Data pages to follow progress.",
+          },
+          {
+            problem: "ML run fails quickly",
+            fix: "The selected window may not have enough usable training history, or the worker environment may be missing ML dependencies.",
+          },
+          {
+            problem: "Report is not downloadable yet",
+            fix: "Use Generate Report once when the run is completed. The button switches to Download Report when the file is ready.",
+          },
+        ].map(({ problem, fix }) => (
+          <div key={problem} className="border-border bg-card rounded-lg border px-3 py-2.5">
+            <p className="text-foreground mb-1 font-medium">{problem}</p>
+            <p>{fix}</p>
+          </div>
+        ))}
       </div>
     ),
   },
 ];
-
-// ── Page ───────────────────────────────────────────────────────────────────────
 
 export default function GuidePage() {
   return (
@@ -315,7 +323,7 @@ export default function GuidePage() {
         <div className="mb-6 space-y-2">
           <h1 className="text-foreground text-xl font-semibold">How to Use FactorLab</h1>
           <p className="text-muted-foreground text-[13px]">
-            A quick reference for creating runs, reading results, and understanding the tools.
+            A quick product guide for creating runs, following queue progress, and reading results.
           </p>
         </div>
 
@@ -339,8 +347,8 @@ export default function GuidePage() {
         </div>
 
         <p className="text-muted-foreground mt-6 text-center text-[11px]">
-          FactorLab is for research purposes only. Results are hypothetical and past performance
-          does not guarantee future results. Not financial advice.
+          FactorLab is for research purposes only. Results are hypothetical and not financial
+          advice.
         </p>
       </PageContainer>
     </AppShell>

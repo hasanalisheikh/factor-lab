@@ -54,7 +54,8 @@ const strategies = [
     summary:
       "Daily walk-forward Ridge regression trained on 8 cross-sectional features using a rolling 2-year training window. Portfolio is rebalanced every trading day; model is refitted every 5 trading days.",
     rule: "Each trading day, rank assets by predicted next-day return and hold the top N equal-weighted. Model refitted every 5 trading days on the most recent 504 trading days of data.",
-    selection: `Top N assets by predicted return (N = run.top_n). Requires ≥ 252 trading days (~1 year) of training history before first prediction.`,
+    selection:
+      "Top N assets by predicted return (N = run.top_n). In practice, FactorLab needs roughly 2 years of usable history before the backtest becomes trainable.",
     weightScheme: "Equal weight among the top-N selected assets.",
     turnover: "High. Daily rebalancing drives nominal turnover; annualized at 252 periods/year.",
     signal: null,
@@ -97,7 +98,7 @@ const strategies = [
       model:
         "Ridge(α=1.0) with StandardScaler preprocessing. L2 regularization shrinks coefficients to reduce cross-sectional overfitting.",
       warmup:
-        "Requires ≥ 252 trading days (~1 year) of training history before the first prediction. Price data is fetched with a 5-year lookback before run.start_date.",
+        "Requires roughly 2 calendar years of usable history before the first stored prediction. FactorLab also fetches a longer pre-run window for feature construction.",
       walkForward:
         "Refitted every 5 trading days using a rolling 504-trading-day (~2-year) window; portfolio selection is performed daily. No look-ahead bias.",
     },
@@ -114,7 +115,7 @@ const strategies = [
       "Same daily walk-forward framework as ML Ridge, but uses gradient-boosted trees to capture non-linear feature interactions.",
     rule: "Identical to ML Ridge, substituting a LightGBM regressor for the Ridge model. Refitted every 5 trading days on a rolling 504-day window.",
     selection:
-      "Top N assets by predicted next-day return (N = run.top_n). Requires ≥ 252 trading days (~1 year) of training history before first prediction.",
+      "Top N assets by predicted next-day return (N = run.top_n). In practice, FactorLab needs roughly 2 years of usable history before the backtest becomes trainable.",
     weightScheme: "Equal weight among selected assets.",
     turnover: "High. Daily rebalancing drives nominal turnover; annualized at 252 periods/year.",
     signal: null,
@@ -136,7 +137,7 @@ const strategies = [
       model:
         "LGBMRegressor(n_estimators=200, learning_rate=0.05, num_leaves=31, min_child_samples=10). Fails with a clear error if LightGBM is not installed — no silent fallback occurs. Install with: pip install 'lightgbm>=4.5.0'.",
       warmup:
-        "Requires ≥ 252 trading days (~1 year) of training history before the first prediction. Price data fetched with 5-year lookback before run.start_date.",
+        "Requires roughly 2 calendar years of usable history before the first stored prediction. FactorLab also fetches a longer pre-run window for feature construction.",
       walkForward:
         "Refitted every 5 trading days using a rolling 504-trading-day (~2-year) window; portfolio selection is performed daily. No look-ahead bias.",
     },
@@ -217,7 +218,7 @@ const metricDefs = [
   {
     name: "Win Rate",
     full: "Win Rate",
-    desc: "Fraction of trading days (or months for ML) with a positive return. > 50% means more up days than down days.",
+    desc: "Fraction of trading days with a positive portfolio return. > 50% means more up days than down days.",
   },
   {
     name: "Profit Factor",
@@ -260,9 +261,9 @@ export default function StrategiesPage() {
             Strategy Glossary &amp; Methodology
           </h1>
           <p className="text-muted-foreground mt-1 max-w-2xl text-[13px]">
-            How FactorLab strategies are constructed, executed, and measured. All strategies share a
-            common equal-weight, monthly-rebalance framework with configurable transaction costs and
-            benchmarks.
+            How FactorLab strategies are constructed, executed, and measured. All strategies share
+            the same equal-weight reporting framework, while factor strategies rebalance monthly and
+            ML strategies rebalance daily.
           </p>
         </div>
 
@@ -283,9 +284,9 @@ export default function StrategiesPage() {
                 </span>
               </FieldRow>
               <FieldRow label="Rebalance">
-                Monthly, at calendar month boundaries. On each rebalance the portfolio is reset to
-                the new target weights. Between rebalances, weights drift as prices move — this
-                drift is the source of turnover at the next rebalance.
+                Factor strategies rebalance monthly at calendar month boundaries. ML strategies
+                rebalance daily. In both cases, the portfolio resets to new target weights and price
+                drift between resets becomes turnover at the next rebalance.
               </FieldRow>
               <FieldRow label="Construction">
                 All strategies use <strong>equal weighting</strong>: each selected asset receives

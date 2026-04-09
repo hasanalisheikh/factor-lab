@@ -1,43 +1,68 @@
 # FactorLab Engine
 
-Python worker that polls queued jobs from Supabase, computes backtest outputs,
-and writes `equity_curve` + `run_metrics` rows back to the database.
-For ML strategies (`ml_ridge`, `ml_lightgbm`), it also writes:
+The engine is the Python compute layer for FactorLab. It processes queued backtests, handles price
+ingestion, and supports maintenance workflows such as watchdog checks.
 
-- `features_monthly`
-- `model_metadata`
-- `model_predictions`
-  The worker also stores per-run execution evidence in `runs.run_metadata`
-  (`model_impl`, `feature_set`, `training_window`, `positions_digest`, `equity_digest`).
+Use this README for engine-local commands. Use [../../docs/deployment.md](../../docs/deployment.md)
+for repo-level deployment and environment guidance.
 
-## Quick start
+## Install
 
-1. Set environment variables:
-   - `NEXT_PUBLIC_SUPABASE_URL`
-   - `SUPABASE_SERVICE_ROLE_KEY`
-2. Install:
-   - `pip install -e .`
-3. Run:
-   - `factorlab-engine-worker`
+```bash
+pip install -e ".[dev]"
+```
 
-## Price ingestion (Phase 6)
+## Core Commands
 
-Ingest SP100 adjusted-close daily prices into `prices` and record ingestion metadata
-in `data_last_updated`.
+### Continuous worker
 
-- Default run (about 10 years):
-  - `factorlab-engine-ingest`
-- Custom range:
-  - `factorlab-engine-ingest --start-date 2015-01-01 --end-date 2026-02-20`
-- Custom ticker set:
-  - `factorlab-engine-ingest --tickers "SPY,QQQ,IWM"`
+```bash
+factorlab-engine-worker
+```
 
-Optional settings:
+Runs the always-on worker loop. In continuous mode it also exposes:
 
-- `POLL_INTERVAL_SECONDS` (default: `5`)
-- `JOB_BATCH_SIZE` (default: `3`)
-- `FACTORLAB_UNIVERSE` comma-separated tickers for baseline strategies
-- `ML_TOP_N` (default: `10`)
-- `ML_COST_BPS` (default: `10`)
-- `ML_MIN_TRAIN_MONTHS` (default: `24`)
-- `ML_WARMUP_YEARS` (default: `5`)
+- `GET /health`
+- `POST /trigger`
+
+### One-shot worker
+
+```bash
+RUN_ONCE=1 python -m factorlab_engine.worker
+```
+
+Useful for GitHub Actions fallback processing and other single-pass executions.
+
+### Price ingestion
+
+```bash
+factorlab-engine-ingest
+factorlab-engine-ingest --start-date 2024-01-01
+factorlab-engine-ingest --tickers "SPY,QQQ,IWM"
+```
+
+### Watchdog
+
+```bash
+python -m factorlab_engine.watchdog
+```
+
+## Required Environment
+
+- `NEXT_PUBLIC_SUPABASE_URL`
+- `SUPABASE_SERVICE_ROLE_KEY`
+
+Common optional variables:
+
+- `WORKER_TRIGGER_SECRET`
+- `POLL_INTERVAL_SECONDS`
+- `JOB_BATCH_SIZE`
+- `RUN_ONCE`
+- `FACTORLAB_FALLBACK_PROVIDER`
+- `ML_MIN_TRAIN_DAYS`
+- `ML_TRAIN_WINDOW_DAYS`
+- `ML_REFIT_FREQ_DAYS`
+- `ML_WARMUP_YEARS`
+
+For the source-of-truth explanation of these settings, see
+[../../docs/deployment.md](../../docs/deployment.md).

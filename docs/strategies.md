@@ -258,7 +258,7 @@ The model refuses to run (and the job fails with a diagnostic message) if:
 | Aspect       | ml_ridge                      | ml_lightgbm                                                                       |
 | ------------ | ----------------------------- | --------------------------------------------------------------------------------- |
 | Model        | Ridge regression              | LightGBM gradient-boosted trees                                                   |
-| Parameters   | `α=1.0`, StandardScaler       | `n_estimators=200`, `learning_rate=0.05`, `num_leaves=31`, `min_child_samples=20` |
+| Parameters   | `α=1.0`, StandardScaler       | `n_estimators=200`, `learning_rate=0.05`, `num_leaves=31`, `min_child_samples=10` |
 | Failure mode | Fails if minimum data not met | Fails loudly if LightGBM not installed — no fallback to Ridge                     |
 | Job timeout  | 15 min default                | 30 min default (configurable via `JOB_TIMEOUT_SECONDS_ML_LIGHTGBM`)               |
 
