@@ -13,10 +13,34 @@ import { BASE_URL } from "../audit.config"
 import { DataPage } from "../pages/DataPage"
 
 const EXPECTED_BENCHMARKS = ["SPY", "QQQ", "IWM", "VTI", "EFA", "EEM", "TLT", "GLD", "VNQ"]
+const INTERNAL_DATA_DIAGNOSTICS = process.env.SHOW_INTERNAL_DATA_DIAGNOSTICS === "true"
 
 test.describe("Data page health consistency", () => {
 
-  test("Data page loads and shows all 9 benchmarks", async ({ page }) => {
+  test("Public data page hides internal diagnostics affordances when the env gate is off", async ({ page }) => {
+    test.skip(INTERNAL_DATA_DIAGNOSTICS, "Internal diagnostics are enabled in this environment")
+
+    await page.goto(`${BASE_URL}/data`)
+    await page.waitForSelector('text=/Data Health|Data current/i', { timeout: 30_000 })
+
+    await expect(page.getByRole("button", { name: "Diagnostics" })).toHaveCount(0)
+    await expect(page.getByRole("link", { name: "Advanced" })).toHaveCount(0)
+    await expect(page.locator('text=/Ingestion Job History|Benchmark Coverage/i')).toHaveCount(0)
+  })
+
+  test("Internal diagnostics affordances render when the env gate is on", async ({ page }) => {
+    test.skip(!INTERNAL_DATA_DIAGNOSTICS, "Internal diagnostics are disabled in this environment")
+
+    await page.goto(`${BASE_URL}/data`)
+    await page.waitForSelector('text=/Data Health|Data current/i', { timeout: 30_000 })
+
+    await expect(page.getByRole("button", { name: "Diagnostics" })).toBeVisible()
+    await expect(page.getByRole("link", { name: "Advanced" })).toBeVisible()
+  })
+
+  test("Advanced diagnostics shows all 9 benchmarks", async ({ page }) => {
+    test.skip(!INTERNAL_DATA_DIAGNOSTICS, "Internal diagnostics are disabled in this environment")
+
     const dataPage = new DataPage(page)
     await dataPage.goto()
 
@@ -53,6 +77,8 @@ test.describe("Data page health consistency", () => {
   })
 
   test("Healthy benchmarks show coverage >= 99%", async ({ page }) => {
+    test.skip(!INTERNAL_DATA_DIAGNOSTICS, "Internal diagnostics are disabled in this environment")
+
     const dataPage = new DataPage(page)
     await dataPage.goto()
 
@@ -78,6 +104,8 @@ test.describe("Data page health consistency", () => {
   })
 
   test("No benchmarks in permanent blocked state (unless expected)", async ({ page }) => {
+    test.skip(!INTERNAL_DATA_DIAGNOSTICS, "Internal diagnostics are disabled in this environment")
+
     const dataPage = new DataPage(page)
     await dataPage.goto()
 
@@ -98,6 +126,8 @@ test.describe("Data page health consistency", () => {
   })
 
   test("Advanced mode vs Backtest-ready mode consistency", async ({ page }) => {
+    test.skip(!INTERNAL_DATA_DIAGNOSTICS, "Internal diagnostics are disabled in this environment")
+
     await page.goto(`${BASE_URL}/data`)
     await page.waitForSelector('text=/Data Health|Data current/i', { timeout: 30_000 })
 
@@ -130,6 +160,8 @@ test.describe("Data page health consistency", () => {
   })
 
   test("Data page shows correct benchmark overlap warning context", async ({ page }) => {
+    test.skip(!INTERNAL_DATA_DIAGNOSTICS, "Internal diagnostics are disabled in this environment")
+
     const dataPage = new DataPage(page)
     await dataPage.goto()
 
