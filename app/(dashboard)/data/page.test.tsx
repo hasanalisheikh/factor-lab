@@ -211,7 +211,9 @@ describe("DataPage diagnostics gate", () => {
     expect(screen.queryByText("Advanced")).not.toBeInTheDocument();
     expect(screen.queryByText("Ingestion Job History")).not.toBeInTheDocument();
     expect(screen.queryByText("Benchmark Coverage Card")).not.toBeInTheDocument();
-    expect(screen.getByText(/Backtest-ready: required tickers are fully covered/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Backtest-ready: required tickers are fully covered/i)
+    ).toBeInTheDocument();
     expect(summarizeInceptionAwareCoverageMock).not.toHaveBeenCalled();
     expect(getLatestDataIngestJobsMock).not.toHaveBeenCalled();
     expect(getRecentDataIngestJobHistoryMock).not.toHaveBeenCalled();
