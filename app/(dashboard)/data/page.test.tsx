@@ -52,7 +52,9 @@ vi.mock("@/components/data/universe-tier-summary", () => ({
 }));
 
 vi.mock("@/components/data/top-missing-table", () => ({
-  TopMissingTable: () => <div>Top Missing Table</div>,
+  TopMissingTable: ({ rows }: { rows: Array<{ ticker: string }> }) => (
+    <div data-testid="top-missing-table">{rows.map((row) => row.ticker).join(",")}</div>
+  ),
 }));
 
 vi.mock("@/components/data/benchmark-coverage-card", () => ({
@@ -219,6 +221,78 @@ describe("DataPage diagnostics gate", () => {
     expect(getRecentDataIngestJobHistoryMock).not.toHaveBeenCalled();
   });
 
+  it("ignores q and keeps the canonical backtest-ready ranking in public mode", async () => {
+    setDiagnosticsGate(undefined);
+    getRequiredTickerResearchSummaryMock.mockResolvedValueOnce({
+      rows: [
+        {
+          ticker: "SPY",
+          researchStart: "2004-11-18",
+          researchEnd: "2026-04-08",
+          expectedDays: 100,
+          actualDays: 97,
+          trueMissingDays: 3,
+          coveragePercent: 97,
+          maxGapDays: 2,
+          firstObservedDate: "2004-11-18",
+          lastObservedDate: "2026-04-08",
+          isBenchmark: true,
+          isIngested: true,
+        },
+        {
+          ticker: "QQQ",
+          researchStart: "2004-11-18",
+          researchEnd: "2026-04-08",
+          expectedDays: 100,
+          actualDays: 91,
+          trueMissingDays: 9,
+          coveragePercent: 91,
+          maxGapDays: 5,
+          firstObservedDate: "2004-11-18",
+          lastObservedDate: "2026-04-08",
+          isBenchmark: false,
+          isIngested: true,
+        },
+        {
+          ticker: "IWM",
+          researchStart: "2004-11-18",
+          researchEnd: "2026-04-08",
+          expectedDays: 100,
+          actualDays: 95,
+          trueMissingDays: 5,
+          coveragePercent: 95,
+          maxGapDays: 3,
+          firstObservedDate: "2004-11-18",
+          lastObservedDate: "2026-04-08",
+          isBenchmark: false,
+          isIngested: true,
+        },
+      ],
+      requiredTickers: ["SPY", "QQQ", "IWM"],
+      notIngestedTickers: [],
+      ingestedTickers: 3,
+      completeness: 94.3,
+      totalExpected: 300,
+      totalActual: 283,
+      totalTrueMissing: 17,
+      trueMissingRate: 17 / 300,
+      marketCalendarDays: 100,
+    });
+    assessDataHealthMock.mockReturnValueOnce({
+      status: "WARNING",
+      reason: "Reason: monitored gaps remain inside the research window.",
+    });
+
+    await renderDataPage({ q: "SPY", mode: "full", diagnostics: "1" });
+
+    expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+    expect(screen.queryByText("Advanced")).not.toBeInTheDocument();
+    expect(screen.getByTestId("top-missing-table")).toHaveTextContent("QQQ,IWM,SPY");
+    expect(summarizeInceptionAwareCoverageMock).not.toHaveBeenCalled();
+    expect(getLatestDataIngestJobsMock).not.toHaveBeenCalled();
+    expect(getRecentDataIngestJobHistoryMock).not.toHaveBeenCalled();
+  });
+
   it("preserves advanced diagnostics when the internal gate is on", async () => {
     setDiagnosticsGate("true");
 
@@ -234,5 +308,55 @@ describe("DataPage diagnostics gate", () => {
     expect(summarizeInceptionAwareCoverageMock).toHaveBeenCalledTimes(1);
     expect(getLatestDataIngestJobsMock).toHaveBeenCalledTimes(1);
     expect(getRecentDataIngestJobHistoryMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores q even when the hidden full-mode branch is rendered", async () => {
+    setDiagnosticsGate("true");
+    summarizeInceptionAwareCoverageMock.mockReturnValueOnce({
+      rows: [
+        {
+          ticker: "SPY",
+          firstDate: "1993-01-29",
+          lastDate: "2026-04-08",
+          actualDays: 97,
+          expectedDays: 100,
+          trueMissingDays: 3,
+          preInceptionDays: 0,
+          coveragePercent: 97,
+        },
+        {
+          ticker: "QQQ",
+          firstDate: "1999-03-10",
+          lastDate: "2026-04-08",
+          actualDays: 91,
+          expectedDays: 100,
+          trueMissingDays: 9,
+          preInceptionDays: 0,
+          coveragePercent: 91,
+        },
+        {
+          ticker: "IWM",
+          firstDate: "2000-05-26",
+          lastDate: "2026-04-08",
+          actualDays: 95,
+          expectedDays: 100,
+          trueMissingDays: 5,
+          preInceptionDays: 0,
+          coveragePercent: 95,
+        },
+      ],
+      completeness: 94.3,
+      totalExpected: 300,
+      totalActual: 283,
+      totalTrueMissing: 17,
+      totalPreInception: 0,
+      trueMissingRate: 17 / 300,
+    });
+
+    await renderDataPage({ q: "SPY", mode: "full", diagnostics: "1" });
+
+    expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+    expect(screen.getByText(/Advanced expands into DB-wide coverage/i)).toBeInTheDocument();
+    expect(screen.getByTestId("top-missing-table")).toHaveTextContent("QQQ,IWM,SPY");
   });
 });

@@ -35,7 +35,6 @@ import {
   Database,
   History,
   Info,
-  Search,
   ShieldCheck,
   Wrench,
   XCircle,
@@ -243,7 +242,6 @@ export default async function DataPage({
   const showInternalDiagnostics = isInternalDataDiagnosticsEnabled();
   const diagnostics = showInternalDiagnostics && params.diagnostics === "1";
   const mode = showInternalDiagnostics && params.mode === "full" ? "full" : "backtest";
-  const searchQuery = (params.q ?? "").trim().toUpperCase();
   const benchmarkParam = normalizeBenchmark(params.benchmark);
   const benchmarkOptions = new Set<string>(BENCHMARK_OPTIONS);
   const selectedBenchmark = benchmarkOptions.has(benchmarkParam)
@@ -289,16 +287,10 @@ export default async function DataPage({
   const researchRowsSorted = [...requiredResearch.rows]
     .filter((row) => row.trueMissingDays > 0)
     .sort((a, b) => b.trueMissingDays - a.trueMissingDays);
-  const filteredResearchRows = searchQuery
-    ? researchRowsSorted.filter((row) => row.ticker.includes(searchQuery))
-    : researchRowsSorted;
-  const backtestTopIssues = toResearchTableRows(filteredResearchRows.slice(0, 10));
+  const backtestTopIssues = toResearchTableRows(researchRowsSorted.slice(0, 10));
 
   const advancedMissingRows = advancedDiagnostics
-    ? (searchQuery
-        ? advancedDiagnostics.rows.filter((row) => row.ticker.includes(searchQuery))
-        : advancedDiagnostics.rows
-      )
+    ? advancedDiagnostics.rows
         .filter((row) => row.trueMissingDays > 0)
         .sort((a, b) => b.trueMissingDays - a.trueMissingDays)
     : [];
@@ -361,9 +353,6 @@ export default async function DataPage({
     if (showInternalDiagnostics && nextMode === "full") {
       hrefParams.set("mode", "full");
     }
-    if (params.q) {
-      hrefParams.set("q", params.q);
-    }
     if (showInternalDiagnostics && diagnostics) {
       hrefParams.set("diagnostics", "1");
     }
@@ -396,34 +385,8 @@ export default async function DataPage({
         </Card>
       )}
 
-      <div className="mb-3 flex flex-wrap items-center gap-2">
-        <form
-          method="GET"
-          action="/data"
-          className="flex max-w-xs min-w-[160px] flex-1 items-center gap-1.5"
-        >
-          {showInternalDiagnostics && mode === "full" && (
-            <input type="hidden" name="mode" value="full" />
-          )}
-          {showInternalDiagnostics && diagnostics && (
-            <input type="hidden" name="diagnostics" value="1" />
-          )}
-          {hasExplicitBenchmark && params.benchmark && (
-            <input type="hidden" name="benchmark" value={params.benchmark} />
-          )}
-          <div className="relative flex-1">
-            <Search className="text-muted-foreground pointer-events-none absolute top-1/2 left-2 h-3.5 w-3.5 -translate-y-1/2" />
-            <input
-              type="text"
-              name="q"
-              defaultValue={params.q ?? ""}
-              placeholder={mode === "full" ? "Search tickers…" : "Filter top issues…"}
-              className="border-border bg-muted/40 text-foreground placeholder:text-muted-foreground focus:ring-ring w-full rounded-md border py-1.5 pr-3 pl-7 text-xs focus:ring-1 focus:outline-none"
-            />
-          </div>
-        </form>
-
-        {showInternalDiagnostics && (
+      {showInternalDiagnostics && (
+        <div className="mb-3 flex flex-wrap items-center gap-2">
           <div className="border-border bg-muted/40 flex w-fit items-center gap-1 rounded-lg border p-1">
             <Link
               href={buildDataHref("backtest")}
@@ -446,8 +409,8 @@ export default async function DataPage({
               Advanced
             </Link>
           </div>
-        )}
-      </div>
+        </div>
+      )}
 
       <div className="mb-4">
         <p className="text-muted-foreground text-xs">

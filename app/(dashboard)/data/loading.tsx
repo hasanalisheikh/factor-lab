@@ -9,11 +9,11 @@ export default function DataLoading() {
 
   return (
     <AppShell title="Data" showDataDiagnosticsToggle={showInternalDiagnostics}>
-      {/* toolbar: search input + optional internal mode toggle */}
-      <div className="mb-3 flex flex-wrap items-center gap-2">
-        <Skeleton className="bg-secondary h-8 w-52 rounded-md" />
-        {showInternalDiagnostics && <Skeleton className="bg-secondary h-8 w-36 rounded-lg" />}
-      </div>
+      {showInternalDiagnostics && (
+        <div className="mb-3 flex flex-wrap items-center gap-2">
+          <Skeleton className="bg-secondary h-8 w-36 rounded-lg" />
+        </div>
+      )}
 
       {/* health card */}
       <Card className="border-border bg-card mb-4">
