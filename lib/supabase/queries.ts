@@ -2215,7 +2215,7 @@ async function getEquityCurveAuditStatsBatch(
 }
 
 /**
- * Returns a per-run backtest-window summary for visible runs.
+ * Returns a per-run backtest-window summary for visible completed runs.
  * Row counts and coverage dates come directly from equity_curve using the
  * service-role client so the audit cannot silently truncate at 1000 rows or
  * collapse to zero under RLS.
@@ -2227,6 +2227,7 @@ export async function getRunsBacktestWindowSummary(): Promise<BacktestWindowSumm
     const { data: runs, error: runsError } = await supabase
       .from("runs")
       .select("id, name, strategy_id, status, start_date, end_date")
+      .eq("status", "completed")
       .order("created_at", { ascending: false });
 
     if (runsError) {
@@ -2249,20 +2250,17 @@ export async function getRunsBacktestWindowSummary(): Promise<BacktestWindowSumm
         stats.equity_start_date && stats.equity_end_date
           ? getCalendarDaySpan(stats.equity_start_date, stats.equity_end_date)
           : null;
-      const spanDays = Math.max(requestedSpanDays, equitySpanDays ?? 0);
+      const spanDays = equitySpanDays ?? 0;
       const endGapTradingDays = getTradingDayGap(stats.equity_end_date, run.end_date);
       const meetsMinPoints = stats.data_points >= BACKTEST_MIN_DATA_POINTS;
       const meetsMinSpan = spanDays >= BACKTEST_MIN_SPAN_DAYS;
       const meetsEndTolerance =
         endGapTradingDays != null && endGapTradingDays <= BACKTEST_END_DATE_TOLERANCE_TRADING_DAYS;
 
-      let auditOutcome: BacktestAuditOutcome = "skip";
-      if (run.status === "completed") {
-        auditOutcome =
-          stats.data_points > 0 && meetsMinPoints && meetsMinSpan && meetsEndTolerance
-            ? "pass"
-            : "fail";
-      }
+      const auditOutcome: BacktestAuditOutcome =
+        stats.data_points > 0 && meetsMinPoints && meetsMinSpan && meetsEndTolerance
+          ? "pass"
+          : "fail";
 
       return {
         run_id: run.id,

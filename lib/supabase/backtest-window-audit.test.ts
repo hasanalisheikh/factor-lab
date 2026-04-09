@@ -33,9 +33,16 @@ function makeRunsClient(runs: RunRow[]) {
 
       return {
         select(_columns: string) {
+          let filteredRuns = [...runs];
           return {
+            eq(column: string, value: string) {
+              if (column === "status") {
+                filteredRuns = filteredRuns.filter((run) => run.status === value);
+              }
+              return this;
+            },
             order: async (_column: string, _options: { ascending: boolean }) => ({
-              data: runs,
+              data: filteredRuns,
               error: null,
             }),
           };
@@ -144,7 +151,7 @@ describe("getRunsBacktestWindowSummary", () => {
     expect(rows[0].data_points).toBeGreaterThan(0);
   });
 
-  it("marks zero-row non-completed runs as skip instead of fail", async () => {
+  it("excludes non-completed runs from the audit summary", async () => {
     createClientMock.mockResolvedValue(
       makeRunsClient([
         {
@@ -169,12 +176,84 @@ describe("getRunsBacktestWindowSummary", () => {
 
     const rows = await getRunsBacktestWindowSummary();
 
+    expect(rows).toHaveLength(0);
+  });
+
+  it("keeps completed legacy zero-row runs as internal failures", async () => {
+    createClientMock.mockResolvedValue(
+      makeRunsClient([
+        {
+          id: "run-legacy",
+          name: "Legacy run",
+          strategy_id: "equal_weight",
+          status: "completed",
+          start_date: "2021-03-01",
+          end_date: "2026-03-13",
+        },
+      ])
+    );
+    createAdminClientMock.mockReturnValue(
+      makeAuditAdminClient({
+        "run-legacy": {
+          count: 0,
+          minDate: null,
+          maxDate: null,
+        },
+      })
+    );
+
+    const rows = await getRunsBacktestWindowSummary();
+
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({
-      run_id: "run-running",
-      status: "running",
+      run_id: "run-legacy",
+      status: "completed",
       data_points: 0,
-      audit_outcome: "skip",
+      requested_span_days: 1838,
+      span_days: 0,
+      equity_span_days: null,
+      audit_outcome: "fail",
     });
+  });
+
+  it("uses actual equity coverage span for truncated completed runs", async () => {
+    createClientMock.mockResolvedValue(
+      makeRunsClient([
+        {
+          id: "run-truncated",
+          name: "Truncated run",
+          strategy_id: "equal_weight",
+          status: "completed",
+          start_date: "2021-03-01",
+          end_date: "2026-03-13",
+        },
+      ])
+    );
+    createAdminClientMock.mockReturnValue(
+      makeAuditAdminClient({
+        "run-truncated": {
+          count: 1044,
+          minDate: "2021-03-15",
+          maxDate: "2025-03-28",
+        },
+      })
+    );
+
+    const rows = await getRunsBacktestWindowSummary();
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      run_id: "run-truncated",
+      status: "completed",
+      requested_span_days: 1838,
+      span_days: 1474,
+      equity_span_days: 1474,
+      equity_end_date: "2025-03-28",
+      meets_min_points: true,
+      meets_min_span: true,
+      meets_end_tolerance: false,
+      audit_outcome: "fail",
+    });
+    expect(rows[0].requested_span_days).toBeGreaterThan(rows[0].span_days);
   });
 });
