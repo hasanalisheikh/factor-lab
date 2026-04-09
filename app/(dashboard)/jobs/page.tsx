@@ -32,7 +32,11 @@ function formatDate(iso: string | null): string {
 }
 
 export default async function JobsPage() {
-  const [jobs, auditRows] = await Promise.all([getJobs(), getRunsBacktestWindowSummary()]);
+  const showBacktestWindowAudit = process.env.SHOW_BACKTEST_WINDOW_AUDIT === "true";
+  const [jobs, auditRows] = await Promise.all([
+    getJobs(),
+    showBacktestWindowAudit ? getRunsBacktestWindowSummary() : Promise.resolve([]),
+  ]);
 
   return (
     <AppShell title="Jobs">
@@ -116,7 +120,7 @@ export default async function JobsPage() {
       </Card>
 
       {/* Backtest Window Audit -------------------------------------------- */}
-      {auditRows.length > 0 && (
+      {showBacktestWindowAudit && auditRows.length > 0 && (
         <Card className="bg-card border-border">
           <CardHeader className="px-4 pt-4 pb-2">
             <div className="flex items-center justify-between">
