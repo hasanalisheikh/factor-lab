@@ -9,6 +9,7 @@
     "start": "next start",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
+    "check:file-length": "node scripts/check-file-length.mjs",
     "lint": "eslint . --max-warnings=0",
     "lint:fix": "eslint . --fix --max-warnings=0",
     "typecheck": "tsc --noEmit",
