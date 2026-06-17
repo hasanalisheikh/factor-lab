@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { classifyUniverseBatchStatus } from "@/lib/supabase/queries";
+import { classifyUniverseBatchStatus, getActiveIngestJobCount } from "@/lib/supabase/queries";
 
 describe("classifyUniverseBatchStatus", () => {
   it("keeps retrying batches non-terminal", () => {
@@ -29,5 +29,9 @@ describe("classifyUniverseBatchStatus", () => {
     expect(result.status).toBe("succeeded");
     expect(result.completedJobs).toBe(2);
     expect(result.avgProgress).toBe(100);
+  });
+
+  it("preserves the active ingest job count export", () => {
+    expect(typeof getActiveIngestJobCount).toBe("function");
   });
 });
