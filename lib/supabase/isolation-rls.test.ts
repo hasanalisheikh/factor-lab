@@ -11,7 +11,7 @@ const migrationPath = path.join(
 
 const sql = fs.readFileSync(migrationPath, "utf8");
 const queriesSource = fs.readFileSync(
-  path.join(process.cwd(), "lib", "supabase", "queries.ts"),
+  path.join(process.cwd(), "lib", "supabase", "queries", "run-progress.ts"),
   "utf8"
 );
 

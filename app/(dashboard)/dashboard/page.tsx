@@ -4,8 +4,7 @@ import { RecentRuns } from "@/components/recent-runs";
 import { RunsTable } from "@/components/runs-table";
 import { ActiveRunsPoller } from "@/components/active-runs-poller";
 import {
-  getRuns,
-  getRunsCount,
+  getRunsList,
   getMostRecentCompletedRun,
   getRunById,
   getEquityCurve,
@@ -27,9 +26,8 @@ export default async function DashboardPage({
   searchParams: Promise<{ run?: string }>;
 }) {
   const { run: runParam } = await searchParams;
-  const [allRuns, totalRuns, defaultRun, paramRun] = await Promise.all([
-    getRuns({ limit: 20 }),
-    getRunsCount(),
+  const [{ runs: allRuns, total: totalRuns }, defaultRun, paramRun] = await Promise.all([
+    getRunsList({ limit: 20 }),
     getMostRecentCompletedRun(),
     runParam ? getRunById(runParam) : Promise.resolve(null),
   ]);

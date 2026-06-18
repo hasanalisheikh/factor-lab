@@ -6,12 +6,7 @@ import { RunsTable } from "@/components/runs-table";
 import { RunsSearchBar } from "@/components/runs-search-bar";
 import { ActiveRunsPoller } from "@/components/active-runs-poller";
 import { RunsDeleteToast } from "@/components/runs-delete-toast";
-import {
-  getRuns,
-  getRunsCount,
-  getActiveRunsProgress,
-  getReportUrlsByRunIds,
-} from "@/lib/supabase/queries";
+import { getRunsList, getActiveRunsProgress, getReportUrlsByRunIds } from "@/lib/supabase/queries";
 
 export const revalidate = 0;
 
@@ -27,10 +22,7 @@ export default async function RunsPage({ searchParams }: PageProps) {
     strategy,
     universe,
   };
-  const [runs, totalRuns] = await Promise.all([
-    getRuns({ limit: 75, ...filters }),
-    getRunsCount(filters),
-  ]);
+  const { runs, total: totalRuns } = await getRunsList({ limit: 75, ...filters });
 
   const hasActiveRuns = runs.some(
     (r) => r.status === "queued" || r.status === "running" || r.status === "waiting_for_data"
