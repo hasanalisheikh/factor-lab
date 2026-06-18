@@ -25,6 +25,9 @@ Runs the always-on worker loop. In continuous mode it also exposes:
 - `GET /health`
 - `POST /trigger`
 
+`POST /trigger` requires `WORKER_TRIGGER_SECRET`; if the secret is unset, trigger requests fail
+closed with `503`.
+
 ### One-shot worker
 
 ```bash
@@ -51,10 +54,10 @@ python -m factorlab_engine.watchdog
 
 - `NEXT_PUBLIC_SUPABASE_URL`
 - `SUPABASE_SERVICE_ROLE_KEY`
+- `WORKER_TRIGGER_SECRET` for continuous workers that expose `POST /trigger`
 
 Common optional variables:
 
-- `WORKER_TRIGGER_SECRET`
 - `POLL_INTERVAL_SECONDS`
 - `JOB_BATCH_SIZE`
 - `RUN_ONCE`

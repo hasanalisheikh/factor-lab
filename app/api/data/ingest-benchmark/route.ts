@@ -1,151 +1,27 @@
 import { type NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
-import { createAdminClient } from "@/lib/supabase/admin";
+
 import {
-  isMissingDataIngestExtendedColumnError,
-  normalizeDataIngestStatus,
-  stripExtendedDataIngestFields,
-} from "@/lib/data-ingest-jobs";
-import { DATA_STATE_SINGLETON_ID, getLastCompleteTradingDayUtc } from "@/lib/data-cutoff";
+  ALLOWED_TICKERS,
+  CANCELLABLE_INGEST_STATUSES,
+  dij,
+  findUserOwnedIngestJob,
+  isUserOwnedIngestJob,
+  resolveCurrentCutoffDate,
+  runDataIngestWriteCompat,
+  selectDataIngestJobsCompat,
+} from "@/app/api/data/ingest-benchmark/_lib/jobs";
+import { createAdminClient } from "@/lib/supabase/admin";
+import { createClient } from "@/lib/supabase/server";
 import { TICKER_INCEPTION_DATES } from "@/lib/supabase/types";
 import { triggerWorker } from "@/lib/worker-trigger";
-import type { SupabaseClient } from "@supabase/supabase-js";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
-const ALLOWED_TICKERS = new Set(["SPY", "QQQ", "IWM", "VTI", "EFA", "EEM", "TLT", "GLD", "VNQ"]);
 // Python worker handles real stall recovery at 2 min; this is a last-resort
 // backstop for when the worker isn't running at all.
 const STUCK_JOB_MINUTES = 2;
 const STUCK_JOB_MS = STUCK_JOB_MINUTES * 60 * 1000;
-
-// Local type for data_ingest_jobs rows (table not yet in generated Supabase types)
-type DataIngestJobRow = {
-  id: string;
-  symbol: string;
-  start_date: string;
-  end_date: string;
-  status: string;
-  stage: string | null;
-  progress: number;
-  error: string | null;
-  request_mode: string | null;
-  batch_id: string | null;
-  target_cutoff_date: string | null;
-  requested_by: string | null;
-  created_at: string | null;
-  started_at: string | null;
-  updated_at: string | null;
-  last_heartbeat_at: string | null;
-  finished_at: string | null;
-  rows_inserted: number | null;
-  next_retry_at: string | null;
-  attempt_count: number | null;
-  requested_by_run_id: string | null;
-  requested_by_user_id: string | null;
-};
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function dij(admin: SupabaseClient<any, any, any>) {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return (admin as any).from("data_ingest_jobs");
-}
-
-function normalizeJobRow(job: DataIngestJobRow | null): DataIngestJobRow | null {
-  if (!job) return null;
-  return {
-    ...job,
-    status: normalizeDataIngestStatus(job.status),
-  };
-}
-
-function toLegacyCompatiblePayload(payload: Record<string, unknown>): Record<string, unknown> {
-  const compat = stripExtendedDataIngestFields(payload);
-  if (compat.status === "succeeded") compat.status = "completed";
-  if (compat.status === "retrying") compat.status = "failed";
-  return compat;
-}
-
-function shouldRetryLegacyWrite(
-  message: string | undefined,
-  payload: Record<string, unknown>
-): boolean {
-  const lower = String(message ?? "").toLowerCase();
-  return (
-    isMissingDataIngestExtendedColumnError(message) ||
-    ((payload.status === "succeeded" || payload.status === "retrying") &&
-      lower.includes("data_ingest_jobs_status_check"))
-  );
-}
-
-async function runDataIngestWriteCompat<T>(
-  run: (payload: Record<string, unknown>) => Promise<T>,
-  payload: Record<string, unknown>
-): Promise<T> {
-  let result = await run(payload);
-  if (
-    result &&
-    typeof result === "object" &&
-    "error" in result &&
-    result.error &&
-    typeof result.error === "object" &&
-    "message" in result.error &&
-    shouldRetryLegacyWrite(String(result.error.message), payload)
-  ) {
-    result = await run(toLegacyCompatiblePayload(payload));
-  }
-  if (
-    result &&
-    typeof result === "object" &&
-    "error" in result &&
-    result.error &&
-    typeof result.error === "object" &&
-    "message" in result.error
-  ) {
-    throw new Error(String(result.error.message));
-  }
-  return result;
-}
-
-async function selectDataIngestJobsCompat(
-  admin: SupabaseClient,
-  buildQuery: (
-    selectColumns: string
-  ) => Promise<{ data: DataIngestJobRow[] | null; error: { message: string } | null }>
-): Promise<{ data: DataIngestJobRow[] | null; error: { message: string } | null }> {
-  let result = await buildQuery(
-    "id, symbol, status, stage, progress, error, created_at, started_at, updated_at, last_heartbeat_at, finished_at, rows_inserted, next_retry_at, attempt_count, request_mode, batch_id, target_cutoff_date, requested_by, requested_by_run_id, requested_by_user_id, start_date, end_date"
-  );
-
-  if (result.error && isMissingDataIngestExtendedColumnError(result.error.message)) {
-    result = await buildQuery(
-      "id, symbol, status, stage, progress, error, created_at, started_at, updated_at, finished_at, next_retry_at, attempt_count, requested_by_run_id, requested_by_user_id, start_date, end_date"
-    );
-  }
-
-  return {
-    data: (result.data ?? []).map((job) => normalizeJobRow(job)!),
-    error: result.error,
-  };
-}
-
-async function resolveCurrentCutoffDate(admin: SupabaseClient): Promise<string> {
-  const { data } = await admin
-    .from("data_state")
-    .select("data_cutoff_date")
-    .eq("id", DATA_STATE_SINGLETON_ID)
-    .maybeSingle();
-
-  return (
-    (data as { data_cutoff_date?: string } | null)?.data_cutoff_date ??
-    getLastCompleteTradingDayUtc()
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Rate limiting
-// ---------------------------------------------------------------------------
 
 async function checkIngestRateLimit(userId: string): Promise<{ allowed: boolean; error?: string }> {
   if (!process.env.UPSTASH_REDIS_REST_URL || !process.env.UPSTASH_REDIS_REST_TOKEN) {
@@ -173,10 +49,7 @@ async function checkIngestRateLimit(userId: string): Promise<{ allowed: boolean;
   }
 }
 
-// ---------------------------------------------------------------------------
 // POST /api/data/ingest-benchmark — enqueue a data_ingest_job for the worker
-// ---------------------------------------------------------------------------
-
 export async function POST(request: NextRequest) {
   const supabase = await createClient();
   const {
@@ -239,6 +112,10 @@ export async function POST(request: NextRequest) {
   const nowMs = Date.now();
 
   for (const job of activeJobs ?? []) {
+    if (!(await isUserOwnedIngestJob(admin, job, user.id))) {
+      continue;
+    }
+
     const baselineIso = job.last_heartbeat_at ?? job.updated_at ?? job.started_at ?? job.created_at;
     const ageMs = baselineIso ? nowMs - new Date(baselineIso).getTime() : 0;
 
@@ -381,11 +258,8 @@ export async function POST(request: NextRequest) {
   return NextResponse.json({ jobId: newJob.id }, { status: 201 });
 }
 
-// ---------------------------------------------------------------------------
-// DELETE /api/data/ingest-benchmark?jobId=xxx  — cancel a single job
-// DELETE /api/data/ingest-benchmark?cancelAll=1 — cancel all queued/running jobs
-// ---------------------------------------------------------------------------
-
+// DELETE /api/data/ingest-benchmark?jobId=xxx  — cancel a single user-owned job
+// DELETE /api/data/ingest-benchmark?cancelAll=1 — cancel the user's queued/running jobs
 export async function DELETE(request: NextRequest) {
   const supabase = await createClient();
   const {
@@ -404,7 +278,10 @@ export async function DELETE(request: NextRequest) {
   if (cancelAll) {
     await runDataIngestWriteCompat(
       async (payload) =>
-        dij(admin).update(payload).in("status", ["queued", "running", "retrying", "failed"]),
+        dij(admin)
+          .update(payload)
+          .eq("requested_by_user_id", user.id)
+          .in("status", CANCELLABLE_INGEST_STATUSES),
       {
         status: "failed",
         error: "Cancelled by user.",
@@ -421,14 +298,16 @@ export async function DELETE(request: NextRequest) {
     return NextResponse.json({ error: "Missing jobId or cancelAll." }, { status: 400 });
   }
 
+  const job = await findUserOwnedIngestJob(admin, jobId, user.id);
+  if (!job) {
+    return NextResponse.json({ error: "Job not found." }, { status: 404 });
+  }
+
   let error: { message: string } | null = null;
   try {
     await runDataIngestWriteCompat(
       async (payload) =>
-        dij(admin)
-          .update(payload)
-          .eq("id", jobId)
-          .in("status", ["queued", "running", "retrying", "failed"]),
+        dij(admin).update(payload).eq("id", job.id).in("status", CANCELLABLE_INGEST_STATUSES),
       {
         status: "failed",
         error: "Cancelled by user.",
@@ -448,10 +327,7 @@ export async function DELETE(request: NextRequest) {
   return NextResponse.json({ ok: true });
 }
 
-// ---------------------------------------------------------------------------
 // GET /api/data/ingest-benchmark?jobId=xxx — poll job status
-// ---------------------------------------------------------------------------
-
 export async function GET(request: NextRequest) {
   const jobId = new URL(request.url).searchParams.get("jobId");
   if (!jobId) {
@@ -467,12 +343,8 @@ export async function GET(request: NextRequest) {
   }
 
   const admin = createAdminClient();
-  const { data: initialRows, error } = await selectDataIngestJobsCompat(admin, (selectColumns) =>
-    dij(admin).select(selectColumns).eq("id", jobId).limit(1)
-  );
-  const initialJob = initialRows?.[0] ?? null;
-
-  if (error || !initialJob) {
+  const initialJob = await findUserOwnedIngestJob(admin, jobId, user.id);
+  if (!initialJob) {
     return NextResponse.json({ error: "Job not found." }, { status: 404 });
   }
 

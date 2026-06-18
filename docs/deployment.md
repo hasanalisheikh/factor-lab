@@ -104,7 +104,8 @@ The app can wake background compute after queueing work.
 - If `WORKER_TRIGGER_URL` points to a GitHub repository dispatch endpoint
   (`https://api.github.com/repos/<owner>/<repo>/dispatches`), the app sends a
   `repository_dispatch` event with `event_type: run-worker`.
-- `WORKER_TRIGGER_SECRET` is sent as a bearer token for either path.
+- `WORKER_TRIGGER_SECRET` is sent as a bearer token for either path and must be configured anywhere
+  trigger wake-ups are enabled.
 
 This keeps the application code compatible with both an always-on worker service and the GitHub
 fallback workflow without changing product behavior.
@@ -163,7 +164,8 @@ applied.
 Use this as the primary production compute path.
 
 - Keep the worker process running continuously.
-- It polls the queue, exposes `/health`, and accepts `/trigger` wake-ups.
+- It polls the queue, exposes `/health`, and accepts `/trigger` wake-ups only when the request uses
+  the configured bearer token. If `WORKER_TRIGGER_SECRET` is unset, `/trigger` fails closed.
 - The repo includes a Render blueprint in [`render.yaml`](../render.yaml), but any equivalent host
   is acceptable.
 
@@ -214,24 +216,24 @@ should care about.
 
 ### Worker and triggers
 
-| Variable                                | Required | Notes                                                            |
-| --------------------------------------- | -------- | ---------------------------------------------------------------- |
-| `WORKER_TRIGGER_URL`                    | No       | Direct worker URL or GitHub repository dispatch endpoint.        |
-| `WORKER_TRIGGER_SECRET`                 | No       | Bearer token used when waking background compute.                |
-| `SKIP_FACTORLAB_WORKER`                 | No       | Local dev escape hatch for web-only startup.                     |
-| `RUN_ONCE`                              | No       | Runs a single worker pass, used by GitHub Actions fallback jobs. |
-| `POLL_INTERVAL_SECONDS`                 | No       | Worker poll interval. Default `5`.                               |
-| `JOB_BATCH_SIZE`                        | No       | Maximum jobs claimed per poll cycle. Default `3`.                |
-| `JOB_STALL_MINUTES`                     | No       | Stalled-job recovery threshold. Default `15`.                    |
-| `JOB_QUEUED_TIMEOUT_MINUTES`            | No       | Queued-job timeout threshold. Default `10`.                      |
-| `JOB_TIMEOUT_SECONDS`                   | No       | Default per-job execution timeout. Default `600`.                |
-| `JOB_TIMEOUT_SECONDS_ML_RIDGE`          | No       | Ridge ML job timeout. Default `900`.                             |
-| `JOB_TIMEOUT_SECONDS_ML_LIGHTGBM`       | No       | LightGBM job timeout. Default `1800`.                            |
-| `PERSIST_TIMEOUT_SECONDS`               | No       | Timeout for result persistence. Default `600`.                   |
-| `INGEST_MAX_RUNTIME_SECONDS`            | No       | Max ingest helper runtime per pass. Default `300`.               |
-| `PORT`                                  | No       | Worker HTTP port. Default `8000`.                                |
-| `SUPABASE_TRANSIENT_RETRY_ATTEMPTS`     | No       | Worker Supabase transient retry attempts. Default `3`.           |
-| `SUPABASE_TRANSIENT_RETRY_BASE_SECONDS` | No       | Worker Supabase retry backoff base. Default `0.5`.               |
+| Variable                                | Required    | Notes                                                            |
+| --------------------------------------- | ----------- | ---------------------------------------------------------------- |
+| `WORKER_TRIGGER_URL`                    | No          | Direct worker URL or GitHub repository dispatch endpoint.        |
+| `WORKER_TRIGGER_SECRET`                 | Conditional | Required when trigger wake-ups are enabled.                      |
+| `SKIP_FACTORLAB_WORKER`                 | No          | Local dev escape hatch for web-only startup.                     |
+| `RUN_ONCE`                              | No          | Runs a single worker pass, used by GitHub Actions fallback jobs. |
+| `POLL_INTERVAL_SECONDS`                 | No          | Worker poll interval. Default `5`.                               |
+| `JOB_BATCH_SIZE`                        | No          | Maximum jobs claimed per poll cycle. Default `3`.                |
+| `JOB_STALL_MINUTES`                     | No          | Stalled-job recovery threshold. Default `15`.                    |
+| `JOB_QUEUED_TIMEOUT_MINUTES`            | No          | Queued-job timeout threshold. Default `10`.                      |
+| `JOB_TIMEOUT_SECONDS`                   | No          | Default per-job execution timeout. Default `600`.                |
+| `JOB_TIMEOUT_SECONDS_ML_RIDGE`          | No          | Ridge ML job timeout. Default `900`.                             |
+| `JOB_TIMEOUT_SECONDS_ML_LIGHTGBM`       | No          | LightGBM job timeout. Default `1800`.                            |
+| `PERSIST_TIMEOUT_SECONDS`               | No          | Timeout for result persistence. Default `600`.                   |
+| `INGEST_MAX_RUNTIME_SECONDS`            | No          | Max ingest helper runtime per pass. Default `300`.               |
+| `PORT`                                  | No          | Worker HTTP port. Default `8000`.                                |
+| `SUPABASE_TRANSIENT_RETRY_ATTEMPTS`     | No          | Worker Supabase transient retry attempts. Default `3`.           |
+| `SUPABASE_TRANSIENT_RETRY_BASE_SECONDS` | No          | Worker Supabase retry backoff base. Default `0.5`.               |
 
 ### Data and model tuning
 
@@ -250,10 +252,10 @@ should care about.
 
 ### Optional platform integrations
 
-| Variable                   | Required | Notes                                 |
-| -------------------------- | -------- | ------------------------------------- |
-| `UPSTASH_REDIS_REST_URL`   | No       | Enables auth-related rate limiting.   |
-| `UPSTASH_REDIS_REST_TOKEN` | No       | Token for the Upstash Redis instance. |
+| Variable                   | Required    | Notes                                                                          |
+| -------------------------- | ----------- | ------------------------------------------------------------------------------ |
+| `UPSTASH_REDIS_REST_URL`   | Recommended | Enables auth-related and manual ingest rate limiting. Configure in production. |
+| `UPSTASH_REDIS_REST_TOKEN` | Recommended | Token for the Upstash Redis instance. Configure in production.                 |
 
 ## Engine Commands
 

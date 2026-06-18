@@ -20,11 +20,13 @@ class _TriggerHandler(BaseHTTPRequestHandler):
         if self.path != "/trigger":
             self._respond(404, b"not found")
             return
-        if self._secret:
-            auth = self.headers.get("Authorization", "")
-            if auth != f"Bearer {self._secret}":
-                self._respond(401, b"unauthorized")
-                return
+        if not self._secret:
+            self._respond(503, b"trigger secret not configured")
+            return
+        auth = self.headers.get("Authorization", "")
+        if auth != f"Bearer {self._secret}":
+            self._respond(401, b"unauthorized")
+            return
         _wakeup.set()
         self._respond(200, b"ok")
 
