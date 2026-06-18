@@ -209,7 +209,7 @@ should care about.
 | `SUPABASE_SERVICE_ROLE_KEY`      | Yes         | Service-role key for privileged server and worker operations. Never expose it to the browser. |
 | `NEXT_PUBLIC_SITE_URL`           | Recommended | Canonical site URL used for auth links in production.                                         |
 | `SUPABASE_REPORTS_BUCKET`        | No          | Defaults to `reports`.                                                                        |
-| `CRON_SECRET`                    | Recommended | Bearer token for app-hosted cron routes.                                                      |
+| `CRON_SECRET`                    | Conditional | Required when app-hosted cron routes are enabled.                                             |
 | `SHOW_INTERNAL_DATA_DIAGNOSTICS` | No          | Defaults to `false`; exposes internal data diagnostics when set to `true`.                    |
 | `SHOW_BACKTEST_WINDOW_AUDIT`     | No          | Defaults to `false`; exposes backtest-window audit details on the jobs page.                  |
 | `SUPABASE_FETCH_TIMEOUT_MS`      | No          | Supabase server fetch timeout. Default `15000`.                                               |

@@ -41,6 +41,10 @@ see [docs/strategies.md](docs/strategies.md).
 The stable system overview lives in [docs/architecture.md](docs/architecture.md). Deployment and
 operations live in [docs/deployment.md](docs/deployment.md).
 
+Product requirements and stabilization history are tracked in [docs/prd.md](docs/prd.md) and
+[docs/codebase-audit.md](docs/codebase-audit.md). Contributor and coding-agent rules live in
+[AGENTS.md](AGENTS.md).
+
 ## Stack
 
 - **Frontend:** Next.js 16, React 19, TypeScript, Tailwind CSS v4, shadcn/ui
@@ -90,10 +94,43 @@ operations live in [docs/deployment.md](docs/deployment.md).
 For schema setup, environment details, worker hosting, and scheduled refreshes, use
 [docs/deployment.md](docs/deployment.md).
 
+## Validation
+
+Run the standard web checks before committing code changes:
+
+```bash
+npm run format
+npm run lint
+npm run typecheck
+```
+
+Run the full local validation suite before release or broad refactors:
+
+```bash
+npm run format:check
+npm run lint
+npm run typecheck
+npm run test:run
+npm run check:file-length
+```
+
+For Python engine changes:
+
+```bash
+cd services/engine
+ruff format .
+ruff check .
+pytest
+```
+
 ## Documentation
 
 - [docs/user-guide.md](docs/user-guide.md) — user-facing workflow and product behavior
 - [docs/strategies.md](docs/strategies.md) — strategy methodology and metrics reference
 - [docs/architecture.md](docs/architecture.md) — system-level product architecture
 - [docs/deployment.md](docs/deployment.md) — local setup, worker hosting, triggers, and operations
+- [docs/prd.md](docs/prd.md) — product requirements and implementation status
+- [docs/codebase-audit.md](docs/codebase-audit.md) — stabilization audit, migration notes, and
+  security findings
+- [AGENTS.md](AGENTS.md) — contributor and automated-agent rules
 - [services/engine/README.md](services/engine/README.md) — engine-local commands
