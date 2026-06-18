@@ -35,6 +35,6 @@
     "**/*.test.ts",
     "**/*.test.tsx",
     "vitest.config.ts",
-    "vitest.setup.ts"
+    "config/vitest/setup.ts"
   ]
 }

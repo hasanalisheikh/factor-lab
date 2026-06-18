@@ -15,6 +15,15 @@ All coding agents must read this file before changing the repository. Tool-speci
 - The automated `npm run check:file-length` gate enforces production source. Docs, tests, generated
   Supabase types, and vendored shadcn/ui scaffolding are excluded from that command but should still
   be split when they become hard to review.
+- Keep the repository root intentionally small. Product code belongs in `app/`, `components/`,
+  `hooks/`, `lib/`, `services/engine/`, `scripts/`, `supabase/`, or `styles/`; docs and process
+  notes belong in `docs/`; movable tool support belongs in `config/`. Only tool-required config and
+  entrypoint files should live at root.
+- Keep `AGENTS.md` as the shared source of truth for automated coding agents. Tool-specific files
+  such as `CLAUDE.md` must stay short and point back here; longer agent notes belong in
+  `docs/agents/`.
+- Before adding a new root file or folder, check [docs/repository-structure.md](docs/repository-structure.md)
+  and prefer an existing domain folder.
 - Update relevant docs whenever product behavior, setup, schema, env, or operations change.
 
 ## Formatting rules

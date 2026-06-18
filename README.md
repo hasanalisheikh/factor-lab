@@ -45,6 +45,11 @@ Product requirements and stabilization history are tracked in [docs/prd.md](docs
 [docs/codebase-audit.md](docs/codebase-audit.md). Contributor and coding-agent rules live in
 [AGENTS.md](AGENTS.md).
 
+The repository layout guide lives in [docs/repository-structure.md](docs/repository-structure.md);
+it explains which root files are required by tools and which generated folders should stay hidden or
+ignored. For the cleanest VS Code explorer view, open
+[factor-lab.code-workspace](factor-lab.code-workspace).
+
 ## Stack
 
 - **Frontend:** Next.js 16, React 19, TypeScript, Tailwind CSS v4, shadcn/ui
@@ -129,6 +134,8 @@ pytest
 - [docs/strategies.md](docs/strategies.md) — strategy methodology and metrics reference
 - [docs/architecture.md](docs/architecture.md) — system-level product architecture
 - [docs/deployment.md](docs/deployment.md) — local setup, worker hosting, triggers, and operations
+- [docs/repository-structure.md](docs/repository-structure.md) — folder layout and root-file policy
+- [docs/agents/README.md](docs/agents/README.md) — agent entrypoint and explorer hygiene notes
 - [docs/prd.md](docs/prd.md) — product requirements and implementation status
 - [docs/codebase-audit.md](docs/codebase-audit.md) — stabilization audit, migration notes, and
   security findings

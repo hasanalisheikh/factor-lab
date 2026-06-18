@@ -24,6 +24,31 @@
   "files.eol": "\n",
   "files.insertFinalNewline": true,
   "files.trimTrailingWhitespace": true,
+  "files.exclude": {
+    "**/.DS_Store": true,
+    "**/.claude": true,
+    "**/.env": true,
+    "**/.env.local": true,
+    "**/.next": true,
+    "**/.ruff_cache": true,
+    "**/.tmp-engine-venv": true,
+    "**/.venv": true,
+    "**/.vercel": true,
+    "**/node_modules": true,
+    "**/playwright-audit": true,
+    "**/playwright-audit/node_modules": true,
+    "**/playwright-audit/playwright-report": true,
+    "**/playwright-audit/test-results": true,
+    "**/supabase/.branches": true,
+    "**/supabase/.temp": true,
+    "**/tsconfig.tsbuildinfo": true
+  },
+  "explorer.fileNesting.enabled": true,
+  "explorer.fileNesting.expand": false,
+  "explorer.fileNesting.patterns": {
+    "README.md": "AGENTS.md, CLAUDE.md, .editorconfig, .env.example, .gitattributes, .gitignore, .prettierignore, .prettierrc, factor-lab.code-workspace",
+    "package.json": "package-lock.json, components.json, eslint.config.mjs, next.config.mjs, next-env.d.ts, postcss.config.mjs, proxy.ts, tsconfig.json, tsconfig.tsbuildinfo, vercel.json, render.yaml, vitest.config.ts"
+  },
 
   // --- Language-specific overrides ---
   "[markdown]": {
