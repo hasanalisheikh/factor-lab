@@ -11,4 +11,5 @@ CREATE TABLE IF NOT EXISTS positions (
 );
 
 ALTER TABLE positions ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "public read" ON positions;
 CREATE POLICY "public read" ON positions FOR SELECT USING (true);
