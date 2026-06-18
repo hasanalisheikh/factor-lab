@@ -67,7 +67,7 @@ export async function getActiveIngestJobCount(): Promise<number> {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { count, error } = await (supabase as any)
       .from("data_ingest_jobs")
-      .select("*", { count: "exact", head: true })
+      .select("id", { count: "exact", head: true })
       .in("status", ["queued", "running", "retrying"])
       .not("batch_id", "is", null);
     if (error) return 0;
@@ -302,7 +302,7 @@ export async function getRecentIngestionHistory(limit = 5): Promise<IngestionLog
     const supabase = await createClient();
     const { data, error } = await supabase
       .from("data_ingestion_log")
-      .select("*")
+      .select("id, ingested_at, status, tickers_updated, rows_upserted, note, source")
       .order("ingested_at", { ascending: false })
       .limit(limit);
 

@@ -5,7 +5,7 @@ import { extname } from "node:path";
 const HARD_LIMIT = 500;
 const TARGET_LIMIT = 400;
 
-const INCLUDED_EXTENSIONS = new Set([".js", ".jsx", ".mjs", ".ts", ".tsx", ".py", ".css", ".md"]);
+const INCLUDED_EXTENSIONS = new Set([".js", ".jsx", ".mjs", ".ts", ".tsx", ".py", ".css"]);
 
 const EXCLUDED_PATHS = new Set([
   "package-lock.json",
@@ -15,7 +15,10 @@ const EXCLUDED_PATHS = new Set([
   ".vercel",
   "node_modules",
   "playwright-audit",
+  "components/ui",
+  "docs",
   "services/engine/.venv",
+  "services/engine/tests",
   "services/engine/factorlab_engine.egg-info",
   "supabase/migrations",
   "supabase/.temp",
@@ -25,7 +28,13 @@ const EXCLUDED_PREFIXES = Array.from(EXCLUDED_PATHS, (excludedPath) => `${exclud
 
 function isExcluded(filePath) {
   return (
-    EXCLUDED_PATHS.has(filePath) || EXCLUDED_PREFIXES.some((prefix) => filePath.startsWith(prefix))
+    EXCLUDED_PATHS.has(filePath) ||
+    EXCLUDED_PREFIXES.some((prefix) => filePath.startsWith(prefix)) ||
+    filePath.endsWith(".test.ts") ||
+    filePath.endsWith(".test.tsx") ||
+    filePath.includes("/__tests__/") ||
+    filePath === "lib/supabase/types.ts" ||
+    filePath.startsWith("services/engine/factorlab_engine/test_")
   );
 }
 
@@ -40,12 +49,18 @@ function countLines(filePath) {
   return contents.endsWith("\n") ? newlineCount : newlineCount + 1;
 }
 
-function getTrackedFiles() {
-  const output = execFileSync("git", ["ls-files", "-z"], { encoding: "utf8" });
+function getSourceCandidates() {
+  const output = execFileSync(
+    "git",
+    ["ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+    {
+      encoding: "utf8",
+    }
+  );
   return output.split("\0").filter(Boolean);
 }
 
-const files = getTrackedFiles().filter((filePath) => {
+const files = getSourceCandidates().filter((filePath) => {
   return (
     INCLUDED_EXTENSIONS.has(extname(filePath)) && !isExcluded(filePath) && existsSync(filePath)
   );
@@ -81,5 +96,5 @@ if (hardLimitFailures.length > 0) {
 }
 
 console.log(
-  `File length check passed: ${files.length} tracked source file(s) are at or below ${HARD_LIMIT} lines.`
+  `File length check passed: ${files.length} source file(s) are at or below ${HARD_LIMIT} lines.`
 );

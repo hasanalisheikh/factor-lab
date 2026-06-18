@@ -3,10 +3,27 @@ import "server-only";
 import { createClient } from "../server";
 import type { UserSettings } from "../types";
 
+const USER_SETTINGS_SELECT = `
+  user_id,
+  default_universe,
+  default_benchmark,
+  default_costs_bps,
+  default_top_n,
+  default_initial_capital,
+  default_rebalance_frequency,
+  default_date_range_years,
+  apply_costs_default,
+  slippage_bps_default,
+  updated_at
+`;
+
 export async function getUserSettings(): Promise<UserSettings | null> {
   try {
     const supabase = await createClient();
-    const { data, error } = await supabase.from("user_settings").select("*").maybeSingle();
+    const { data, error } = await supabase
+      .from("user_settings")
+      .select(USER_SETTINGS_SELECT)
+      .maybeSingle();
 
     if (error || !data) return null;
     return data as UserSettings;

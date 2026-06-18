@@ -16,6 +16,41 @@ import { buildReportHtml, parseRunMetadata } from "@/lib/report-builder";
 import { buildReportStoragePath, resolveReportsBucketName } from "@/lib/storage";
 import { buildTurnoverSummaryFromPositions, getTurnoverPeriodsPerYear } from "@/lib/turnover";
 
+const REPORT_RUN_SELECT = `
+  id,
+  name,
+  strategy_id,
+  status,
+  benchmark,
+  benchmark_ticker,
+  universe,
+  universe_symbols,
+  costs_bps,
+  top_n,
+  run_params,
+  run_metadata,
+  start_date,
+  end_date,
+  executed_start_date,
+  executed_end_date,
+  created_at,
+  user_id,
+  executed_with_missing_data
+`;
+
+const REPORT_METRICS_SELECT = `
+  id,
+  run_id,
+  cagr,
+  sharpe,
+  max_drawdown,
+  turnover,
+  volatility,
+  win_rate,
+  profit_factor,
+  calmar
+`;
+
 function isMissingPositionsTableError(message?: string): boolean {
   if (!message) return false;
   const m = message.toLowerCase();
@@ -55,8 +90,12 @@ export async function ensureRunReport(runId: string): Promise<string> {
     equity,
     positions,
   ] = await Promise.all([
-    serverClient.from("runs").select("*").eq("id", runId).maybeSingle(),
-    serverClient.from("run_metrics").select("*").eq("run_id", runId).maybeSingle(),
+    serverClient.from("runs").select(REPORT_RUN_SELECT).eq("id", runId).maybeSingle(),
+    serverClient
+      .from("run_metrics")
+      .select(REPORT_METRICS_SELECT)
+      .eq("run_id", runId)
+      .maybeSingle(),
     fetchAllEquityCurve(runId),
     getPositionsByRunId(runId),
   ]);

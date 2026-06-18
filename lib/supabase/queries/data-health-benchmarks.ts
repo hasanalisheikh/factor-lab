@@ -19,7 +19,7 @@ export async function getBenchmarkCoverage(
     const supabase = createAdminClient();
     const { count, error } = await supabase
       .from("prices")
-      .select("*", { count: "exact", head: true })
+      .select("id", { count: "exact", head: true })
       .eq("ticker", normalizedTicker)
       .gte("date", dateStart)
       .lte("date", dateEnd);

@@ -3,12 +3,14 @@ import "server-only";
 import { createClient } from "../server";
 import type { ReportRow } from "../types";
 
+const REPORT_SELECT = "id, run_id, storage_path, url, created_at";
+
 export async function getReportByRunId(runId: string): Promise<ReportRow | null> {
   try {
     const supabase = await createClient();
     const { data, error } = await supabase
       .from("reports")
-      .select("*")
+      .select(REPORT_SELECT)
       .eq("run_id", runId)
       .order("created_at", { ascending: false })
       .limit(1)

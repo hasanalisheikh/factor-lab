@@ -9,6 +9,30 @@ import { RETRY_WAKE_MIN_AGE_SECONDS } from "./constants";
 import { hasWorkerClaimSignal } from "./shared";
 import type { RetryQueuedRunWakeResult } from "./types";
 
+const RETRY_WAKE_JOB_SELECT = `
+  id,
+  run_id,
+  name,
+  status,
+  stage,
+  progress,
+  error_message,
+  started_at,
+  finished_at,
+  duration,
+  created_at,
+  job_type,
+  payload,
+  preflight_run_id,
+  updated_at,
+  attempt_count,
+  next_retry_at,
+  locked_at,
+  claimed_at,
+  worker_id,
+  heartbeat_at
+`;
+
 export async function retryQueuedRunWakeAction(
   runId: string,
   ordinal: 1 | 2
@@ -52,7 +76,7 @@ export async function retryQueuedRunWakeAction(
 
   const { data: latestJobData, error: latestJobError } = await serverClient
     .from("jobs")
-    .select("*")
+    .select(RETRY_WAKE_JOB_SELECT)
     .eq("run_id", parsedRunId.data)
     .order("created_at", { ascending: false })
     .limit(1)

@@ -1,9 +1,9 @@
 "use client";
 
-import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useActionState, useEffect, useRef, useState } from "react";
-import { AlertCircle, CheckCircle2, Mail } from "lucide-react";
+import { AlertCircle, CheckCircle2 } from "lucide-react";
+
 import {
   forgotPasswordAction,
   resetPasswordAction,
@@ -28,6 +28,8 @@ import {
   RESEND_VERIFICATION_COOLDOWN_SECONDS,
 } from "@/lib/auth/resend-verification";
 import { createClient } from "@/lib/supabase/client";
+
+import { ExpiredResetLinkView } from "./reset-password-form/expired-reset-link-view";
 
 function parseSentAt(value: string | null | undefined) {
   if (!value) {
@@ -242,122 +244,21 @@ export function ResetPasswordForm({
             </div>
           </div>
         ) : sessionState.status === "failed" ? (
-          <div className="space-y-3">
-            <Alert variant="destructive" className="border-destructive/40 bg-destructive/10">
-              <AlertCircle className="size-4" />
-              <AlertDescription>{sessionState.error}</AlertDescription>
-            </Alert>
-            <div className="flex flex-col items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-4 py-5 text-center">
-              <Mail className="text-primary/80 size-8" />
-              <p className="text-sm text-white/70">
-                {resetEmailValue ? (
-                  <>
-                    We can send a fresh password reset email to{" "}
-                    <span className="font-medium text-white/90">{resetEmailValue}</span>.
-                  </>
-                ) : (
-                  "Enter your email below and we'll send you a fresh password reset link."
-                )}
-              </p>
-            </div>
-
-            {resendCooldown > 0 && resendBannerMode && (
-              <Alert
-                className={
-                  resendBannerMode === "sent"
-                    ? "border-primary/30 bg-primary/10 text-primary"
-                    : "border-amber-500/40 bg-amber-500/10"
-                }
-              >
-                {resendBannerMode === "sent" ? (
-                  <CheckCircle2 className="size-4" />
-                ) : (
-                  <Mail className="size-4 text-amber-300" />
-                )}
-                <AlertDescription
-                  className={resendBannerMode === "sent" ? "text-primary/90" : "text-amber-200"}
-                >
-                  {resendBannerMode === "sent"
-                    ? `Password reset email sent. You can resend again in ${resendCooldown}s.`
-                    : `A password reset email was sent recently. You can resend again in ${resendCooldown}s.`}
-                </AlertDescription>
-              </Alert>
-            )}
-
-            {resendError && (
-              <Alert variant="destructive" className="border-destructive/40 bg-destructive/10">
-                <AlertCircle className="size-4" />
-                <AlertDescription>{resendError}</AlertDescription>
-              </Alert>
-            )}
-
-            {resendProviderLimitedMessage && (
-              <Alert className="border-amber-500/40 bg-amber-500/10">
-                <Mail className="size-4 text-amber-300" />
-                <AlertDescription className="text-amber-200">
-                  {resendProviderLimitedMessage}
-                </AlertDescription>
-              </Alert>
-            )}
-
-            <form action={resendAction_} className="space-y-2.5">
-              {lockedResetEmail ? (
-                <input type="hidden" name="email" value={resetEmailValue} />
-              ) : (
-                <div className="space-y-1.5">
-                  <Label
-                    htmlFor="expired-reset-email"
-                    className="text-xs font-medium text-white/60"
-                  >
-                    Email
-                  </Label>
-                  <Input
-                    id="expired-reset-email"
-                    name="email"
-                    type="email"
-                    autoComplete="email"
-                    required
-                    value={resetEmail}
-                    onChange={(e) => setResetEmail(e.target.value)}
-                    disabled={isResendPending}
-                    className={inputClassName}
-                  />
-                </div>
-              )}
-              <Button
-                type="submit"
-                disabled={isResendPending || resendCooldown > 0}
-                aria-disabled={isResendPending || resendCooldown > 0}
-                className={primaryButtonClassName}
-              >
-                {isResendPending ? (
-                  <>
-                    <Spinner className="size-4" />
-                    Sending...
-                  </>
-                ) : resendCooldown > 0 ? (
-                  `Resend again in ${resendCooldown}s`
-                ) : (
-                  "Resend reset email"
-                )}
-              </Button>
-            </form>
-
-            <p className="text-xs text-white/55">
-              Or go back to{" "}
-              <Link
-                href={
-                  resetEmailValue
-                    ? `/login?tab=forgot&email=${encodeURIComponent(resetEmailValue)}`
-                    : "/login?tab=forgot"
-                }
-                className="text-primary underline-offset-2 hover:underline"
-              >
-                reset password
-              </Link>
-              .
-            </p>
-          </div>
+          <ExpiredResetLinkView
+            inputClassName={inputClassName}
+            isResendPending={isResendPending}
+            lockedResetEmail={lockedResetEmail}
+            primaryButtonClassName={primaryButtonClassName}
+            resendAction={resendAction_}
+            resendBannerMode={resendBannerMode}
+            resendCooldown={resendCooldown}
+            resendError={resendError}
+            resendProviderLimitedMessage={resendProviderLimitedMessage}
+            resetEmail={resetEmail}
+            resetEmailValue={resetEmailValue}
+            sessionError={sessionState.error}
+            setResetEmail={setResetEmail}
+          />
         ) : isResetSuccessful ? (
           <div className="space-y-3">
             <div className="flex flex-col items-center gap-2 rounded-lg border border-emerald-400/20 bg-emerald-500/10 px-4 py-5 text-center">

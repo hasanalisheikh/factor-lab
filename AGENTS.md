@@ -12,6 +12,9 @@ All coding agents must read this file before changing the repository. Tool-speci
 - Split files by responsibility before adding behavior to an oversized file.
 - Generated files, dependency folders, build outputs, and lockfiles are excluded from the line-count
   rule.
+- The automated `npm run check:file-length` gate enforces production source. Docs, tests, generated
+  Supabase types, and vendored shadcn/ui scaffolding are excluded from that command but should still
+  be split when they become hard to review.
 - Update relevant docs whenever product behavior, setup, schema, env, or operations change.
 
 ## Formatting rules

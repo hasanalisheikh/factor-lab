@@ -1,22 +1,19 @@
 import { useEffect, useRef } from "react";
 
 import { subscribeToEmailVerificationComplete } from "@/lib/auth/email-verification-sync";
-import { subscribeToPasswordResetComplete } from "@/lib/auth/password-reset-sync";
 import { getRemainingResendCooldownSeconds } from "@/lib/auth/resend-verification";
 import { createClient } from "@/lib/supabase/client";
 
 import type { ForgotPasswordState, ResendState } from "@/app/actions/auth";
 import type { Dispatch, SetStateAction } from "react";
-import { getSentAtForCooldown } from "./types";
 import type { VerificationFlow } from "@/lib/auth/verification-flow";
 import type { AuthBannerMode, AuthTab, LoginFormProps } from "./types";
 
+export { useAuthResultUrlSync } from "./use-auth-session-effects/auth-result-url-sync";
+export { usePasswordResetCompleteSync } from "./use-auth-session-effects/password-reset-complete-sync";
+
 type AuthRouter = {
   refresh: () => void;
-  replace: (href: string) => void;
-};
-
-type UrlRouter = {
   replace: (href: string) => void;
 };
 
@@ -279,206 +276,4 @@ export function useAuthSearchParamSync({
       setVerifyFlow(undefined);
     }
   }, [hasSearchFlow, initialFlow, searchFlow, searchTab, setVerifyFlow]);
-}
-
-export function useAuthResultUrlSync({
-  activeTab,
-  forgotEmail,
-  forgotSentAt,
-  forgotState,
-  pathname,
-  resendState,
-  router,
-  searchEmail,
-  searchFlow,
-  searchParams,
-  searchSentAt,
-  searchTab,
-  verifyEmail,
-  verifyFlow,
-}: {
-  activeTab: AuthTab;
-  forgotEmail: string;
-  forgotSentAt?: number;
-  forgotState: ForgotPasswordState;
-  pathname: string;
-  resendState: ResendState;
-  router: UrlRouter;
-  searchEmail?: string;
-  searchFlow?: string;
-  searchParams: URLSearchParams;
-  searchSentAt?: number;
-  searchTab?: AuthTab;
-  verifyEmail: string;
-  verifyFlow?: VerificationFlow;
-}) {
-  useEffect(() => {
-    if (activeTab !== "verify" || !verifyEmail || !resendState) {
-      return;
-    }
-
-    if (!("success" in resendState) && !("rateLimited" in resendState)) {
-      return;
-    }
-
-    const currentCooldown =
-      searchSentAt === undefined ? undefined : getRemainingResendCooldownSeconds(searchSentAt);
-    const searchFlowMatches = (searchFlow ?? undefined) === verifyFlow;
-    const searchAlreadyMatchesVerifyState =
-      searchTab === "verify" &&
-      searchEmail === verifyEmail &&
-      searchFlowMatches &&
-      currentCooldown !== undefined &&
-      currentCooldown >= resendState.cooldownSeconds - 1;
-
-    if (searchAlreadyMatchesVerifyState) {
-      return;
-    }
-
-    const sentAt =
-      "success" in resendState ? Date.now() : getSentAtForCooldown(resendState.cooldownSeconds);
-
-    const nextParams = new URLSearchParams(searchParams.toString());
-    nextParams.set("tab", "verify");
-    nextParams.set("email", verifyEmail);
-    if (verifyFlow) {
-      nextParams.set("flow", verifyFlow);
-    } else {
-      nextParams.delete("flow");
-    }
-    nextParams.set("sent_at", String(sentAt));
-    const query = nextParams.toString();
-    router.replace(query ? `${pathname}?${query}` : pathname);
-  }, [
-    activeTab,
-    pathname,
-    resendState,
-    router,
-    searchEmail,
-    searchFlow,
-    searchParams,
-    searchSentAt,
-    searchTab,
-    verifyEmail,
-    verifyFlow,
-  ]);
-
-  useEffect(() => {
-    const trimmedForgotEmail = forgotEmail.trim();
-    if (activeTab !== "forgot" || !trimmedForgotEmail || !forgotState) {
-      return;
-    }
-
-    if (!("success" in forgotState) && !("rateLimited" in forgotState)) {
-      return;
-    }
-
-    const currentCooldown =
-      forgotSentAt === undefined ? undefined : getRemainingResendCooldownSeconds(forgotSentAt);
-    const searchAlreadyMatchesForgotState =
-      searchTab === "forgot" &&
-      searchEmail === trimmedForgotEmail &&
-      currentCooldown !== undefined &&
-      currentCooldown >= forgotState.cooldownSeconds - 1;
-
-    if (searchAlreadyMatchesForgotState) {
-      return;
-    }
-
-    const sentAt =
-      "success" in forgotState
-        ? forgotState.sentAt
-        : getSentAtForCooldown(forgotState.cooldownSeconds);
-
-    const nextParams = new URLSearchParams(searchParams.toString());
-    nextParams.set("tab", "forgot");
-    nextParams.set("email", trimmedForgotEmail);
-    nextParams.delete("flow");
-    nextParams.delete("error");
-    nextParams.set("sent_at", String(sentAt));
-    const query = nextParams.toString();
-    router.replace(query ? `${pathname}?${query}` : pathname);
-  }, [
-    activeTab,
-    forgotEmail,
-    forgotSentAt,
-    forgotState,
-    pathname,
-    router,
-    searchEmail,
-    searchParams,
-    searchTab,
-  ]);
-}
-
-export function usePasswordResetCompleteSync({
-  activeTab,
-  forgotEmail,
-  pathname,
-  router,
-  searchParams,
-  setActiveTab,
-  setGuestError,
-  setPasswordMismatchError,
-  setPasswordResetComplete,
-  setSignInEmail,
-  setSignInPassword,
-  setVerifyFlow,
-  signInEmail,
-}: {
-  activeTab: AuthTab;
-  forgotEmail: string;
-  pathname: string;
-  router: UrlRouter;
-  searchParams: URLSearchParams;
-  setActiveTab: Dispatch<SetStateAction<AuthTab>>;
-  setGuestError: Dispatch<SetStateAction<string | null>>;
-  setPasswordMismatchError: Dispatch<SetStateAction<string | null>>;
-  setPasswordResetComplete: Dispatch<SetStateAction<boolean>>;
-  setSignInEmail: Dispatch<SetStateAction<string>>;
-  setSignInPassword: Dispatch<SetStateAction<string>>;
-  setVerifyFlow: Dispatch<SetStateAction<VerificationFlow | undefined>>;
-  signInEmail: string;
-}) {
-  useEffect(() => {
-    if (activeTab !== "signin" && activeTab !== "forgot") {
-      return;
-    }
-
-    return subscribeToPasswordResetComplete(() => {
-      const nextEmail = forgotEmail.trim() || signInEmail.trim();
-
-      setActiveTab("signin");
-      setGuestError(null);
-      setPasswordMismatchError(null);
-      setPasswordResetComplete(true);
-      setVerifyFlow(undefined);
-      setSignInPassword("");
-      if (nextEmail) {
-        setSignInEmail(nextEmail);
-      }
-
-      const nextParams = new URLSearchParams(searchParams.toString());
-      nextParams.delete("tab");
-      nextParams.delete("email");
-      nextParams.delete("flow");
-      nextParams.delete("sent_at");
-      const query = nextParams.toString();
-      router.replace(query ? `${pathname}?${query}` : pathname);
-    });
-  }, [
-    activeTab,
-    forgotEmail,
-    pathname,
-    router,
-    searchParams,
-    setActiveTab,
-    setGuestError,
-    setPasswordMismatchError,
-    setPasswordResetComplete,
-    setSignInEmail,
-    setSignInPassword,
-    setVerifyFlow,
-    signInEmail,
-  ]);
 }
