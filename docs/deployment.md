@@ -94,7 +94,8 @@ npm run dev
 
 `npm run dev` starts the Next.js app and, when the engine command is available, starts the local
 worker automatically. Use `SKIP_FACTORLAB_WORKER=1 npm run dev` if you intentionally want web-only
-development.
+development. The dev script forces the local worker into continuous mode, assigns a direct local
+`WORKER_TRIGGER_URL`, and provides a local-only trigger secret when `.env.local` does not define one.
 
 ## Worker Trigger Model
 
@@ -104,8 +105,11 @@ The app can wake background compute after queueing work.
 - If `WORKER_TRIGGER_URL` points to a GitHub repository dispatch endpoint
   (`https://api.github.com/repos/<owner>/<repo>/dispatches`), the app sends a
   `repository_dispatch` event with `event_type: run-worker`.
-- `WORKER_TRIGGER_SECRET` is sent as a bearer token for either path and must be configured anywhere
-  trigger wake-ups are enabled.
+- `WORKER_TRIGGER_SECRET` is sent as a bearer token for direct worker `/trigger` requests.
+- `WORKER_GITHUB_DISPATCH_TOKEN` is sent as the bearer token for GitHub repository dispatch
+  requests. Use a GitHub token that can create `repository_dispatch` events for the repository.
+- If a trigger URL is configured without the required token, run creation fails before inserting a
+  queued run. This prevents new runs from sitting in `queued` when the wake path is impossible.
 
 This keeps the application code compatible with both an always-on worker service and the GitHub
 fallback workflow without changing product behavior.
@@ -219,8 +223,11 @@ should care about.
 | Variable                                | Required    | Notes                                                            |
 | --------------------------------------- | ----------- | ---------------------------------------------------------------- |
 | `WORKER_TRIGGER_URL`                    | No          | Direct worker URL or GitHub repository dispatch endpoint.        |
-| `WORKER_TRIGGER_SECRET`                 | Conditional | Required when trigger wake-ups are enabled.                      |
+| `WORKER_TRIGGER_SECRET`                 | Conditional | Required for direct worker `/trigger` wake-ups.                  |
+| `WORKER_GITHUB_DISPATCH_TOKEN`          | Conditional | Required for GitHub repository dispatch wake-ups.                |
 | `SKIP_FACTORLAB_WORKER`                 | No          | Local dev escape hatch for web-only startup.                     |
+| `FACTORLAB_WORKER_PORT`                 | No          | Local worker trigger-server port. Default `8000`.                |
+| `NEXT_DEV_PORT`                         | No          | Optional local Next.js dev server port.                          |
 | `RUN_ONCE`                              | No          | Runs a single worker pass, used by GitHub Actions fallback jobs. |
 | `POLL_INTERVAL_SECONDS`                 | No          | Worker poll interval. Default `5`.                               |
 | `JOB_BATCH_SIZE`                        | No          | Maximum jobs claimed per poll cycle. Default `3`.                |

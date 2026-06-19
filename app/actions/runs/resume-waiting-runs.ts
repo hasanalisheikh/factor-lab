@@ -104,6 +104,9 @@ export async function retryQueuedRunWakeAction(
     return { attempted: false, reason: "too_early" };
   }
 
-  await triggerWorker(`runs.retryQueuedRunWakeAction.${ordinal}`);
+  const triggerResult = await triggerWorker(`runs.retryQueuedRunWakeAction.${ordinal}`);
+  if (triggerResult && triggerResult.status !== "ok") {
+    return { attempted: false, reason: "trigger_failed" };
+  }
   return { attempted: true, reason: "triggered" };
 }

@@ -15,6 +15,8 @@ load_env() {
 }
 
 start_worker() {
+  local worker_port="${FACTORLAB_WORKER_PORT:-${WORKER_PORT:-8000}}"
+
   if [[ "${SKIP_FACTORLAB_WORKER:-0}" == "1" ]]; then
     echo "[dev] SKIP_FACTORLAB_WORKER=1 -> not starting engine worker"
     return
@@ -42,13 +44,26 @@ start_worker() {
     return
   fi
 
-  echo "[dev] starting factorlab worker..."
+  export RUN_ONCE=0
+  export WORKER_TRIGGER_SECRET="${WORKER_TRIGGER_SECRET:-factorlab-local-worker-trigger}"
+
+  echo "[dev] starting factorlab worker on :$worker_port..."
   (
     cd "$ENGINE_DIR"
-    eval "$worker_cmd"
+    PORT="$worker_port" eval "$worker_cmd"
   ) &
   WORKER_PID=$!
   echo "[dev] worker pid: $WORKER_PID"
+
+  sleep 1
+  if ! kill -0 "$WORKER_PID" >/dev/null 2>&1; then
+    echo "[dev] factorlab worker exited during startup; refusing to continue with web-only dev"
+    wait "$WORKER_PID" || true
+    exit 1
+  fi
+
+  export WORKER_TRIGGER_URL="http://127.0.0.1:$worker_port"
+  echo "[dev] web app will trigger local worker at $WORKER_TRIGGER_URL"
 }
 
 cleanup() {
@@ -64,4 +79,9 @@ load_env
 start_worker
 
 cd "$ROOT_DIR"
+if [[ -n "${NEXT_DEV_PORT:-}" ]]; then
+  export PORT="$NEXT_DEV_PORT"
+else
+  unset PORT
+fi
 npm run dev:web

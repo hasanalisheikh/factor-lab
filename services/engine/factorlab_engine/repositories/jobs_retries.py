@@ -150,14 +150,14 @@ class JobsRetryRepositoryMixin:
         timeout_minutes: int = 10,
         max_attempts: int = 5,
     ) -> None:
-        """Detect data_ingest jobs stuck in queued state (worker unavailable).
+        """Detect jobs stuck in queued state (worker unavailable or unable to claim).
 
         Called once per worker main-loop iteration. Silently handles all errors.
 
         Logic:
-          - Find data_ingest jobs WHERE status='queued' AND created_at < NOW() - timeout_minutes
-          - If attempt_count < max_attempts: mark failed with a short next_retry_at (30 s)
-            so the retry scheduler re-queues them quickly once a worker is running
+          - Find jobs WHERE status='queued' AND created_at < NOW() - timeout_minutes
+          - data_ingest jobs keep the legacy failed+next_retry_at retry path
+          - backtest jobs stay queued so the current worker pass can claim them immediately
           - If at/past max_attempts: fail permanently and propagate to waiting run
         """
         try:
@@ -165,9 +165,10 @@ class JobsRetryRepositoryMixin:
 
             result = (
                 self.client.table("jobs")
-                .select("id, stage, attempt_count, preflight_run_id, payload, job_type")
+                .select(
+                    "id, run_id, name, stage, attempt_count, preflight_run_id, payload, job_type"
+                )
                 .eq("status", "queued")
-                .eq("job_type", "data_ingest")
                 .lt("created_at", cutoff)
                 .execute()
             )
@@ -182,6 +183,65 @@ class JobsRetryRepositoryMixin:
                 job_id = row["id"]
                 attempt = int(row.get("attempt_count") or 0)
                 next_attempt = attempt + 1
+
+                if row.get("job_type", "backtest") != "data_ingest":
+                    if next_attempt < max_attempts:
+                        self.client.table("jobs").update(
+                            {
+                                "status": "queued",
+                                "stage": row.get("stage") or "ingest",
+                                "attempt_count": next_attempt,
+                                "next_retry_at": None,
+                                "updated_at": now_iso,
+                                "error_message": (
+                                    f"[queued-too-long] queued for >{timeout_minutes}m without "
+                                    "being claimed. Worker may not have been running; will retry "
+                                    "claim on this worker pass."
+                                ),
+                            }
+                        ).eq("id", job_id).execute()
+                        print(
+                            f"[supabase_io] queued-too-long backtest job={job_id} "
+                            f"claim_attempt={next_attempt}/{max_attempts}"
+                        )
+                        continue
+
+                    error_msg = (
+                        f"[queued-too-long] queued for >{timeout_minutes}m after "
+                        f"{next_attempt} claim attempt(s). Worker could not claim this run."
+                    )
+                    self.client.table("jobs").update(
+                        {
+                            "status": "failed",
+                            "stage": row.get("stage") or "ingest",
+                            "progress": 100,
+                            "attempt_count": next_attempt,
+                            "finished_at": now_iso,
+                            "updated_at": now_iso,
+                            "next_retry_at": None,
+                            "error_message": error_msg[:2000],
+                        }
+                    ).eq("id", job_id).execute()
+                    print(
+                        f"[supabase_io] permanently failed queued-too-long backtest job={job_id} "
+                        f"(exhausted {next_attempt} claim attempts)"
+                    )
+                    if row.get("run_id"):
+                        run_id = str(row["run_id"])
+                        self.client.table("runs").update({"status": "failed"}).eq(
+                            "id", run_id
+                        ).execute()
+                        failed_job = Job(
+                            id=job_id,
+                            run_id=run_id,
+                            name=str(row.get("name") or "Backtest"),
+                        )
+                        self._sync_backtest_notification(
+                            failed_job,
+                            status="failed",
+                            error_message=error_msg[:2000],
+                        )
+                    continue
 
                 if next_attempt < max_attempts:
                     # Mark failed with a short retry (30 s) — worker will requeue ASAP

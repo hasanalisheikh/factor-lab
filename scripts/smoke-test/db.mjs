@@ -7,6 +7,7 @@ import {
   SUPABASE_KEY,
   SUPABASE_URL,
   UNIVERSE_PRESETS,
+  WORKER_GITHUB_DISPATCH_TOKEN,
   WORKER_TRIGGER_SECRET,
   WORKER_TRIGGER_URL,
 } from "./config.mjs";
@@ -19,11 +20,20 @@ export const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
 export async function triggerWorker() {
   if (!WORKER_TRIGGER_URL) return;
   const isGitHub = WORKER_TRIGGER_URL.includes("api.github.com");
+  const token = isGitHub ? WORKER_GITHUB_DISPATCH_TOKEN : WORKER_TRIGGER_SECRET;
+  if (!token) {
+    log(
+      `Worker trigger skipped: missing ${
+        isGitHub ? "WORKER_GITHUB_DISPATCH_TOKEN" : "WORKER_TRIGGER_SECRET"
+      }`
+    );
+    return;
+  }
   try {
     await fetch(isGitHub ? WORKER_TRIGGER_URL : `${WORKER_TRIGGER_URL}/trigger`, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${WORKER_TRIGGER_SECRET ?? ""}`,
+        Authorization: `Bearer ${token}`,
         "Content-Type": "application/json",
         ...(isGitHub
           ? {

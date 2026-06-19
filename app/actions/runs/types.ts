@@ -47,7 +47,8 @@ export type RetryQueuedRunWakeReason =
   | "too_early"
   | "unauthorized"
   | "not_found"
-  | "maxed";
+  | "maxed"
+  | "trigger_failed";
 export type RetryQueuedRunWakeResult = {
   attempted: boolean;
   reason: RetryQueuedRunWakeReason;

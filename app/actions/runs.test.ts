@@ -11,6 +11,7 @@ const {
   redirectMock,
   revalidatePathMock,
   triggerWorkerMock,
+  getWorkerTriggerConfigurationErrorMock,
 } = vi.hoisted(() => ({
   createClientMock: vi.fn(),
   createAdminClientMock: vi.fn(),
@@ -22,6 +23,7 @@ const {
   }),
   revalidatePathMock: vi.fn(),
   triggerWorkerMock: vi.fn(),
+  getWorkerTriggerConfigurationErrorMock: vi.fn(),
 }));
 
 vi.mock("next/navigation", () => ({
@@ -46,6 +48,7 @@ vi.mock("@/lib/supabase/queries", () => ({
 }));
 
 vi.mock("@/lib/worker-trigger", () => ({
+  getWorkerTriggerConfigurationError: getWorkerTriggerConfigurationErrorMock,
   triggerWorker: triggerWorkerMock,
 }));
 
@@ -523,6 +526,12 @@ describe("run actions preflight gating", () => {
     getUniverseConstraintsSnapshotMock.mockResolvedValue(BASE_CONSTRAINTS);
     getUniverseBatchStatusMock.mockResolvedValue(null);
     evaluateRunPreflightSnapshotMock.mockResolvedValue(makeSnapshot());
+    getWorkerTriggerConfigurationErrorMock.mockReturnValue(null);
+    triggerWorkerMock.mockResolvedValue({
+      status: "ok",
+      attempted: true,
+      endpoint: "https://worker.example.com/trigger",
+    });
   });
 
   afterEach(() => {
@@ -920,6 +929,38 @@ describe("run actions preflight gating", () => {
     expect(triggerWorkerMock).toHaveBeenCalledWith("runs.createRunAction");
   });
 
+  it("refuses to create dead queued runs when the worker trigger is misconfigured", async () => {
+    const serverClient = makeAuthenticatedClient();
+    createClientMock.mockResolvedValue(serverClient);
+    getWorkerTriggerConfigurationErrorMock.mockReturnValue(
+      "WORKER_GITHUB_DISPATCH_TOKEN is required for the configured GitHub repository dispatch endpoint."
+    );
+
+    const result = await createRun({
+      name: "Misconfigured worker",
+      strategy_id: "equal_weight",
+      start_date: "2018-01-01",
+      end_date: "2026-03-12",
+      benchmark: "SPY",
+      universe: "ETF8",
+      costs_bps: 10,
+      top_n: 5,
+      initial_capital: 100000,
+      apply_costs: true,
+      slippage_bps: 0,
+      acknowledge_warnings: false,
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error:
+        "Backtest worker wake-up is misconfigured. WORKER_GITHUB_DISPATCH_TOKEN is required for the configured GitHub repository dispatch endpoint.",
+    });
+    expect(serverClient.runInsertPayloads).toHaveLength(0);
+    expect(serverClient.jobInsertPayloads).toHaveLength(0);
+    expect(triggerWorkerMock).not.toHaveBeenCalled();
+  });
+
   it("warn acknowledgement gates creation and marks executed_with_missing_data", async () => {
     const serverClient = makeAuthenticatedClient();
     const admin = makeAdminStub();
@@ -988,6 +1029,11 @@ describe("retryQueuedRunWakeAction", () => {
     vi.clearAllMocks();
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-26T12:00:00Z"));
+    triggerWorkerMock.mockResolvedValue({
+      status: "ok",
+      attempted: true,
+      endpoint: "https://worker.example.com/trigger",
+    });
   });
 
   afterEach(() => {
@@ -996,11 +1042,26 @@ describe("retryQueuedRunWakeAction", () => {
 
   it("triggers a queued wake retry once the job is still queued and old enough", async () => {
     createClientMock.mockResolvedValue(makeRetryWakeServerClient());
+    triggerWorkerMock.mockResolvedValue({ status: "ok", attempted: true, endpoint: "https://x" });
 
     const result = await retryQueuedRunWakeAction("11111111-1111-4111-8111-111111111111", 1);
 
     expect(result).toEqual({ attempted: true, reason: "triggered" });
     expect(triggerWorkerMock).toHaveBeenCalledWith("runs.retryQueuedRunWakeAction.1");
+  });
+
+  it("does not report a queued wake retry as triggered when the trigger is misconfigured", async () => {
+    createClientMock.mockResolvedValue(makeRetryWakeServerClient());
+    triggerWorkerMock.mockResolvedValue({
+      status: "missing_token",
+      attempted: false,
+      envName: "WORKER_GITHUB_DISPATCH_TOKEN",
+      triggerKind: "GitHub repository dispatch endpoint",
+    });
+
+    const result = await retryQueuedRunWakeAction("11111111-1111-4111-8111-111111111111", 1);
+
+    expect(result).toEqual({ attempted: false, reason: "trigger_failed" });
   });
 
   it("returns too_early before the retry window opens", async () => {

@@ -6,7 +6,7 @@ import { getLastCompleteTradingDayUtc } from "@/lib/data-cutoff";
 import { buildJobNotification } from "@/lib/notifications";
 import { createClient } from "@/lib/supabase/server";
 import { UNIVERSE_PRESETS, type UniverseId } from "@/lib/universe-config";
-import { triggerWorker } from "@/lib/worker-trigger";
+import { getWorkerTriggerConfigurationError, triggerWorker } from "@/lib/worker-trigger";
 import { getAuthenticatedUserId } from "./auth";
 import { resolveUniverseSymbols } from "./data-readiness";
 import { createRunSchema } from "./schema";
@@ -79,6 +79,15 @@ export async function createRun(input: z.input<typeof createRunSchema>): Promise
     return {
       ok: false,
       error: "Please acknowledge the warning before queueing this backtest.",
+      preflight,
+    };
+  }
+
+  const triggerConfigurationError = getWorkerTriggerConfigurationError();
+  if (triggerConfigurationError) {
+    return {
+      ok: false,
+      error: `Backtest worker wake-up is misconfigured. ${triggerConfigurationError}`,
       preflight,
     };
   }

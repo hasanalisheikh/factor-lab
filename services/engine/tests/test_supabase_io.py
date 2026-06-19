@@ -330,6 +330,67 @@ def test_permanently_stalled_backtest_marks_run_failed() -> None:
     assert calls == [("failed", jobs_table.update_payloads[0]["error_message"])]
 
 
+def test_queued_too_long_backtest_stays_queued_for_immediate_claim_retry() -> None:
+    jobs_table = _RetryJobsTable(
+        [
+            {
+                "id": "job-1",
+                "attempt_count": 0,
+                "job_type": "backtest",
+                "run_id": "run-1",
+                "name": "Alpha",
+                "stage": "ingest",
+            }
+        ]
+    )
+    runs_table = _RunsTable()
+    io = object.__new__(SupabaseIO)
+    io.client = _MultiTableClient(jobs_table=jobs_table, runs_table=runs_table)
+
+    io.scan_and_requeue_queued_too_long(timeout_minutes=10, max_attempts=5)
+
+    assert len(jobs_table.update_payloads) == 1
+    payload = jobs_table.update_payloads[0]
+    assert payload["status"] == "queued"
+    assert payload["attempt_count"] == 1
+    assert payload["next_retry_at"] is None
+    assert "will retry claim on this worker pass" in payload["error_message"]
+    assert runs_table.update_payloads == []
+
+
+def test_queued_too_long_backtest_exhaustion_marks_run_failed() -> None:
+    jobs_table = _RetryJobsTable(
+        [
+            {
+                "id": "job-1",
+                "attempt_count": 4,
+                "job_type": "backtest",
+                "run_id": "run-1",
+                "name": "Alpha",
+                "stage": "ingest",
+            }
+        ]
+    )
+    runs_table = _RunsTable()
+    io = object.__new__(SupabaseIO)
+    io.client = _MultiTableClient(jobs_table=jobs_table, runs_table=runs_table)
+
+    calls: list[tuple[str, str | None]] = []
+    io._sync_backtest_notification = lambda job, *, status, error_message=None: calls.append(  # type: ignore[method-assign]
+        (status, error_message)
+    )
+
+    io.scan_and_requeue_queued_too_long(timeout_minutes=10, max_attempts=5)
+
+    assert len(jobs_table.update_payloads) == 1
+    payload = jobs_table.update_payloads[0]
+    assert payload["status"] == "failed"
+    assert payload["next_retry_at"] is None
+    assert len(runs_table.update_payloads) == 1
+    assert runs_table.update_payloads[0]["status"] == "failed"
+    assert calls == [("failed", payload["error_message"])]
+
+
 def test_upsert_job_notification_inserts_unread_notification_rows() -> None:
     notifications_table = _NotificationsTable()
     io = object.__new__(SupabaseIO)
