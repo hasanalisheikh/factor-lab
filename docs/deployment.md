@@ -106,8 +106,9 @@ The app can wake background compute after queueing work.
   (`https://api.github.com/repos/<owner>/<repo>/dispatches`), the app sends a
   `repository_dispatch` event with `event_type: run-worker`.
 - `WORKER_TRIGGER_SECRET` is sent as a bearer token for direct worker `/trigger` requests.
-- `WORKER_GITHUB_DISPATCH_TOKEN` is sent as the bearer token for GitHub repository dispatch
-  requests. Use a GitHub token that can create `repository_dispatch` events for the repository.
+- `WORKER_GITHUB_DISPATCH_TOKEN` is preferred as the bearer token for GitHub repository dispatch
+  requests. Existing deployments may keep using `WORKER_TRIGGER_SECRET` for this path if it already
+  contains a GitHub token that can create `repository_dispatch` events for the repository.
 - If a trigger URL is configured without the required token, run creation fails before inserting a
   queued run. This prevents new runs from sitting in `queued` when the wake path is impossible.
 

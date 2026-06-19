@@ -20,7 +20,9 @@ export const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
 export async function triggerWorker() {
   if (!WORKER_TRIGGER_URL) return;
   const isGitHub = WORKER_TRIGGER_URL.includes("api.github.com");
-  const token = isGitHub ? WORKER_GITHUB_DISPATCH_TOKEN : WORKER_TRIGGER_SECRET;
+  const token = isGitHub
+    ? (WORKER_GITHUB_DISPATCH_TOKEN ?? WORKER_TRIGGER_SECRET)
+    : WORKER_TRIGGER_SECRET;
   if (!token) {
     log(
       `Worker trigger skipped: missing ${

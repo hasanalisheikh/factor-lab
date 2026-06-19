@@ -105,9 +105,28 @@ describe("worker-trigger", () => {
     );
   });
 
-  it("does not call GitHub dispatch endpoints without a GitHub token", async () => {
+  it("falls back to the legacy worker trigger secret for repository dispatch endpoints", async () => {
     process.env.WORKER_TRIGGER_URL = "https://api.github.com/repos/acme/project/dispatches";
-    process.env.WORKER_TRIGGER_SECRET = "worker-secret";
+    process.env.WORKER_TRIGGER_SECRET = "legacy-github-token";
+
+    const fetchMock = vi.fn().mockResolvedValue(new Response("{}", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await triggerWorker("test.github_legacy_token");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.github.com/repos/acme/project/dispatches",
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          Authorization: "Bearer legacy-github-token",
+        }),
+      })
+    );
+    expect(getWorkerTriggerConfigurationError()).toBeNull();
+  });
+
+  it("does not call GitHub dispatch endpoints without any GitHub-capable token", async () => {
+    process.env.WORKER_TRIGGER_URL = "https://api.github.com/repos/acme/project/dispatches";
 
     const fetchMock = vi.fn();
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});

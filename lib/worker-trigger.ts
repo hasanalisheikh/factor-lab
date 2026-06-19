@@ -21,7 +21,7 @@ function isGitHubDispatchEndpoint(endpoint: string): boolean {
 
 function resolveWorkerTriggerToken(isGitHub: boolean): string | undefined {
   if (isGitHub) {
-    return process.env.WORKER_GITHUB_DISPATCH_TOKEN;
+    return process.env.WORKER_GITHUB_DISPATCH_TOKEN ?? process.env.WORKER_TRIGGER_SECRET;
   }
   return process.env.WORKER_TRIGGER_SECRET;
 }
