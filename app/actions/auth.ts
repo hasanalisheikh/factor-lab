@@ -16,46 +16,34 @@ import type { AuthState, ForgotPasswordState, ResendState, ResetPasswordState } 
 
 export type { AuthState, ForgotPasswordState, ResendState, ResetPasswordState };
 
-export async function signInAction(prev: AuthState, formData: FormData): Promise<AuthState> {
-  return signInActionImpl(prev, formData);
+export async function signInAction(prev: unknown, formData: FormData) {
+  return signInActionImpl(prev as AuthState, formData);
 }
 
-export async function signOutAction(): Promise<void> {
+export async function signOutAction() {
   return signOutActionImpl();
 }
 
-export async function signUpAction(prev: AuthState, formData: FormData): Promise<AuthState> {
-  return signUpActionImpl(prev, formData);
+export async function signUpAction(prev: unknown, formData: FormData) {
+  return signUpActionImpl(prev as AuthState, formData);
 }
 
-export async function upgradeGuestAction(prev: AuthState, formData: FormData): Promise<AuthState> {
-  return upgradeGuestActionImpl(prev, formData);
+export async function upgradeGuestAction(prev: unknown, formData: FormData) {
+  return upgradeGuestActionImpl(prev as AuthState, formData);
 }
 
-export async function upgradeGuestToEmailPassword(input: {
-  email: string;
-  password: string;
-}): Promise<AuthState> {
+export async function upgradeGuestToEmailPassword(input: { email: string; password: string }) {
   return upgradeGuestToEmailPasswordImpl(input);
 }
 
-export async function forgotPasswordAction(
-  prev: ForgotPasswordState,
-  formData: FormData
-): Promise<ForgotPasswordState> {
-  return forgotPasswordActionImpl(prev, formData);
+export async function forgotPasswordAction(prev: unknown, formData: FormData) {
+  return forgotPasswordActionImpl(prev as ForgotPasswordState, formData);
 }
 
-export async function resendVerificationAction(
-  prev: ResendState,
-  formData: FormData
-): Promise<ResendState> {
-  return resendVerificationActionImpl(prev, formData);
+export async function resendVerificationAction(prev: unknown, formData: FormData) {
+  return resendVerificationActionImpl(prev as ResendState, formData);
 }
 
-export async function resetPasswordAction(
-  prev: ResetPasswordState,
-  formData: FormData
-): Promise<ResetPasswordState> {
-  return resetPasswordActionImpl(prev, formData);
+export async function resetPasswordAction(prev: unknown, formData: FormData) {
+  return resetPasswordActionImpl(prev as ResetPasswordState, formData);
 }
