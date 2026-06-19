@@ -3,7 +3,7 @@ import { useEffect } from "react";
 import { getRemainingResendCooldownSeconds } from "@/lib/auth/resend-verification";
 
 import { getSentAtForCooldown } from "../types";
-import type { ForgotPasswordState, ResendState } from "@/app/actions/auth";
+import type { ForgotPasswordState, ResendState } from "@/app/actions/auth/state";
 import type { VerificationFlow } from "@/lib/auth/verification-flow";
 import type { AuthTab } from "../types";
 

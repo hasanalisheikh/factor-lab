@@ -4,12 +4,8 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useActionState, useEffect, useRef, useState } from "react";
 import { AlertCircle, CheckCircle2 } from "lucide-react";
 
-import {
-  forgotPasswordAction,
-  resetPasswordAction,
-  type ForgotPasswordState,
-  type ResetPasswordState,
-} from "@/app/actions/auth";
+import { forgotPasswordAction, resetPasswordAction } from "@/app/actions/auth";
+import type { ForgotPasswordState, ResetPasswordState } from "@/app/actions/auth/state";
 import { Logo } from "@/components/logo";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";

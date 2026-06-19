@@ -23,7 +23,7 @@ import {
   useVerifyTabSessionSync,
 } from "./login-form/use-auth-session-effects";
 
-import type { AuthState, ForgotPasswordState, ResendState } from "@/app/actions/auth";
+import type { AuthState, ForgotPasswordState, ResendState } from "@/app/actions/auth/state";
 import type { VerificationFlow } from "@/lib/auth/verification-flow";
 import type { LoginFormProps } from "./login-form/types";
 

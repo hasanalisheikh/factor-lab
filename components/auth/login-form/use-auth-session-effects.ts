@@ -4,7 +4,7 @@ import { subscribeToEmailVerificationComplete } from "@/lib/auth/email-verificat
 import { getRemainingResendCooldownSeconds } from "@/lib/auth/resend-verification";
 import { createClient } from "@/lib/supabase/client";
 
-import type { ForgotPasswordState, ResendState } from "@/app/actions/auth";
+import type { ForgotPasswordState, ResendState } from "@/app/actions/auth/state";
 import type { Dispatch, SetStateAction } from "react";
 import type { VerificationFlow } from "@/lib/auth/verification-flow";
 import type { AuthBannerMode, AuthTab, LoginFormProps } from "./types";

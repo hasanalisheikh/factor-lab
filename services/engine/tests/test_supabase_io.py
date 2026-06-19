@@ -186,6 +186,19 @@ class _RunsTable:
         return _Result([{"id": "run-1"}])
 
 
+class _RetryJobsTable(_JobsTable):
+    def __init__(self, select_rows: list[dict[str, Any]]) -> None:
+        super().__init__()
+        self._select_rows = select_rows
+
+    def execute(self) -> _Result:
+        if self._pending_update is not None:
+            self.update_payloads.append(self._pending_update)
+            self._pending_update = None
+            return _Result([{"id": "job-1"}])
+        return _Result(self._select_rows)
+
+
 class _FakeRunsClient:
     def __init__(self, runs_table: _RunsTable) -> None:
         self._runs_table = runs_table
@@ -266,6 +279,55 @@ def test_requeue_due_for_retry_resets_legacy_jobs_to_ingest_stage() -> None:
     assert payload["next_retry_at"] is None
     assert payload["error_message"] is None
     assert isinstance(payload["updated_at"], str)
+
+
+def test_requeue_due_for_retry_resets_backtest_run_to_queued() -> None:
+    jobs_table = _RetryJobsTable(
+        [{"id": "job-1", "attempt_count": 2, "job_type": "backtest", "run_id": "run-1"}]
+    )
+    runs_table = _RunsTable()
+    io = object.__new__(SupabaseIO)
+    io.client = _MultiTableClient(jobs_table=jobs_table, runs_table=runs_table)
+
+    io.requeue_due_for_retry(max_attempts=5)
+
+    assert len(jobs_table.update_payloads) == 1
+    assert jobs_table.update_payloads[0]["status"] == "queued"
+    assert jobs_table.update_payloads[0]["stage"] == "ingest"
+    assert len(runs_table.update_payloads) == 1
+    assert runs_table.update_payloads[0]["status"] == "queued"
+
+
+def test_permanently_stalled_backtest_marks_run_failed() -> None:
+    jobs_table = _RetryJobsTable(
+        [
+            {
+                "id": "job-1",
+                "attempt_count": 4,
+                "job_type": "backtest",
+                "run_id": "run-1",
+                "name": "Alpha",
+                "stage": "compute_signals",
+            }
+        ]
+    )
+    runs_table = _RunsTable()
+    io = object.__new__(SupabaseIO)
+    io.client = _MultiTableClient(jobs_table=jobs_table, runs_table=runs_table)
+
+    calls: list[tuple[str, str | None]] = []
+    io._sync_backtest_notification = lambda job, *, status, error_message=None: calls.append(  # type: ignore[method-assign]
+        (status, error_message)
+    )
+
+    io.scan_and_requeue_stalled_jobs(stall_minutes=15, max_attempts=5)
+
+    assert len(jobs_table.update_payloads) == 1
+    assert jobs_table.update_payloads[0]["status"] == "failed"
+    assert jobs_table.update_payloads[0]["next_retry_at"] is None
+    assert len(runs_table.update_payloads) == 1
+    assert runs_table.update_payloads[0]["status"] == "failed"
+    assert calls == [("failed", jobs_table.update_payloads[0]["error_message"])]
 
 
 def test_upsert_job_notification_inserts_unread_notification_rows() -> None:

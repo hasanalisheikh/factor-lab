@@ -12,12 +12,9 @@ import {
   upgradeGuestAction as upgradeGuestActionImpl,
   upgradeGuestToEmailPassword as upgradeGuestToEmailPasswordImpl,
 } from "./auth/session-actions";
-import type { AuthState, ForgotPasswordState, ResendState, ResetPasswordState } from "./auth/state";
-
-export type { AuthState, ForgotPasswordState, ResendState, ResetPasswordState };
 
 export async function signInAction(prev: unknown, formData: FormData) {
-  return signInActionImpl(prev as AuthState, formData);
+  return signInActionImpl(null, formData);
 }
 
 export async function signOutAction() {
@@ -25,11 +22,11 @@ export async function signOutAction() {
 }
 
 export async function signUpAction(prev: unknown, formData: FormData) {
-  return signUpActionImpl(prev as AuthState, formData);
+  return signUpActionImpl(null, formData);
 }
 
 export async function upgradeGuestAction(prev: unknown, formData: FormData) {
-  return upgradeGuestActionImpl(prev as AuthState, formData);
+  return upgradeGuestActionImpl(null, formData);
 }
 
 export async function upgradeGuestToEmailPassword(input: { email: string; password: string }) {
@@ -37,13 +34,13 @@ export async function upgradeGuestToEmailPassword(input: { email: string; passwo
 }
 
 export async function forgotPasswordAction(prev: unknown, formData: FormData) {
-  return forgotPasswordActionImpl(prev as ForgotPasswordState, formData);
+  return forgotPasswordActionImpl(null, formData);
 }
 
 export async function resendVerificationAction(prev: unknown, formData: FormData) {
-  return resendVerificationActionImpl(prev as ResendState, formData);
+  return resendVerificationActionImpl(null, formData);
 }
 
 export async function resetPasswordAction(prev: unknown, formData: FormData) {
-  return resetPasswordActionImpl(prev as ResetPasswordState, formData);
+  return resetPasswordActionImpl(null, formData);
 }

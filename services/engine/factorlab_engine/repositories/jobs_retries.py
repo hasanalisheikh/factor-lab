@@ -33,7 +33,9 @@ class JobsRetryRepositoryMixin:
             try:
                 result = (
                     self.client.table("jobs")
-                    .select("id, stage, attempt_count, preflight_run_id, payload, job_type")
+                    .select(
+                        "id, run_id, name, stage, attempt_count, preflight_run_id, payload, job_type"
+                    )
                     .eq("status", "running")
                     .or_(
                         f"heartbeat_at.lt.{cutoff},and(heartbeat_at.is.null,updated_at.lt.{cutoff})"
@@ -44,7 +46,9 @@ class JobsRetryRepositoryMixin:
                 # heartbeat_at column not yet present — fall back to updated_at only.
                 result = (
                     self.client.table("jobs")
-                    .select("id, stage, attempt_count, preflight_run_id, payload, job_type")
+                    .select(
+                        "id, run_id, name, stage, attempt_count, preflight_run_id, payload, job_type"
+                    )
                     .eq("status", "running")
                     .lt("updated_at", cutoff)
                     .execute()
@@ -108,6 +112,22 @@ class JobsRetryRepositoryMixin:
                         f"[supabase_io] permanently failed stalled job={job_id} "
                         f"(exhausted {next_attempt} attempts)"
                     )
+
+                    if row.get("job_type", "backtest") == "backtest" and row.get("run_id"):
+                        run_id = str(row["run_id"])
+                        self.client.table("runs").update({"status": "failed"}).eq(
+                            "id", run_id
+                        ).execute()
+                        failed_job = Job(
+                            id=job_id,
+                            run_id=run_id,
+                            name=str(row.get("name") or "Backtest"),
+                        )
+                        self._sync_backtest_notification(
+                            failed_job,
+                            status="failed",
+                            error_message=error_msg[:2000],
+                        )
 
                     # Propagate failure to any waiting run linked via preflight_run_id
                     preflight_run_id = row.get("preflight_run_id")
@@ -220,7 +240,7 @@ class JobsRetryRepositoryMixin:
             print(f"[supabase_io] scan_and_requeue_queued_too_long error: {exc}")
 
     def requeue_due_for_retry(self, max_attempts: int = 5) -> None:
-        """Re-queue failed data_ingest jobs whose next_retry_at has arrived.
+        """Re-queue failed jobs whose next_retry_at has arrived.
 
         This is the retry scheduler — it runs every worker main-loop iteration
         and moves jobs from status='failed' (with next_retry_at <= NOW()) back
@@ -233,9 +253,8 @@ class JobsRetryRepositoryMixin:
             now_iso = datetime.now(timezone.utc).isoformat()
             result = (
                 self.client.table("jobs")
-                .select("id, attempt_count")
+                .select("id, run_id, attempt_count, job_type")
                 .eq("status", "failed")
-                .eq("job_type", "data_ingest")
                 .lte("next_retry_at", now_iso)
                 .lt("attempt_count", max_attempts)
                 .not_.is_("next_retry_at", "null")
@@ -247,6 +266,7 @@ class JobsRetryRepositoryMixin:
 
             print(f"[supabase_io] requeueing {len(due)} due-for-retry job(s)")
             for row in due:
+                job_type = row.get("job_type") or "backtest"
                 self.client.table("jobs").update(
                     {
                         "status": "queued",
@@ -257,6 +277,10 @@ class JobsRetryRepositoryMixin:
                         "updated_at": now_iso,
                     }
                 ).eq("id", row["id"]).execute()
+                if job_type == "backtest" and row.get("run_id"):
+                    self.client.table("runs").update({"status": "queued"}).eq(
+                        "id", row["run_id"]
+                    ).execute()
                 print(
                     f"[supabase_io] requeued retry job={row['id']} "
                     f"attempt_count={row['attempt_count']}"
