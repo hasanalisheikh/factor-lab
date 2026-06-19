@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import multiprocessing
 import os
 import platform
 import signal
 import time
 import traceback
+from collections.abc import Callable, Iterable
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from typing import Any
 
 import pandas as pd
 
@@ -22,6 +26,8 @@ from .settings import (
     _utcnow,
     resolve_and_snapshot_universe_symbols,
 )
+
+_MAX_BACKTEST_CONCURRENCY = 8
 
 
 def _install_job_timeout(seconds: int) -> None:
@@ -143,10 +149,75 @@ def _process_job(io: SupabaseIO, job: Job) -> None:
             print(f"[engine] CRITICAL: could not persist failure for job={job.id}: {save_exc}")
 
 
+def _resolve_backtest_concurrency() -> int:
+    raw = os.getenv("BACKTEST_WORKER_CONCURRENCY", "1")
+    try:
+        parsed = int(raw)
+    except ValueError:
+        return 1
+    return max(1, min(parsed, _MAX_BACKTEST_CONCURRENCY))
+
+
+def _partition_jobs_for_concurrency(jobs: list[Job]) -> tuple[list[Job], list[Job]]:
+    backtest_jobs: list[Job] = []
+    sequential_jobs: list[Job] = []
+    for job in jobs:
+        if job.job_type == "backtest":
+            backtest_jobs.append(job)
+        else:
+            sequential_jobs.append(job)
+    return backtest_jobs, sequential_jobs
+
+
+def _process_job_with_fresh_io(job: Job) -> None:
+    _process_job(SupabaseIO(), job)
+
+
+def _process_backtest_jobs_concurrently(
+    jobs: list[Job],
+    *,
+    max_workers: int,
+    runner: Callable[[Job], Any] = _process_job_with_fresh_io,
+    executor_cls: type[ProcessPoolExecutor] = ProcessPoolExecutor,
+    as_completed_fn: Callable[[Iterable[Any]], Iterable[Any]] = as_completed,
+    mp_context_factory: Callable[[str], Any] = multiprocessing.get_context,
+) -> int:
+    if not jobs:
+        return 0
+
+    worker_count = max(1, min(max_workers, len(jobs), _MAX_BACKTEST_CONCURRENCY))
+    mp_context = mp_context_factory("spawn")
+    processed = 0
+    with executor_cls(max_workers=worker_count, mp_context=mp_context) as executor:
+        futures = [executor.submit(runner, job) for job in jobs]
+        for future in as_completed_fn(futures):
+            try:
+                future.result()
+                processed += 1
+            except Exception as exc:
+                print(f"[engine] concurrent backtest worker failed: {exc}")
+                traceback.print_exc()
+    return processed
+
+
+def _process_backtest_jobs(io: SupabaseIO, jobs: list[Job], *, concurrency: int) -> None:
+    if concurrency <= 1 or len(jobs) <= 1:
+        for job in jobs:
+            _process_job(io, job)
+        return
+
+    print(
+        f"[engine] processing {len(jobs)} backtest job(s) "
+        f"with concurrency={min(concurrency, len(jobs), _MAX_BACKTEST_CONCURRENCY)}"
+    )
+    _process_backtest_jobs_concurrently(jobs, max_workers=concurrency)
+
+
 def main() -> None:
     once = os.getenv("RUN_ONCE", "").lower() in ("1", "true", "yes")
     poll_seconds = int(os.getenv("POLL_INTERVAL_SECONDS", "5"))
     batch_size = int(os.getenv("JOB_BATCH_SIZE", "3"))
+    backtest_concurrency = _resolve_backtest_concurrency()
     port = int(os.getenv("PORT", "8000"))
     job_stall_minutes = int(os.getenv("JOB_STALL_MINUTES", "15"))
     job_queue_timeout_minutes = int(os.getenv("JOB_QUEUED_TIMEOUT_MINUTES", "10"))
@@ -187,7 +258,9 @@ def main() -> None:
                 continue
 
             _wakeup.clear()
-            for job in jobs:
+            backtest_jobs, sequential_jobs = _partition_jobs_for_concurrency(jobs)
+            _process_backtest_jobs(io, backtest_jobs, concurrency=backtest_concurrency)
+            for job in sequential_jobs:
                 _process_job(io, job)
             for ingest_job in ingest_jobs:
                 if io.claim_data_ingest_job(ingest_job):

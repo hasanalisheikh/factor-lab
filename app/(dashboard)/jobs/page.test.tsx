@@ -103,7 +103,7 @@ describe("JobsPage backtest window audit gate", () => {
 
     expect(screen.getByText("Job Queue")).toBeInTheDocument();
     expect(screen.queryByText("Backtest Window Audit")).not.toBeInTheDocument();
-    expect(getJobsMock).toHaveBeenCalledTimes(1);
+    expect(getJobsMock).toHaveBeenCalledWith(100);
     expect(getRunsBacktestWindowSummaryMock).not.toHaveBeenCalled();
   });
 

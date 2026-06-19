@@ -171,6 +171,8 @@ Use this as the primary production compute path.
 - Keep the worker process running continuously.
 - It polls the queue, exposes `/health`, and accepts `/trigger` wake-ups only when the request uses
   the configured bearer token. If `WORKER_TRIGGER_SECRET` is unset, `/trigger` fails closed.
+- `BACKTEST_WORKER_CONCURRENCY` defaults to `1`. Raise it cautiously on hosts with enough CPU,
+  memory, and database headroom; it is clamped to `8` and only applies to backtest jobs.
 - The repo includes a Render blueprint in [`render.yaml`](../render.yaml), but any equivalent host
   is acceptable.
 
@@ -232,6 +234,7 @@ should care about.
 | `RUN_ONCE`                              | No          | Runs a single worker pass, used by GitHub Actions fallback jobs. |
 | `POLL_INTERVAL_SECONDS`                 | No          | Worker poll interval. Default `5`.                               |
 | `JOB_BATCH_SIZE`                        | No          | Maximum jobs claimed per poll cycle. Default `3`.                |
+| `BACKTEST_WORKER_CONCURRENCY`           | No          | Parallel backtest process count. Default `1`, clamped to `8`.    |
 | `JOB_STALL_MINUTES`                     | No          | Stalled-job recovery threshold. Default `15`.                    |
 | `JOB_QUEUED_TIMEOUT_MINUTES`            | No          | Queued-job timeout threshold. Default `10`.                      |
 | `JOB_TIMEOUT_SECONDS`                   | No          | Default per-job execution timeout. Default `600`.                |

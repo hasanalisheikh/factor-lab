@@ -24,13 +24,14 @@ const JOB_SELECT = `
   locked_at
 `;
 
-export async function getJobs(): Promise<JobRow[]> {
+export async function getJobs(limit = 100): Promise<JobRow[]> {
   try {
     const supabase = await createClient();
     const { data, error } = await supabase
       .from("jobs")
       .select(JOB_SELECT)
-      .order("created_at", { ascending: false });
+      .order("created_at", { ascending: false })
+      .limit(limit);
 
     if (error) {
       console.error("getJobs error:", error.message);

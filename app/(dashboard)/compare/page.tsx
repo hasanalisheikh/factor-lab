@@ -5,7 +5,7 @@ import { getCompareRunBundles } from "@/lib/supabase/queries";
 export const dynamic = "force-dynamic";
 
 export default async function ComparePage() {
-  const bundles = await getCompareRunBundles(40);
+  const bundles = await getCompareRunBundles(2);
 
   return (
     <AppShell title="Compare">

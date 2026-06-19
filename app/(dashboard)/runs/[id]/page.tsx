@@ -64,31 +64,37 @@ export default async function RunDetailPage({ params }: { params: Promise<{ id: 
     notFound();
   }
 
-  // Round 1: fire getRunById in parallel with the 6 run-id-only queries.
-  const [run, equityCurve, job, report, modelMetadata, modelPredictions, positions] =
-    await Promise.all([
-      getRunById(id),
-      getEquityCurve(id),
-      getJobByRunId(id),
-      getReportByRunId(id),
-      getModelMetadataByRunId(id),
-      getModelPredictionsByRunId(id),
-      getPositionsByRunId(id),
-    ]);
+  const [run, job] = await Promise.all([getRunById(id), getJobByRunId(id)]);
 
   if (!run) {
     notFound();
   }
 
-  // Round 2: queries that require the run object.
-  const [benchmarkOverlap, ingestProgress] = await Promise.all([
-    getBenchmarkOverlapStateForRun(run),
-    // Only needed while waiting for data ingestion to complete.
-    run.status === "waiting_for_data" ? getIngestProgressForRun(id) : Promise.resolve(null),
-  ]);
-
   const metrics = getMetrics(run.run_metrics);
   const status = run.status as RunStatus;
+  let equityCurve: Awaited<ReturnType<typeof getEquityCurve>> = [];
+  let report: Awaited<ReturnType<typeof getReportByRunId>> = null;
+  let modelMetadata: Awaited<ReturnType<typeof getModelMetadataByRunId>> = null;
+  let modelPredictions: Awaited<ReturnType<typeof getModelPredictionsByRunId>> = [];
+  let positions: Awaited<ReturnType<typeof getPositionsByRunId>> = [];
+  let benchmarkOverlap: Awaited<ReturnType<typeof getBenchmarkOverlapStateForRun>> = {
+    confirmed: false,
+    possible: false,
+  };
+  const ingestProgress = status === "waiting_for_data" ? await getIngestProgressForRun(id) : null;
+
+  if (status === "completed") {
+    [equityCurve, report, modelMetadata, modelPredictions, positions, benchmarkOverlap] =
+      await Promise.all([
+        getEquityCurve(id),
+        getReportByRunId(id),
+        getModelMetadataByRunId(id),
+        getModelPredictionsByRunId(id),
+        getPositionsByRunId(id),
+        getBenchmarkOverlapStateForRun(run),
+      ]);
+  }
+
   const strategyLabel = STRATEGY_LABELS[run.strategy_id as StrategyId] ?? run.strategy_id;
 
   const universePreset = getUniversePreset(run);

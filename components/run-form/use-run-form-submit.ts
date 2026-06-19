@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 
-import { createRun, preflightRun, retryPreflightRepairs } from "@/app/actions/runs";
+import { createRun, retryPreflightRepairs } from "@/app/actions/runs";
 import { BENCHMARK_OPTIONS } from "@/lib/benchmark";
 
 import { parseLocalDate, toInputDate } from "./run-form-schema";
@@ -57,7 +57,7 @@ export function useRunFormSubmit({
   universe,
   universeState,
 }: UseRunFormSubmitInput) {
-  const [isPreflighting, setIsPreflighting] = useState(false);
+  const [isPreflighting] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [blockResult, setBlockResult] = useState<RunPreflightResult | null>(null);
@@ -121,30 +121,7 @@ export function useRunFormSubmit({
     setSubmitError(null);
     setDateAdjustmentMessage(null);
 
-    const input = collectRunInput();
-    if (!input) {
-      setSubmitError("Please complete the form before queueing a backtest.");
-      return;
-    }
-
-    setIsPreflighting(true);
-    try {
-      const result = await preflightRun(input);
-      if (result.status === "block") {
-        setBlockResult(result);
-        return;
-      }
-      if (result.status === "warn") {
-        setWarnResult(result);
-        return;
-      }
-      await runCreate(false);
-    } catch (error) {
-      console.error("[RunForm] preflightRun failed:", error);
-      setSubmitError("Preflight failed. Please try again.");
-    } finally {
-      setIsPreflighting(false);
-    }
+    await runCreate(false);
   }
 
   async function applySuggestedFix(kind: string, value?: string | number | string[]) {

@@ -34,7 +34,7 @@ function formatDate(iso: string | null): string {
 export default async function JobsPage() {
   const showBacktestWindowAudit = process.env.SHOW_BACKTEST_WINDOW_AUDIT === "true";
   const [jobs, auditRows] = await Promise.all([
-    getJobs(),
+    getJobs(100),
     showBacktestWindowAudit ? getRunsBacktestWindowSummary() : Promise.resolve([]),
   ]);
 
