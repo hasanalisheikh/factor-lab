@@ -45,8 +45,10 @@ function makeCoverageAdminStub(params: {
   priceRows: Array<{ ticker: string; date: string }>;
 }) {
   const { statsRows, priceRows } = params;
+  const priceRangeCalls: string[][] = [];
 
   return {
+    priceRangeCalls,
     from(table: string) {
       if (table === "ticker_stats") {
         return {
@@ -94,6 +96,7 @@ function makeCoverageAdminStub(params: {
             return builder;
           },
           async range(from: number, to: number) {
+            priceRangeCalls.push([...state.symbols]);
             const rows = priceRows
               .filter((row) => state.symbols.includes(row.ticker))
               .filter((row) => row.date >= state.startDate && row.date <= state.endDate)
@@ -190,6 +193,42 @@ describe("evaluateRunPreflightSnapshot windowing", () => {
     );
     expect(newRow?.expectedDays ?? 0).toBeLessThan(oldRow?.expectedDays ?? 0);
     expect(newRow?.trueMissingRate ?? 1).toBeLessThan(0.1);
+  });
+
+  it("fetches raw date rows only for the selected benchmark, not every candidate", async () => {
+    const benchmarkDates = weekdayCalendar("2015-01-02", "2026-01-30");
+    const admin = makeCoverageAdminStub({
+      statsRows: [
+        { symbol: "SPY", first_date: "1993-01-29", last_date: "2026-01-30" },
+        { symbol: "QQQ", first_date: "1999-03-10", last_date: "2026-01-30" },
+        { symbol: "IWM", first_date: "2000-05-26", last_date: "2026-01-30" },
+        { symbol: "EFA", first_date: "2001-08-27", last_date: "2026-01-30" },
+      ],
+      priceRows: [
+        ...benchmarkDates.map((date) => ({ ticker: "SPY", date })),
+        ...benchmarkDates.map((date) => ({ ticker: "QQQ", date })),
+        ...benchmarkDates.map((date) => ({ ticker: "IWM", date })),
+        ...benchmarkDates.map((date) => ({ ticker: "EFA", date })),
+      ],
+    });
+    createAdminClientMock.mockReturnValue(admin);
+
+    await evaluateRunPreflightSnapshot({
+      strategyId: "ml_lightgbm",
+      startDate: "2021-06-18",
+      endDate: "2026-01-30",
+      universeSymbols: ["QQQ", "IWM", "EFA"],
+      benchmark: "SPY",
+      dataCutoffDate: "2026-01-30",
+      universeEarliestStart: "1993-01-29",
+      universeValidFrom: "1993-01-29",
+      missingTickers: [],
+    });
+
+    expect(admin.priceRangeCalls.length).toBeGreaterThan(0);
+    expect(
+      admin.priceRangeCalls.every((symbols) => symbols.length === 1 && symbols[0] === "SPY")
+    ).toBe(true);
   });
 
   it("uses benchmark trading dates instead of business days for benchmark missingness", async () => {

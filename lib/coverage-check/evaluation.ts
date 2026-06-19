@@ -99,39 +99,25 @@ function statusFromCoverage(params: {
 }
 
 function buildBenchmarkCandidates(params: {
-  warmupStart: string;
-  requiredEnd: string;
   statsBySymbol: Map<string, CoverageStatsSnapshot>;
-  benchmarkDatesByTicker: Map<string, string[]>;
+  benchmarkCountsByTicker: Map<string, number>;
   universeStatus: CoverageHealthStatus;
   affectedShare: number;
 }): BenchmarkSuggestionCandidate[] {
-  const {
-    warmupStart,
-    requiredEnd,
-    statsBySymbol,
-    benchmarkDatesByTicker,
-    universeStatus,
-    affectedShare,
-  } = params;
+  const { statsBySymbol, benchmarkCountsByTicker, universeStatus, affectedShare } = params;
 
   return [...BENCHMARK_OPTIONS]
     .map((symbol) => {
-      const benchmarkCoverage = computeBenchmarkCoverage({
-        benchmarkTicker: symbol,
-        windowStart: warmupStart,
-        windowEnd: requiredEnd,
-        cutoffDate: requiredEnd,
-        stats: statsBySymbol.get(symbol),
-        benchmarkDates: benchmarkDatesByTicker.get(symbol) ?? [],
-      });
+      const stats = statsBySymbol.get(symbol);
+      const actualDays = benchmarkCountsByTicker.get(symbol) ?? 0;
+      const benchmarkStatus = actualDays > 0 && stats?.firstDate ? "good" : "blocked";
       return {
         symbol,
         status: statusFromCoverage({
-          benchmarkStatus: benchmarkCoverage.status,
+          benchmarkStatus,
           universeStatus,
         }),
-        benchmarkTrueMissingRate: benchmarkCoverage.trueMissingRate,
+        benchmarkTrueMissingRate: 0,
         affectedShare,
       };
     })
@@ -202,13 +188,12 @@ export async function evaluateRunPreflightSnapshot(params: {
 
   const snapshotSymbols = [...new Set([...universeSymbols, benchmark])];
   const statsSymbols = [...new Set([...universeSymbols, ...BENCHMARK_OPTIONS])];
-  const benchmarkSymbols = [...BENCHMARK_OPTIONS];
 
   const admin = createAdminClient();
   const statsBySymbol = await fetchTickerStats(admin, statsSymbols);
   const benchmarkDatesByTicker = await fetchObservedDatesByTicker({
     admin,
-    symbols: benchmarkSymbols,
+    symbols: [benchmark],
     startDate: metricWindowStart,
     endDate: requiredEnd,
   });
@@ -261,11 +246,25 @@ export async function evaluateRunPreflightSnapshot(params: {
     universeRows,
   });
 
+  const benchmarkWindowsBySymbol = new Map<string, { startDate: string; endDate: string }>();
+  for (const symbol of BENCHMARK_OPTIONS) {
+    const windowStart = resolveCoverageWindowStart({
+      windowFloor: metricWindowStart,
+      windowEnd: requiredEnd,
+      firstDate: statsBySymbol.get(symbol)?.firstDate ?? null,
+    });
+    if (windowStart) {
+      benchmarkWindowsBySymbol.set(symbol, { startDate: windowStart, endDate: requiredEnd });
+    }
+  }
+  const benchmarkCountsByTicker = await fetchObservedDateCountsByTicker({
+    admin,
+    windowsBySymbol: benchmarkWindowsBySymbol,
+  });
+
   const benchmarkCandidates = buildBenchmarkCandidates({
-    warmupStart: metricWindowStart,
-    requiredEnd,
     statsBySymbol,
-    benchmarkDatesByTicker,
+    benchmarkCountsByTicker,
     universeStatus: universeCoverage.status,
     affectedShare: universeCoverage.affectedShare,
   });
