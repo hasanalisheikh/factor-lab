@@ -6,10 +6,14 @@ import {
   buildBenchmarkMissingnessRow,
   buildUniverseMissingnessRow,
   computeBenchmarkCoverage,
+  fetchObservedDateCountsByTicker,
   fetchObservedDatesByTicker,
   fetchTickerStats,
 } from "@/lib/coverage-check/benchmark-coverage";
-import { resolveRunPreflightWindow } from "@/lib/coverage-check/date-utils";
+import {
+  resolveCoverageWindowStart,
+  resolveRunPreflightWindow,
+} from "@/lib/coverage-check/date-utils";
 import {
   buildRunPreflightResult,
   buildRunPreflightSnapshot,
@@ -95,15 +99,21 @@ function statusFromCoverage(params: {
 }
 
 function buildBenchmarkCandidates(params: {
-  strategyId: StrategyId;
-  universeSymbols: string[];
   warmupStart: string;
   requiredEnd: string;
   statsBySymbol: Map<string, CoverageStatsSnapshot>;
-  observedByTicker: Map<string, string[]>;
+  benchmarkDatesByTicker: Map<string, string[]>;
+  universeStatus: CoverageHealthStatus;
+  affectedShare: number;
 }): BenchmarkSuggestionCandidate[] {
-  const { strategyId, universeSymbols, warmupStart, requiredEnd, statsBySymbol, observedByTicker } =
-    params;
+  const {
+    warmupStart,
+    requiredEnd,
+    statsBySymbol,
+    benchmarkDatesByTicker,
+    universeStatus,
+    affectedShare,
+  } = params;
 
   return [...BENCHMARK_OPTIONS]
     .map((symbol) => {
@@ -113,33 +123,16 @@ function buildBenchmarkCandidates(params: {
         windowEnd: requiredEnd,
         cutoffDate: requiredEnd,
         stats: statsBySymbol.get(symbol),
-        benchmarkDates: observedByTicker.get(symbol) ?? [],
-      });
-      const benchmarkDates = observedByTicker.get(symbol) ?? [];
-      const universeRows = universeSymbols
-        .filter((universeSymbol) => universeSymbol !== symbol)
-        .map((universeSymbol) =>
-          buildUniverseMissingnessRow({
-            symbol: universeSymbol,
-            benchmarkDates,
-            warmupStart,
-            requiredEnd,
-            stats: statsBySymbol.get(universeSymbol),
-            observedDates: observedByTicker.get(universeSymbol) ?? [],
-          })
-        );
-      const universeCoverage = buildUniverseCoverageStatus({
-        strategyId,
-        universeRows,
+        benchmarkDates: benchmarkDatesByTicker.get(symbol) ?? [],
       });
       return {
         symbol,
         status: statusFromCoverage({
           benchmarkStatus: benchmarkCoverage.status,
-          universeStatus: universeCoverage.status,
+          universeStatus,
         }),
         benchmarkTrueMissingRate: benchmarkCoverage.trueMissingRate,
-        affectedShare: universeCoverage.affectedShare,
+        affectedShare,
       };
     })
     .sort((left, right) => {
@@ -208,18 +201,19 @@ export async function evaluateRunPreflightSnapshot(params: {
     metricSourceUsed === "research_window" ? researchWindowStart : warmupStart;
 
   const snapshotSymbols = [...new Set([...universeSymbols, benchmark])];
-  const allSymbols = [...new Set([...universeSymbols, ...BENCHMARK_OPTIONS])];
+  const statsSymbols = [...new Set([...universeSymbols, ...BENCHMARK_OPTIONS])];
+  const benchmarkSymbols = [...BENCHMARK_OPTIONS];
 
   const admin = createAdminClient();
-  const statsBySymbol = await fetchTickerStats(admin, allSymbols);
-  const observedByTicker = await fetchObservedDatesByTicker({
+  const statsBySymbol = await fetchTickerStats(admin, statsSymbols);
+  const benchmarkDatesByTicker = await fetchObservedDatesByTicker({
     admin,
-    symbols: allSymbols,
+    symbols: benchmarkSymbols,
     startDate: metricWindowStart,
     endDate: requiredEnd,
   });
 
-  const benchmarkDates = observedByTicker.get(benchmark) ?? [];
+  const benchmarkDates = benchmarkDatesByTicker.get(benchmark) ?? [];
   const benchmarkCoverage = computeBenchmarkCoverage({
     benchmarkTicker: benchmark,
     windowStart: metricWindowStart,
@@ -231,6 +225,23 @@ export async function evaluateRunPreflightSnapshot(params: {
   });
   const benchmarkRow = buildBenchmarkMissingnessRow(benchmarkCoverage);
 
+  const universeWindowsBySymbol = new Map<string, { startDate: string; endDate: string }>();
+  for (const symbol of universeSymbols) {
+    if (symbol === benchmark) continue;
+    const windowStart = resolveCoverageWindowStart({
+      windowFloor: metricWindowStart,
+      windowEnd: requiredEnd,
+      firstDate: statsBySymbol.get(symbol)?.firstDate ?? null,
+    });
+    if (windowStart) {
+      universeWindowsBySymbol.set(symbol, { startDate: windowStart, endDate: requiredEnd });
+    }
+  }
+  const universeObservedCounts = await fetchObservedDateCountsByTicker({
+    admin,
+    windowsBySymbol: universeWindowsBySymbol,
+  });
+
   const universeRows = universeSymbols
     .filter((symbol) => symbol !== benchmark)
     .map((symbol) =>
@@ -240,19 +251,23 @@ export async function evaluateRunPreflightSnapshot(params: {
         warmupStart: metricWindowStart,
         requiredEnd,
         stats: statsBySymbol.get(symbol),
-        observedDates: observedByTicker.get(symbol) ?? [],
+        observedDateCount: universeObservedCounts.get(symbol) ?? 0,
       })
     );
 
   const symbolRows: MissingnessCoverageRow[] = [benchmarkRow, ...universeRows];
+  const universeCoverage = buildUniverseCoverageStatus({
+    strategyId,
+    universeRows,
+  });
 
   const benchmarkCandidates = buildBenchmarkCandidates({
-    strategyId,
-    universeSymbols,
     warmupStart: metricWindowStart,
     requiredEnd,
     statsBySymbol,
-    observedByTicker,
+    benchmarkDatesByTicker,
+    universeStatus: universeCoverage.status,
+    affectedShare: universeCoverage.affectedShare,
   });
 
   return buildRunPreflightSnapshot({

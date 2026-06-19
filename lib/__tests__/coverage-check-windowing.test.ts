@@ -64,15 +64,22 @@ function makeCoverageAdminStub(params: {
       if (table === "prices") {
         const state = {
           symbols: [] as string[],
+          symbol: null as string | null,
           startDate: "",
           endDate: "",
+          countOnly: false,
         };
         const builder = {
-          select(_columns: string) {
+          select(_columns: string, options?: { head?: boolean; count?: string | null }) {
+            state.countOnly = Boolean(options?.head && options.count);
             return builder;
           },
           in(_column: string, symbols: string[]) {
             state.symbols = symbols;
+            return builder;
+          },
+          eq(_column: string, symbol: string) {
+            state.symbol = symbol;
             return builder;
           },
           gte(_column: string, startDate: string) {
@@ -93,6 +100,13 @@ function makeCoverageAdminStub(params: {
               .sort((left, right) => left.date.localeCompare(right.date))
               .slice(from, to + 1);
             return { data: rows, error: null };
+          },
+          async then(resolve: (value: { count: number; error: null }) => void) {
+            const symbols = state.symbol ? [state.symbol] : state.symbols;
+            const count = priceRows
+              .filter((row) => symbols.includes(row.ticker))
+              .filter((row) => row.date >= state.startDate && row.date <= state.endDate).length;
+            resolve({ count, error: null });
           },
         };
         return builder;

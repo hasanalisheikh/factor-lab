@@ -89,6 +89,53 @@ export async function fetchObservedDatesByTicker(params: {
   return observedByTicker;
 }
 
+export async function fetchObservedDateCountsByTicker(params: {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  admin: any;
+  windowsBySymbol: Map<string, { startDate: string; endDate: string }>;
+}): Promise<Map<string, number>> {
+  const { admin, windowsBySymbol } = params;
+  const counts = new Map<string, number>();
+  for (const symbol of windowsBySymbol.keys()) {
+    counts.set(symbol, 0);
+  }
+
+  const windows = [...windowsBySymbol.entries()].filter(
+    ([, window]) => window.startDate <= window.endDate
+  );
+  const batchSize = 8;
+
+  for (let offset = 0; offset < windows.length; offset += batchSize) {
+    const batch = windows.slice(offset, offset + batchSize);
+    const results = await Promise.all(
+      batch.map(async ([symbol, window]) => {
+        const { count, error } = (await admin
+          .from("prices")
+          .select("*", { count: "exact", head: true })
+          .eq("ticker", symbol)
+          .gte("date", window.startDate)
+          .lte("date", window.endDate)) as {
+          count: number | null;
+          error: { message: string } | null;
+        };
+
+        if (error) {
+          console.error(`[coverage-check] prices count error for ${symbol}:`, error.message);
+          return [symbol, 0] as const;
+        }
+
+        return [symbol, count ?? 0] as const;
+      })
+    );
+
+    for (const [symbol, count] of results) {
+      counts.set(symbol, count);
+    }
+  }
+
+  return counts;
+}
+
 function getBenchmarkCoverageStatus(params: {
   actualDays: number;
   trueMissingRate: number;
@@ -178,9 +225,18 @@ export function buildUniverseMissingnessRow(params: {
   warmupStart: string;
   requiredEnd: string;
   stats: CoverageStatsSnapshot | undefined;
-  observedDates: readonly string[];
+  observedDates?: readonly string[];
+  observedDateCount?: number;
 }): MissingnessCoverageRow {
-  const { symbol, benchmarkDates, warmupStart, requiredEnd, stats, observedDates } = params;
+  const {
+    symbol,
+    benchmarkDates,
+    warmupStart,
+    requiredEnd,
+    stats,
+    observedDates = [],
+    observedDateCount,
+  } = params;
   const firstDate = stats?.firstDate ?? null;
   const lastDate = stats?.lastDate ?? null;
   const windowStart = resolveCoverageWindowStart({
@@ -191,7 +247,9 @@ export function buildUniverseMissingnessRow(params: {
   const expectedDays = !windowStart
     ? 0
     : countDatesInRange(benchmarkDates, windowStart, requiredEnd);
-  const actualDays = !windowStart ? 0 : countDatesInRange(observedDates, windowStart, requiredEnd);
+  const actualDays = !windowStart
+    ? 0
+    : (observedDateCount ?? countDatesInRange(observedDates, windowStart, requiredEnd));
   const trueMissingDays = expectedDays > 0 ? Math.max(expectedDays - actualDays, 0) : 0;
   const trueMissingRate = expectedDays > 0 ? trueMissingDays / expectedDays : 0;
 
