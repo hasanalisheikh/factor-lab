@@ -60,3 +60,7 @@ def _process_job(*args, **kwargs):
 
 def main() -> None:
     return _claiming.main()
+
+
+if __name__ == "__main__":
+    main()
